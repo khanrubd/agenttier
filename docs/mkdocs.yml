@@ -1,0 +1,44 @@
+site_name: AgentTier Documentation
+site_url: https://docs.agenttier.io
+repo_url: https://github.com/agenttier/agenttier
+repo_name: agenttier/agenttier
+
+theme:
+  name: material
+  palette:
+    scheme: slate
+    primary: indigo
+    accent: indigo
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - content.code.copy
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Quickstart: quickstart.md
+    - Installation: installation.md
+  - User Guide:
+    - Templates: templates.md
+    - Governance: governance.md
+    - Security: security.md
+  - Reference:
+    - CLI: cli.md
+    - Python SDK: sdk.md
+    - REST API: api.md
+  - Operations:
+    - Observability: observability.md
+    - Troubleshooting: troubleshooting.md
+    - Upgrade: upgrade.md
+
+markdown_extensions:
+  - pymdownx.highlight
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - admonition
+  - toc:
+      permalink: true

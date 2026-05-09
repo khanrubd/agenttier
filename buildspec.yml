@@ -1,0 +1,36 @@
+version: 0.2
+
+env:
+  variables:
+    # Override these in your CodeBuild project settings
+    AWS_DEFAULT_REGION: "us-east-1"
+    IMAGE_TAG: "v0.1.0"
+
+phases:
+  pre_build:
+    commands:
+      - echo Logging in to ECR...
+      - AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - REPO_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+  build:
+    commands:
+      - echo Building controller...
+      - docker build -t $REPO_URI/agenttier/controller:$IMAGE_TAG -f Dockerfile.controller --build-arg VERSION=$IMAGE_TAG .
+      - echo Building router...
+      - docker build -t $REPO_URI/agenttier/router:$IMAGE_TAG -f Dockerfile.router --build-arg VERSION=$IMAGE_TAG .
+      - echo Building web-ui...
+      - docker build -t $REPO_URI/agenttier/web-ui:$IMAGE_TAG -f web-ui/Dockerfile web-ui/
+      - echo Building sandbox image...
+      - docker build -t $REPO_URI/agenttier/sandbox-general:latest -f images/general-coding/Dockerfile images/general-coding/
+      - echo Building claude-code sandbox image...
+      - docker build -t $REPO_URI/agenttier/sandbox-claude-code:latest -f images/claude-code/Dockerfile images/claude-code/ || true
+  post_build:
+    commands:
+      - echo Pushing images...
+      - docker push $REPO_URI/agenttier/controller:$IMAGE_TAG
+      - docker push $REPO_URI/agenttier/router:$IMAGE_TAG
+      - docker push $REPO_URI/agenttier/web-ui:$IMAGE_TAG
+      - docker push $REPO_URI/agenttier/sandbox-general:latest
+      - docker push $REPO_URI/agenttier/sandbox-claude-code:latest || true
+      - echo Build complete!
