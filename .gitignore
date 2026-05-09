@@ -1,0 +1,72 @@
+# Go
+bin/
+_output/
+vendor/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+coverage.out
+coverage.html
+
+# Compiled binaries
+/controller
+/router
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Kiro (internal development tooling)
+.kiro/
+
+# Node.js (web-ui)
+web-ui/node_modules/
+web-ui/dist/
+web-ui/.env.local
+web-ui/.env.*.local
+
+# Python (SDK)
+python-sdk/__pycache__/
+python-sdk/*.egg-info/
+python-sdk/dist/
+python-sdk/build/
+python-sdk/.venv/
+python-sdk/.env
+
+# Environment
+.env
+.env.local
+*.log
+
+# Kubernetes
+kubeconfig
+*.kubeconfig
+
+# Terraform
+terraform/**/.terraform/
+terraform/**/*.tfstate
+terraform/**/*.tfstate.backup
+terraform/**/*.tfvars
+!terraform/**/*.tfvars.example
+terraform/**/tfplan
+
+# Helm
+helm/agenttier/charts/
+
+# Build artifacts
+dist/
+tmp/
+
+# Test
+testbin/
+
+# OS files
+Thumbs.db
