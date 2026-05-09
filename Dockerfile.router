@@ -1,0 +1,39 @@
+# Copyright 2024 AgentTier Authors
+# SPDX-License-Identifier: Apache-2.0
+
+# Build stage
+FROM public.ecr.aws/docker/library/golang:1.22-alpine AS builder
+
+RUN apk add --no-cache git ca-certificates
+
+WORKDIR /workspace
+
+# Cache dependencies
+COPY go.mod go.sum* ./
+RUN go mod download
+
+# Copy source
+COPY cmd/ cmd/
+COPY pkg/ pkg/
+COPY api/ api/
+
+# Build
+ARG VERSION=dev
+ARG GIT_COMMIT=unknown
+RUN CGO_ENABLED=0 GOOS=linux go build \
+    -trimpath \
+    -ldflags="-s -w -X github.com/agenttier/agenttier/pkg/version.Version=${VERSION} -X github.com/agenttier/agenttier/pkg/version.GitCommit=${GIT_COMMIT}" \
+    -o router ./cmd/router/
+
+# Runtime stage
+FROM gcr.io/distroless/static:nonroot
+
+WORKDIR /
+
+COPY --from=builder /workspace/router .
+
+USER 65532:65532
+
+EXPOSE 8080
+
+ENTRYPOINT ["/router"]
