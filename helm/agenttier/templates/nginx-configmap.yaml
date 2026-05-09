@@ -1,0 +1,55 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agenttier.fullname" . }}-nginx
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+data:
+  default.conf: |
+    server {
+        listen 80;
+        server_name _;
+        root /usr/share/nginx/html;
+        index index.html;
+
+        gzip on;
+        gzip_types text/html application/javascript text/css application/json;
+        gzip_min_length 1000;
+
+        location /assets/ {
+            expires 1y;
+            add_header Cache-Control "public, immutable";
+        }
+
+        location / {
+            try_files $uri $uri/ /index.html;
+            expires 1h;
+            add_header Cache-Control "public, no-transform";
+        }
+
+        location /api/ {
+            proxy_pass http://{{ include "agenttier.fullname" . }}-router:{{ .Values.router.service.port }};
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+            proxy_set_header X-Forwarded-Proto $scheme;
+            proxy_read_timeout 30s;
+        }
+
+        location /ws/ {
+            proxy_pass http://{{ include "agenttier.fullname" . }}-router:{{ .Values.router.service.port }};
+            proxy_http_version 1.1;
+            proxy_set_header Upgrade $http_upgrade;
+            proxy_set_header Connection "upgrade";
+            proxy_set_header Host $host;
+            proxy_set_header X-Real-IP $remote_addr;
+            proxy_read_timeout 3600s;
+            proxy_send_timeout 3600s;
+        }
+
+        location /healthz {
+            access_log off;
+            return 200 'ok';
+            add_header Content-Type text/plain;
+        }
+    }

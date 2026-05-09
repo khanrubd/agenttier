@@ -1,0 +1,19 @@
+apiVersion: v2
+name: agenttier
+description: Enterprise-grade Kubernetes operator for managing isolated, persistent sandboxes for AI agents
+type: application
+version: 0.1.0
+appVersion: "0.1.0"
+home: https://github.com/agenttier/agenttier
+sources:
+  - https://github.com/agenttier/agenttier
+maintainers:
+  - name: AgentTier Authors
+    url: https://github.com/agenttier
+keywords:
+  - kubernetes
+  - operator
+  - sandbox
+  - ai-agents
+  - developer-tools
+icon: https://raw.githubusercontent.com/agenttier/agenttier/main/docs/logo.png

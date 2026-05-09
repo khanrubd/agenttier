@@ -1,0 +1,80 @@
+apiVersion: agenttier.io/v1alpha1
+kind: ClusterSandboxTemplate
+metadata:
+  name: general-coding
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+spec:
+  description: "General-purpose coding environment with Node.js, Python, and Git"
+  image:
+    repository: {{ .Values.defaults.sandbox.image | default "ghcr.io/agenttier/sandbox-general:latest" }}
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  storage:
+    size: 10Gi
+    mountPath: /workspace
+  network:
+    allowInternet: true
+  harness:
+    shell: /bin/bash
+    workingDir: /workspace
+    tools:
+      - name: node
+        verifyCommand: "node --version"
+      - name: python3
+        verifyCommand: "python3 --version"
+      - name: git
+        verifyCommand: "git --version"
+  timeout: 24h
+  idleTimeout: 4h
+---
+apiVersion: agenttier.io/v1alpha1
+kind: ClusterSandboxTemplate
+metadata:
+  name: claude-code-bedrock
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+spec:
+  description: "AI coding agent with Claude Code CLI powered by AWS Bedrock"
+  image:
+    repository: {{ .Values.defaults.claudeCode.image | default "ghcr.io/agenttier/sandbox-claude-code:latest" }}
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  storage:
+    size: 20Gi
+    mountPath: /workspace
+  network:
+    allowInternet: true
+  harness:
+    shell: /bin/bash
+    workingDir: /workspace
+    tools:
+      - name: claude
+        verifyCommand: "claude --version"
+      - name: node
+        verifyCommand: "node --version"
+      - name: python3
+        verifyCommand: "python3 --version"
+      - name: git
+        verifyCommand: "git --version"
+      - name: aws
+        verifyCommand: "aws --version"
+    hooks:
+      onStart: "echo 'Claude Code sandbox ready — Bedrock credentials injected via IRSA'"
+  env:
+    - name: CLAUDE_CODE_USE_BEDROCK
+      value: "1"
+    - name: AWS_DEFAULT_REGION
+      value: "us-east-1"
+  timeout: 24h
+  idleTimeout: 2h

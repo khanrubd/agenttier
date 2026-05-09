@@ -1,0 +1,174 @@
+# AgentTier Helm Chart Values
+# Full configuration reference: https://docs.agenttier.io/installation
+
+# --- Controller ---
+controller:
+  image:
+    repository: ghcr.io/agenttier/controller
+    tag: ""  # Defaults to chart appVersion
+    pullPolicy: IfNotPresent
+  replicas: 1
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+  maxConcurrency: 10
+  leaderElect: true
+
+# --- Router ---
+router:
+  image:
+    repository: ghcr.io/agenttier/router
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicas: 2
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 1000m
+      memory: 1Gi
+  service:
+    type: ClusterIP
+    port: 8080
+
+# --- Web UI ---
+webui:
+  image:
+    repository: ghcr.io/agenttier/web-ui
+    tag: ""
+    pullPolicy: IfNotPresent
+  replicas: 1
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 128Mi
+  service:
+    type: ClusterIP
+    port: 80
+
+# --- MongoDB ---
+mongodb:
+  # Set to false to use an external MongoDB instance
+  enabled: true
+  external:
+    # Full connection string for external MongoDB (Atlas, DocumentDB, etc.)
+    connectionString: ""
+  auth:
+    rootUsername: agenttier
+    # Auto-generated if not set; or reference an existing secret
+    existingSecret: ""
+  storage:
+    size: 10Gi
+    storageClass: ""
+  replicaSet:
+    enabled: false
+
+# --- Authentication ---
+auth:
+  oidc:
+    issuerUrl: ""
+    clientId: ""
+    # Reference to a K8s Secret containing the client secret
+    clientSecretRef: ""
+    adminGroup: "agenttier-admins"
+    groupClaim: "groups"
+    # Map IdP groups to namespaces: {"platform-team": "platform", "data-team": "data"}
+    groupNamespaceMapping: {}
+  apiKeys:
+    enabled: true
+
+# --- Sandbox Defaults ---
+defaults:
+  sandbox:
+    image: ghcr.io/agenttier/sandbox-general:latest
+    resources:
+      requests:
+        cpu: 500m
+        memory: 1Gi
+      limits:
+        cpu: "2"
+        memory: 4Gi
+    storage:
+      size: 10Gi
+      storageClass: ""
+      mountPath: /workspace
+    timeout: 8h
+    idleTimeout: 1h
+  claudeCode:
+    image: ghcr.io/agenttier/sandbox-claude-code:latest
+    # IRSA role ARN for Bedrock access (annotated on sandbox ServiceAccount)
+    irsaRoleArn: ""
+
+# --- Networking ---
+networking:
+  # Default network policy for all sandboxes: "deny-all" or "allow-internet"
+  defaultPolicy: deny-all
+  # Domain for port forwarding preview URLs (e.g., preview.agenttier.company.com)
+  previewDomain: ""
+  # Gateway API gateway name for port forwarding
+  gatewayName: ""
+
+# --- Security ---
+security:
+  gvisor:
+    enabled: false
+    runtimeClassName: gvisor
+  podSecurityStandard: restricted
+
+# --- Observability ---
+observability:
+  otlp:
+    # OTLP gRPC endpoint (e.g., otel-collector:4317)
+    endpoint: ""
+  prometheus:
+    enabled: true
+    serviceMonitor: false
+  otelCollector:
+    enabled: false
+    image: otel/opentelemetry-collector-contrib:0.104.0
+
+# --- Optional Components ---
+optional:
+  # Image pre-pull DaemonSet
+  imagePrepull:
+    enabled: false
+    # Additional images to pre-pull (template images are auto-detected)
+    extraImages: []
+  # PodDisruptionBudget for controller and router
+  pdb:
+    enabled: true
+    minAvailable: 1
+  # Ingress for Web UI
+  ingress:
+    enabled: false
+    className: ""
+    annotations: {}
+    hosts:
+      - host: agenttier.local
+        paths:
+          - path: /
+            pathType: Prefix
+    tls: []
+
+# --- Cost Estimation ---
+costs:
+  rates:
+    cpuPerHour: 0.04
+    memoryPerGBHour: 0.005
+    storagePerGBHour: 0.0001
+
+# --- Image Pull Secrets ---
+imagePullSecrets: []
+
+# --- Node Selector / Tolerations ---
+nodeSelector: {}
+tolerations: []
+affinity: {}

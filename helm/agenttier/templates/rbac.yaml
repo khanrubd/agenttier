@@ -1,0 +1,73 @@
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ include "agenttier.serviceAccountName" . }}
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ include "agenttier.fullname" . }}-controller
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+rules:
+  # Sandbox and Template CRDs
+  - apiGroups: ["agenttier.io"]
+    resources: ["sandboxes", "sandboxes/status", "sandboxtemplates", "clustersandboxtemplates"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Pods
+  - apiGroups: [""]
+    resources: ["pods", "pods/exec", "pods/log"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # PVCs
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # NetworkPolicies
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["networkpolicies"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # ServiceAccounts
+  - apiGroups: [""]
+    resources: ["serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Services (for port forwarding)
+  - apiGroups: [""]
+    resources: ["services"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Events
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["create", "patch"]
+  # VolumeSnapshots (for cloning and backups)
+  - apiGroups: ["snapshot.storage.k8s.io"]
+    resources: ["volumesnapshots"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  # HTTPRoutes (for port forwarding via Gateway API)
+  - apiGroups: ["gateway.networking.k8s.io"]
+    resources: ["httproutes"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Leader election
+  - apiGroups: ["coordination.k8s.io"]
+    resources: ["leases"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # ConfigMaps and Secrets (for template file references)
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: {{ include "agenttier.fullname" . }}-controller
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: {{ include "agenttier.fullname" . }}-controller
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "agenttier.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}

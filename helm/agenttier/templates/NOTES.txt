@@ -1,0 +1,30 @@
+🎉 AgentTier has been installed!
+
+Get the Web UI URL:
+{{- if .Values.optional.ingress.enabled }}
+  http{{ if (index .Values.optional.ingress.tls 0) }}s{{ end }}://{{ (index .Values.optional.ingress.hosts 0).host }}
+{{- else }}
+  kubectl port-forward svc/{{ include "agenttier.fullname" . }}-webui {{ .Values.webui.service.port }}:{{ .Values.webui.service.port }}
+  Then open: http://localhost:{{ .Values.webui.service.port }}
+{{- end }}
+
+Quick start:
+  1. Create a sandbox:
+     kubectl apply -f - <<EOF
+     apiVersion: agenttier.io/v1alpha1
+     kind: Sandbox
+     metadata:
+       name: my-first-sandbox
+     spec:
+       templateRef:
+         name: general-coding
+         kind: ClusterSandboxTemplate
+     EOF
+
+  2. Check status:
+     kubectl get sandboxes
+
+  3. Open terminal (via CLI):
+     agenttier sandbox exec my-first-sandbox
+
+Documentation: https://docs.agenttier.io
