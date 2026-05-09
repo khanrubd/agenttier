@@ -1,0 +1,419 @@
+/*
+Copyright 2024 AgentTier Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package v1alpha1
+
+import (
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// SandboxPhase represents the current lifecycle phase of a Sandbox.
+type SandboxPhase string
+
+const (
+	// SandboxPhaseCreating indicates the sandbox is being provisioned.
+	SandboxPhaseCreating SandboxPhase = "Creating"
+	// SandboxPhaseRunning indicates the sandbox pod is running and ready.
+	SandboxPhaseRunning SandboxPhase = "Running"
+	// SandboxPhaseStopped indicates the sandbox pod has been deleted but PVC persists.
+	SandboxPhaseStopped SandboxPhase = "Stopped"
+	// SandboxPhaseError indicates the sandbox encountered an unrecoverable error.
+	SandboxPhaseError SandboxPhase = "Error"
+	// SandboxPhaseDeleting indicates the sandbox is being permanently removed.
+	SandboxPhaseDeleting SandboxPhase = "Deleting"
+)
+
+// +kubebuilder:object:root=true
+// +kubebuilder:subresource:status
+// +kubebuilder:printcolumn:name="Status",type=string,JSONPath=`.status.phase`
+// +kubebuilder:printcolumn:name="Template",type=string,JSONPath=`.status.resolvedTemplate`
+// +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
+
+// Sandbox represents a single isolated agent environment managed by AgentTier.
+type Sandbox struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec   SandboxSpec   `json:"spec,omitempty"`
+	Status SandboxStatus `json:"status,omitempty"`
+}
+
+// SandboxSpec defines the desired state of a Sandbox.
+type SandboxSpec struct {
+	// TemplateRef references a SandboxTemplate or ClusterSandboxTemplate from which
+	// this sandbox inherits its configuration.
+	// +optional
+	TemplateRef *TemplateReference `json:"templateRef,omitempty"`
+
+	// Image specifies the container image for the sandbox. Overrides the template image.
+	// +optional
+	Image *ImageSpec `json:"image,omitempty"`
+
+	// Resources specifies CPU and memory requests and limits for the sandbox container.
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// Storage configures the persistent volume for the sandbox workspace.
+	// +optional
+	Storage *StorageSpec `json:"storage,omitempty"`
+
+	// Network declares egress and ingress rules for the sandbox.
+	// +optional
+	Network *NetworkSpec `json:"network,omitempty"`
+
+	// Env specifies environment variables to inject into the sandbox container.
+	// These are merged with template-defined environment variables.
+	// +optional
+	Env []corev1.EnvVar `json:"env,omitempty"`
+
+	// Timeout defines the maximum duration the sandbox may remain running.
+	// Use "0" or omit for infinite (subject to governance limits).
+	// +optional
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
+
+	// IdleTimeout defines how long the sandbox may remain idle before auto-stop.
+	// Use "0" or omit for infinite (subject to governance limits).
+	// +optional
+	IdleTimeout *metav1.Duration `json:"idleTimeout,omitempty"`
+
+	// RuntimeClass specifies an alternative container runtime (e.g., "gvisor").
+	// +optional
+	RuntimeClass *string `json:"runtimeClass,omitempty"`
+
+	// AutoResume automatically resumes a stopped sandbox when an exec session is requested.
+	// +optional
+	AutoResume bool `json:"autoResume,omitempty"`
+
+	// Security configures pod security context overrides.
+	// +optional
+	Security *SecuritySpec `json:"security,omitempty"`
+
+	// Credentials references Kubernetes Secrets for credential injection into the sandbox.
+	// +optional
+	Credentials []CredentialRef `json:"credentials,omitempty"`
+
+	// Sidecars defines additional containers to run alongside the sandbox container.
+	// +optional
+	Sidecars []corev1.Container `json:"sidecars,omitempty"`
+
+	// InitContainers defines containers to run before the sandbox starts.
+	// +optional
+	InitContainers []corev1.Container `json:"initContainers,omitempty"`
+
+	// CreatedBy stores the authenticated user identity. Set by the admission webhook.
+	// +optional
+	CreatedBy *UserIdentity `json:"createdBy,omitempty"`
+
+	// Sharing defines access permissions for other users.
+	// +optional
+	Sharing *SharingSpec `json:"sharing,omitempty"`
+}
+
+// SandboxStatus defines the observed state of a Sandbox.
+type SandboxStatus struct {
+	// Phase is the current lifecycle phase of the sandbox.
+	// +optional
+	Phase SandboxPhase `json:"phase,omitempty"`
+
+	// PodName is the name of the current sandbox pod.
+	// +optional
+	PodName string `json:"podName,omitempty"`
+
+	// PVCName is the name of the persistent volume claim.
+	// +optional
+	PVCName string `json:"pvcName,omitempty"`
+
+	// ResolvedTemplate is the name of the template used to create this sandbox.
+	// +optional
+	ResolvedTemplate string `json:"resolvedTemplate,omitempty"`
+
+	// TemplateResourceVersion records which template version was used for auditability.
+	// +optional
+	TemplateResourceVersion string `json:"templateResourceVersion,omitempty"`
+
+	// StartedAt is when the current pod started running.
+	// +optional
+	StartedAt *metav1.Time `json:"startedAt,omitempty"`
+
+	// LastActivityTimestamp tracks the last exec session or API interaction.
+	// +optional
+	LastActivityTimestamp *metav1.Time `json:"lastActivityTimestamp,omitempty"`
+
+	// RestartCount tracks the number of infrastructure-failure restarts.
+	// +optional
+	RestartCount int `json:"restartCount,omitempty"`
+
+	// Message provides a human-readable description of the current status.
+	// +optional
+	Message string `json:"message,omitempty"`
+
+	// Conditions represent the latest available observations of the sandbox's state.
+	// +optional
+	Conditions []metav1.Condition `json:"conditions,omitempty"`
+
+	// ForwardedPorts lists active port forwards for this sandbox.
+	// +optional
+	ForwardedPorts []ForwardedPort `json:"forwardedPorts,omitempty"`
+
+	// ClonedFrom records the source sandbox ID if this sandbox was cloned.
+	// +optional
+	ClonedFrom string `json:"clonedFrom,omitempty"`
+}
+
+// TemplateReference identifies a SandboxTemplate or ClusterSandboxTemplate.
+type TemplateReference struct {
+	// Name of the template resource.
+	Name string `json:"name"`
+
+	// Kind is "SandboxTemplate" (default) or "ClusterSandboxTemplate".
+	// +kubebuilder:default=SandboxTemplate
+	// +optional
+	Kind string `json:"kind,omitempty"`
+
+	// Namespace of the template. Only applicable for SandboxTemplate.
+	// Defaults to the sandbox's namespace.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+}
+
+// ImageSpec defines the container image configuration.
+type ImageSpec struct {
+	// Repository is the full OCI image reference (e.g., "ghcr.io/agenttier/sandbox-base:v1").
+	Repository string `json:"repository"`
+
+	// PullPolicy defines when to pull the image: Always, IfNotPresent, or Never.
+	// +kubebuilder:validation:Enum=Always;IfNotPresent;Never
+	// +optional
+	PullPolicy corev1.PullPolicy `json:"pullPolicy,omitempty"`
+
+	// PullSecret references an image pull secret for private registries.
+	// +optional
+	PullSecret string `json:"pullSecret,omitempty"`
+}
+
+// StorageSpec configures the persistent volume for the sandbox.
+type StorageSpec struct {
+	// Size of the PVC (e.g., "10Gi").
+	// +kubebuilder:default="10Gi"
+	// +optional
+	Size resource.Quantity `json:"size,omitempty"`
+
+	// StorageClass name. Empty string uses the cluster default.
+	// +optional
+	StorageClass string `json:"storageClass,omitempty"`
+
+	// MountPath inside the container where the PVC is mounted.
+	// +kubebuilder:default="/workspace"
+	// +optional
+	MountPath string `json:"mountPath,omitempty"`
+
+	// SnapshotOnStop creates a VolumeSnapshot before stopping the sandbox.
+	// +optional
+	SnapshotOnStop bool `json:"snapshotOnStop,omitempty"`
+
+	// Shared enables ReadWriteMany access mode for inter-sandbox volume sharing.
+	// Requires a storage class that supports RWX.
+	// +optional
+	Shared bool `json:"shared,omitempty"`
+}
+
+// NetworkSpec declares network isolation rules for the sandbox.
+type NetworkSpec struct {
+	// AllowInternet permits all egress traffic when true.
+	// +optional
+	AllowInternet bool `json:"allowInternet,omitempty"`
+
+	// EgressRules defines allowed egress destinations.
+	// +optional
+	EgressRules []NetworkRule `json:"egressRules,omitempty"`
+
+	// IngressRules defines allowed ingress sources.
+	// +optional
+	IngressRules []NetworkRule `json:"ingressRules,omitempty"`
+
+	// AllowedDomains restricts egress to specific domain names.
+	// Requires a DNS-aware CNI plugin (Calico, Cilium).
+	// +optional
+	AllowedDomains []string `json:"allowedDomains,omitempty"`
+
+	// AllowPeerSandboxes enables inter-sandbox communication within the namespace.
+	// +optional
+	AllowPeerSandboxes bool `json:"allowPeerSandboxes,omitempty"`
+
+	// PeerSandboxSelector selects which sandboxes can communicate with this one.
+	// Only effective when AllowPeerSandboxes is true.
+	// +optional
+	PeerSandboxSelector *metav1.LabelSelector `json:"peerSandboxSelector,omitempty"`
+}
+
+// NetworkRule defines a single network access rule.
+type NetworkRule struct {
+	// CIDR block (e.g., "10.0.0.0/8", "0.0.0.0/0").
+	// +optional
+	CIDR string `json:"cidr,omitempty"`
+
+	// Ports allowed for this rule.
+	// +optional
+	Ports []NetworkPort `json:"ports,omitempty"`
+
+	// ServiceRef references a Kubernetes service as the destination.
+	// +optional
+	ServiceRef *ServiceReference `json:"serviceRef,omitempty"`
+}
+
+// NetworkPort defines a protocol and port number.
+type NetworkPort struct {
+	// Protocol (TCP or UDP). Defaults to TCP.
+	// +kubebuilder:default=TCP
+	// +optional
+	Protocol corev1.Protocol `json:"protocol,omitempty"`
+
+	// Port number.
+	Port int32 `json:"port"`
+}
+
+// ServiceReference identifies a Kubernetes service.
+type ServiceReference struct {
+	// Name of the service.
+	Name string `json:"name"`
+
+	// Namespace of the service. Defaults to the sandbox namespace.
+	// +optional
+	Namespace string `json:"namespace,omitempty"`
+
+	// Port on the service.
+	// +optional
+	Port int32 `json:"port,omitempty"`
+}
+
+// SecuritySpec configures pod security overrides.
+type SecuritySpec struct {
+	// Privileged relaxes the default restrictive security context.
+	// Use with caution — only for sandboxes that require elevated privileges.
+	// +optional
+	Privileged bool `json:"privileged,omitempty"`
+}
+
+// CredentialRef references a Kubernetes Secret for credential injection.
+type CredentialRef struct {
+	// SecretName is the name of the Kubernetes Secret.
+	SecretName string `json:"secretName"`
+
+	// MountAs defines how to inject: "env" (environment variables) or "file" (volume mount).
+	// +kubebuilder:validation:Enum=env;file
+	// +kubebuilder:default=env
+	// +optional
+	MountAs string `json:"mountAs,omitempty"`
+
+	// MountPath is the filesystem path for file-mounted credentials.
+	// Only used when MountAs is "file".
+	// +optional
+	MountPath string `json:"mountPath,omitempty"`
+
+	// EnvPrefix is prepended to secret keys when mounted as environment variables.
+	// +optional
+	EnvPrefix string `json:"envPrefix,omitempty"`
+}
+
+// UserIdentity stores the authenticated user's identity information.
+type UserIdentity struct {
+	// Sub is the OIDC subject identifier.
+	Sub string `json:"sub"`
+
+	// Email is the user's email address.
+	// +optional
+	Email string `json:"email,omitempty"`
+
+	// DisplayName is the user's display name.
+	// +optional
+	DisplayName string `json:"displayName,omitempty"`
+}
+
+// SharingSpec defines access permissions for other users.
+type SharingSpec struct {
+	// Users granted access to this sandbox.
+	// +optional
+	Users []SharePermission `json:"users,omitempty"`
+
+	// Groups granted access to this sandbox.
+	// +optional
+	Groups []SharePermission `json:"groups,omitempty"`
+
+	// ShareLinks for temporary access without pre-registration.
+	// +optional
+	ShareLinks []ShareLink `json:"shareLinks,omitempty"`
+}
+
+// SharePermission grants access to a specific user or group.
+type SharePermission struct {
+	// Identity is the user email or group name.
+	Identity string `json:"identity"`
+
+	// Level is the permission level: "viewer" (read-only) or "collaborator" (full access).
+	// +kubebuilder:validation:Enum=viewer;collaborator
+	Level string `json:"level"`
+}
+
+// ShareLink provides temporary access via a shareable URL.
+type ShareLink struct {
+	// Token is the unique share link identifier.
+	Token string `json:"token"`
+
+	// Level is the permission level granted by this link.
+	// +kubebuilder:validation:Enum=viewer;collaborator
+	Level string `json:"level"`
+
+	// ExpiresAt is when the link expires.
+	// +optional
+	ExpiresAt *metav1.Time `json:"expiresAt,omitempty"`
+
+	// MaxUses is the maximum number of times this link can be used. 0 = unlimited.
+	// +optional
+	MaxUses int `json:"maxUses,omitempty"`
+
+	// UsedCount tracks how many times the link has been used.
+	// +optional
+	UsedCount int `json:"usedCount,omitempty"`
+}
+
+// ForwardedPort represents an active port forward for the sandbox.
+type ForwardedPort struct {
+	// Port is the container port being forwarded.
+	Port int32 `json:"port"`
+
+	// PreviewURL is the publicly accessible HTTPS URL for this port.
+	PreviewURL string `json:"previewUrl"`
+
+	// Protocol is the application protocol (http, https, tcp).
+	// +kubebuilder:default=http
+	// +optional
+	Protocol string `json:"protocol,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+
+// SandboxList contains a list of Sandbox resources.
+type SandboxList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []Sandbox `json:"items"`
+}
+
+func init() {
+	SchemeBuilder.Register(&Sandbox{}, &SandboxList{})
+}

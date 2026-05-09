@@ -1,0 +1,300 @@
+/*
+Copyright 2024 AgentTier Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package v1alpha1
+
+import (
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
+
+// +kubebuilder:object:root=true
+
+// SandboxTemplate is a namespace-scoped reusable blueprint for creating sandboxes.
+// It encapsulates the complete agent harness configuration.
+type SandboxTemplate struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec SandboxTemplateSpec `json:"spec,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+// +kubebuilder:resource:scope=Cluster
+
+// ClusterSandboxTemplate is a cluster-scoped variant of SandboxTemplate
+// that can be referenced from any namespace.
+type ClusterSandboxTemplate struct {
+	metav1.TypeMeta   `json:",inline"`
+	metav1.ObjectMeta `json:"metadata,omitempty"`
+
+	Spec SandboxTemplateSpec `json:"spec,omitempty"`
+}
+
+// SandboxTemplateSpec defines the desired configuration for sandboxes created from this template.
+type SandboxTemplateSpec struct {
+	// InheritsFrom references a parent template for composition.
+	// Child fields merge over or override parent fields.
+	// +optional
+	InheritsFrom *TemplateReference `json:"inheritsFrom,omitempty"`
+
+	// Description provides a human-readable description for UI display.
+	// +optional
+	Description string `json:"description,omitempty"`
+
+	// Image defines the default container image for sandboxes.
+	// +optional
+	Image *ImageSpec `json:"image,omitempty"`
+
+	// Resources defines default CPU and memory requests/limits.
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// Storage defines default persistent volume configuration.
+	// +optional
+	Storage *StorageSpec `json:"storage,omitempty"`
+
+	// Network defines default network isolation rules.
+	// +optional
+	Network *NetworkSpec `json:"network,omitempty"`
+
+	// Env defines default environment variables.
+	// +optional
+	Env []corev1.EnvVar `json:"env,omitempty"`
+
+	// Timeout defines the default maximum runtime duration.
+	// +optional
+	Timeout *metav1.Duration `json:"timeout,omitempty"`
+
+	// IdleTimeout defines the default idle timeout.
+	// +optional
+	IdleTimeout *metav1.Duration `json:"idleTimeout,omitempty"`
+
+	// RuntimeClass defines the default container runtime.
+	// +optional
+	RuntimeClass *string `json:"runtimeClass,omitempty"`
+
+	// Harness defines the agent runtime configuration.
+	// +optional
+	Harness *HarnessSpec `json:"harness,omitempty"`
+
+	// InitScripts are shell commands executed in order when the sandbox first starts.
+	// +optional
+	InitScripts []string `json:"initScripts,omitempty"`
+
+	// Files are deployed into the sandbox filesystem at startup.
+	// +optional
+	Files []FileSpec `json:"files,omitempty"`
+
+	// Credentials defines default credential references for sandboxes.
+	// +optional
+	Credentials []CredentialRef `json:"credentials,omitempty"`
+
+	// Sidecars defines default sidecar containers.
+	// +optional
+	Sidecars []corev1.Container `json:"sidecars,omitempty"`
+
+	// InitContainers defines default init containers.
+	// +optional
+	InitContainers []corev1.Container `json:"initContainers,omitempty"`
+
+	// Security defines default security settings.
+	// +optional
+	Security *SecuritySpec `json:"security,omitempty"`
+}
+
+// HarnessSpec defines the agent runtime configuration within a template.
+type HarnessSpec struct {
+	// Command is the agent binary or script to execute.
+	// +optional
+	Command []string `json:"command,omitempty"`
+
+	// Args are command-line arguments for the agent command.
+	// +optional
+	Args []string `json:"args,omitempty"`
+
+	// WorkingDir is the working directory for the agent process.
+	// +optional
+	WorkingDir string `json:"workingDir,omitempty"`
+
+	// Shell is the entrypoint for interactive terminal sessions.
+	// +kubebuilder:default="/bin/bash"
+	// +optional
+	Shell string `json:"shell,omitempty"`
+
+	// Tools declares tools to be installed or verified at sandbox startup.
+	// +optional
+	Tools []ToolSpec `json:"tools,omitempty"`
+
+	// SystemPrompt defines the agent's behavioral instructions and constraints.
+	// Deployed into the sandbox filesystem at a well-known path.
+	// +optional
+	SystemPrompt *FileOrRef `json:"systemPrompt,omitempty"`
+
+	// Skills are skill definitions deployed into the sandbox filesystem.
+	// +optional
+	Skills []SkillSpec `json:"skills,omitempty"`
+
+	// Hooks defines lifecycle scripts executed at specific points.
+	// +optional
+	Hooks *HooksSpec `json:"hooks,omitempty"`
+
+	// Constraints defines operational boundaries for the agent.
+	// +optional
+	Constraints *ConstraintsSpec `json:"constraints,omitempty"`
+}
+
+// ToolSpec declares a tool to be installed or verified in the sandbox.
+type ToolSpec struct {
+	// Name of the tool (e.g., "node", "python", "git").
+	Name string `json:"name"`
+
+	// Version constraint (e.g., ">=18", "3.11").
+	// +optional
+	Version string `json:"version,omitempty"`
+
+	// InstallCommand to run if the tool is not present.
+	// +optional
+	InstallCommand string `json:"installCommand,omitempty"`
+
+	// VerifyCommand to check if the tool is installed (e.g., "node --version").
+	// +optional
+	VerifyCommand string `json:"verifyCommand,omitempty"`
+}
+
+// FileOrRef represents content that can be inline or referenced from a ConfigMap/Secret.
+type FileOrRef struct {
+	// Content is inline file content.
+	// +optional
+	Content string `json:"content,omitempty"`
+
+	// ConfigMapRef references a ConfigMap key.
+	// +optional
+	ConfigMapRef *corev1.ConfigMapKeySelector `json:"configMapRef,omitempty"`
+
+	// SecretRef references a Secret key.
+	// +optional
+	SecretRef *corev1.SecretKeySelector `json:"secretRef,omitempty"`
+
+	// Path where the file is deployed in the sandbox filesystem.
+	// +optional
+	Path string `json:"path,omitempty"`
+}
+
+// SkillSpec defines a skill to be deployed into the sandbox.
+type SkillSpec struct {
+	// Name of the skill.
+	Name string `json:"name"`
+
+	// Content is the skill definition (inline or referenced).
+	// +optional
+	Content *FileOrRef `json:"content,omitempty"`
+}
+
+// HooksSpec defines lifecycle scripts for sandbox state transitions.
+type HooksSpec struct {
+	// OnStart is executed after the pod is ready.
+	// +optional
+	OnStart string `json:"onStart,omitempty"`
+
+	// OnStop is executed before pod termination.
+	// +optional
+	OnStop string `json:"onStop,omitempty"`
+
+	// OnIdle is executed when idle timeout triggers.
+	// +optional
+	OnIdle string `json:"onIdle,omitempty"`
+
+	// OnResume is executed after sandbox resumes from stopped state.
+	// +optional
+	OnResume string `json:"onResume,omitempty"`
+}
+
+// ConstraintsSpec defines operational boundaries for the agent.
+type ConstraintsSpec struct {
+	// MaxFileSize is the maximum file size the agent can create.
+	// +optional
+	MaxFileSize *resource.Quantity `json:"maxFileSize,omitempty"`
+
+	// MaxCommandTimeout is the maximum duration for a single command execution.
+	// +optional
+	MaxCommandTimeout *metav1.Duration `json:"maxCommandTimeout,omitempty"`
+
+	// RestrictedCommands are commands the agent is not allowed to execute.
+	// +optional
+	RestrictedCommands []string `json:"restrictedCommands,omitempty"`
+
+	// RestrictedPaths are filesystem paths the agent cannot access.
+	// +optional
+	RestrictedPaths []string `json:"restrictedPaths,omitempty"`
+
+	// AllowedNetworkDests are network destinations the agent is allowed to reach.
+	// +optional
+	AllowedNetworkDests []string `json:"allowedNetworkDests,omitempty"`
+
+	// DeniedNetworkDests are network destinations the agent is blocked from reaching.
+	// +optional
+	DeniedNetworkDests []string `json:"deniedNetworkDests,omitempty"`
+}
+
+// FileSpec defines a file to be deployed into the sandbox filesystem.
+type FileSpec struct {
+	// Path in the sandbox filesystem where the file is written.
+	Path string `json:"path"`
+
+	// Content is inline file content.
+	// +optional
+	Content string `json:"content,omitempty"`
+
+	// ConfigMapRef references a ConfigMap key for the file content.
+	// +optional
+	ConfigMapRef *corev1.ConfigMapKeySelector `json:"configMapRef,omitempty"`
+
+	// SecretRef references a Secret key for sensitive file content.
+	// +optional
+	SecretRef *corev1.SecretKeySelector `json:"secretRef,omitempty"`
+
+	// Mode is the file permission mode (e.g., 0644).
+	// +kubebuilder:default=420
+	// +optional
+	Mode *int32 `json:"mode,omitempty"`
+}
+
+// +kubebuilder:object:root=true
+
+// SandboxTemplateList contains a list of SandboxTemplate resources.
+type SandboxTemplateList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []SandboxTemplate `json:"items"`
+}
+
+// +kubebuilder:object:root=true
+
+// ClusterSandboxTemplateList contains a list of ClusterSandboxTemplate resources.
+type ClusterSandboxTemplateList struct {
+	metav1.TypeMeta `json:",inline"`
+	metav1.ListMeta `json:"metadata,omitempty"`
+	Items           []ClusterSandboxTemplate `json:"items"`
+}
+
+func init() {
+	SchemeBuilder.Register(
+		&SandboxTemplate{}, &SandboxTemplateList{},
+		&ClusterSandboxTemplate{}, &ClusterSandboxTemplateList{},
+	)
+}
