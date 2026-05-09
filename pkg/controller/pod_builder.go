@@ -1,0 +1,389 @@
+/*
+Copyright 2024 AgentTier Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package controller
+
+import (
+	"fmt"
+
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
+	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
+)
+
+const (
+	sandboxContainerName = "sandbox"
+	workspaceVolumeName  = "workspace"
+	defaultShell         = "/bin/bash"
+)
+
+var (
+	defaultUser  int64 = 1000
+	defaultGroup int64 = 1000
+)
+
+// PodBuilder constructs Pod specs for sandboxes with proper security context,
+// volume mounts, environment variables, and init containers.
+type PodBuilder struct {
+	DefaultImage string
+}
+
+// MergedPodConfig holds the fully resolved configuration for building a pod.
+type MergedPodConfig struct {
+	Image           string
+	ImagePullPolicy corev1.PullPolicy
+	ImagePullSecret string
+	Command         []string
+	Args            []string
+	WorkingDir      string
+	Shell           string
+	Env             []corev1.EnvVar
+	Resources       *corev1.ResourceRequirements
+	RuntimeClass    *string
+	Privileged      bool
+	MountPath       string
+	PVCName         string
+	Sidecars        []corev1.Container
+	InitContainers  []corev1.Container
+	InitScripts     []string
+	Files           []agenttierv1alpha1.FileSpec
+	Credentials     []agenttierv1alpha1.CredentialRef
+	ServiceAccount  string // Kubernetes ServiceAccount name (for IRSA)
+}
+
+// Build creates a Pod for the given sandbox with the merged configuration.
+func (b *PodBuilder) Build(sandbox *agenttierv1alpha1.Sandbox, config *MergedPodConfig) *corev1.Pod {
+	podName := fmt.Sprintf("%s-pod", sandbox.Name)
+
+	pod := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      podName,
+			Namespace: sandbox.Namespace,
+			Labels: map[string]string{
+				"agenttier.io/sandbox":  sandbox.Name,
+				"agenttier.io/managed":  "true",
+				"agenttier.io/template": sandbox.Status.ResolvedTemplate,
+			},
+			Annotations: map[string]string{},
+		},
+		Spec: corev1.PodSpec{
+			RestartPolicy: corev1.RestartPolicyNever,
+			// Pod-level security context: fsGroup ensures volume group ownership
+			SecurityContext: &corev1.PodSecurityContext{
+				RunAsUser:  &defaultUser,
+				RunAsGroup: &defaultGroup,
+				FSGroup:    &defaultGroup,
+			},
+			Containers: []corev1.Container{
+				b.buildMainContainer(config),
+			},
+			Volumes:        b.buildVolumes(config),
+			InitContainers: b.buildInitContainers(config),
+		},
+	}
+
+	// Set creator annotation
+	if sandbox.Spec.CreatedBy != nil {
+		pod.Annotations["agenttier.io/created-by"] = sandbox.Spec.CreatedBy.Email
+	}
+
+	// Set RuntimeClass
+	if config.RuntimeClass != nil {
+		pod.Spec.RuntimeClassName = config.RuntimeClass
+	}
+
+	// Set ServiceAccount (for IRSA credential injection)
+	if config.ServiceAccount != "" {
+		pod.Spec.ServiceAccountName = config.ServiceAccount
+	}
+
+	// Set image pull secret
+	if config.ImagePullSecret != "" {
+		pod.Spec.ImagePullSecrets = []corev1.LocalObjectReference{
+			{Name: config.ImagePullSecret},
+		}
+	}
+
+	// Add sidecars
+	pod.Spec.Containers = append(pod.Spec.Containers, config.Sidecars...)
+
+	// Add credential volumes
+	b.addCredentialVolumes(pod, config.Credentials)
+
+	// SECURITY ENFORCEMENT: Strip any dangerous fields regardless of user input
+	b.enforceSecurityInvariants(pod)
+
+	return pod
+}
+
+// buildMainContainer creates the primary sandbox container.
+func (b *PodBuilder) buildMainContainer(config *MergedPodConfig) corev1.Container {
+	image := config.Image
+	if image == "" {
+		image = b.DefaultImage
+	}
+
+	container := corev1.Container{
+		Name:  sandboxContainerName,
+		Image: image,
+		Stdin: true,
+		TTY:   true,
+		VolumeMounts: []corev1.VolumeMount{
+			{
+				Name:      workspaceVolumeName,
+				MountPath: config.MountPath,
+			},
+		},
+		Env:             config.Env,
+		SecurityContext: b.buildSecurityContext(config.Privileged),
+	}
+
+	// Set command if specified (otherwise use image default)
+	if len(config.Command) > 0 {
+		container.Command = config.Command
+	}
+	if len(config.Args) > 0 {
+		container.Args = config.Args
+	}
+
+	// Set working directory
+	if config.WorkingDir != "" {
+		container.WorkingDir = config.WorkingDir
+	} else {
+		container.WorkingDir = config.MountPath
+	}
+
+	// Set resources
+	if config.Resources != nil {
+		container.Resources = *config.Resources
+	}
+
+	// Set image pull policy
+	if config.ImagePullPolicy != "" {
+		container.ImagePullPolicy = config.ImagePullPolicy
+	}
+
+	// Add credential env vars
+	for _, cred := range config.Credentials {
+		if cred.MountAs == "env" || cred.MountAs == "" {
+			container.EnvFrom = append(container.EnvFrom, corev1.EnvFromSource{
+				Prefix: cred.EnvPrefix,
+				SecretRef: &corev1.SecretEnvSource{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: cred.SecretName,
+					},
+				},
+			})
+		}
+	}
+
+	// Add credential file mounts
+	for _, cred := range config.Credentials {
+		if cred.MountAs == "file" && cred.MountPath != "" {
+			container.VolumeMounts = append(container.VolumeMounts, corev1.VolumeMount{
+				Name:      fmt.Sprintf("cred-%s", cred.SecretName),
+				MountPath: cred.MountPath,
+				ReadOnly:  true,
+			})
+		}
+	}
+
+	return container
+}
+
+// buildSecurityContext creates the restrictive security context.
+// Default: non-root, read-only root fs, drop ALL caps, seccomp RuntimeDefault.
+func (b *PodBuilder) buildSecurityContext(privileged bool) *corev1.SecurityContext {
+	if privileged {
+		// Relaxed security context for privileged sandboxes
+		return &corev1.SecurityContext{
+			RunAsUser:  &defaultUser,
+			RunAsGroup: &defaultGroup,
+		}
+	}
+
+	falseVal := false
+	trueVal := true
+
+	return &corev1.SecurityContext{
+		RunAsNonRoot:             &trueVal,
+		RunAsUser:                &defaultUser,
+		RunAsGroup:               &defaultGroup,
+		ReadOnlyRootFilesystem:   &trueVal,
+		AllowPrivilegeEscalation: &falseVal,
+		Capabilities: &corev1.Capabilities{
+			Drop: []corev1.Capability{"ALL"},
+		},
+		SeccompProfile: &corev1.SeccompProfile{
+			Type: corev1.SeccompProfileTypeRuntimeDefault,
+		},
+	}
+}
+
+// buildVolumes creates the volume list for the pod.
+func (b *PodBuilder) buildVolumes(config *MergedPodConfig) []corev1.Volume {
+	volumes := []corev1.Volume{
+		{
+			Name: workspaceVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
+					ClaimName: config.PVCName,
+				},
+			},
+		},
+	}
+
+	// Add credential volumes (file-mounted secrets)
+	for _, cred := range config.Credentials {
+		if cred.MountAs == "file" {
+			volumes = append(volumes, corev1.Volume{
+				Name: fmt.Sprintf("cred-%s", cred.SecretName),
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: cred.SecretName,
+					},
+				},
+			})
+		}
+	}
+
+	return volumes
+}
+
+// buildInitContainers creates init containers for file deployment and init scripts.
+func (b *PodBuilder) buildInitContainers(config *MergedPodConfig) []corev1.Container {
+	var initContainers []corev1.Container
+
+	// Permission fix: ensure workspace is writable by sandbox user
+	// This runs as root (UID 0) to chown the PVC mount point
+	// Uses the same sandbox image to avoid pulling from Docker Hub
+	rootUser := int64(0)
+	initContainers = append(initContainers, corev1.Container{
+		Name:    "fix-permissions",
+		Image:   config.Image,
+		Command: []string{"sh", "-c", fmt.Sprintf("chown -R %d:%d %s && chmod 775 %s", defaultUser, defaultGroup, config.MountPath, config.MountPath)},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: workspaceVolumeName, MountPath: config.MountPath},
+		},
+		SecurityContext: &corev1.SecurityContext{
+			RunAsUser: &rootUser,
+		},
+	})
+
+	// Init container for deploying template files to workspace
+	if len(config.Files) > 0 {
+		fileDeployer := b.buildFileDeployerInit(config)
+		initContainers = append(initContainers, fileDeployer)
+	}
+
+	// Init container for running init scripts
+	if len(config.InitScripts) > 0 {
+		scriptRunner := b.buildScriptRunnerInit(config)
+		initContainers = append(initContainers, scriptRunner)
+	}
+
+	// User-defined init containers
+	initContainers = append(initContainers, config.InitContainers...)
+
+	return initContainers
+}
+
+// buildFileDeployerInit creates an init container that writes template files to the workspace.
+func (b *PodBuilder) buildFileDeployerInit(config *MergedPodConfig) corev1.Container {
+	// Build a shell script that writes all files
+	script := "#!/bin/sh\nset -e\n"
+	for _, f := range config.Files {
+		if f.Content != "" {
+			// Escape content for shell
+			script += fmt.Sprintf("mkdir -p $(dirname '%s') && cat > '%s' << 'AGENTLOFT_EOF'\n%s\nAGENTLOFT_EOF\n", f.Path, f.Path, f.Content)
+			if f.Mode != nil {
+				script += fmt.Sprintf("chmod %o '%s'\n", *f.Mode, f.Path)
+			}
+		}
+	}
+
+	return corev1.Container{
+		Name:    "file-deployer",
+		Image:   config.Image,
+		Command: []string{"/bin/sh", "-c", script},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: workspaceVolumeName, MountPath: config.MountPath},
+		},
+		SecurityContext: b.buildSecurityContext(false),
+	}
+}
+
+// buildScriptRunnerInit creates an init container that executes init scripts.
+func (b *PodBuilder) buildScriptRunnerInit(config *MergedPodConfig) corev1.Container {
+	// Concatenate all init scripts
+	script := "#!/bin/sh\nset -e\n"
+	for _, s := range config.InitScripts {
+		script += s + "\n"
+	}
+
+	return corev1.Container{
+		Name:    "init-scripts",
+		Image:   config.Image,
+		Command: []string{"/bin/sh", "-c", script},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: workspaceVolumeName, MountPath: config.MountPath},
+		},
+		Env: config.Env,
+		// Init scripts may need to install packages (npm, pip) which require
+		// writing to the home directory and /tmp. We allow a writable rootfs
+		// for init containers only — the main sandbox container stays read-only.
+		SecurityContext: &corev1.SecurityContext{
+			RunAsUser:  &defaultUser,
+			RunAsGroup: &defaultGroup,
+		},
+	}
+}
+
+// addCredentialVolumes adds Secret-backed volumes for file-mounted credentials.
+func (b *PodBuilder) addCredentialVolumes(pod *corev1.Pod, credentials []agenttierv1alpha1.CredentialRef) {
+	for _, cred := range credentials {
+		if cred.MountAs == "file" {
+			pod.Spec.Volumes = append(pod.Spec.Volumes, corev1.Volume{
+				Name: fmt.Sprintf("cred-%s", cred.SecretName),
+				VolumeSource: corev1.VolumeSource{
+					Secret: &corev1.SecretVolumeSource{
+						SecretName: cred.SecretName,
+					},
+				},
+			})
+		}
+	}
+}
+
+// enforceSecurityInvariants strips any dangerous fields from the pod spec.
+// This is a defense-in-depth measure — regardless of what the user or template specifies,
+// these fields are NEVER allowed on sandbox pods.
+func (b *PodBuilder) enforceSecurityInvariants(pod *corev1.Pod) {
+	// Never allow host networking
+	pod.Spec.HostNetwork = false
+	pod.Spec.HostPID = false
+	pod.Spec.HostIPC = false
+
+	// Never allow hostPath volumes
+	var safeVolumes []corev1.Volume
+	for _, v := range pod.Spec.Volumes {
+		if v.HostPath == nil {
+			safeVolumes = append(safeVolumes, v)
+		}
+	}
+	pod.Spec.Volumes = safeVolumes
+}
