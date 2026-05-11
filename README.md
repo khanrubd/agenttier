@@ -25,20 +25,76 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 
 ## Features
 
-| Feature | Description |
-|---------|-------------|
-| **Declarative Sandboxes** | Kubernetes CRDs for sandbox lifecycle management |
-| **Persistent Storage** | PVC-backed workspaces that survive stop/resume cycles |
-| **Network Isolation** | Default deny-all egress with configurable rules |
-| **Template System** | Reusable blueprints with inheritance and agent harness config |
-| **Interactive Terminal** | Full PTY access via WebSocket (xterm.js in browser) |
-| **Security-First** | Non-root pods, read-only rootfs, gVisor support, IRSA/Workload Identity |
-| **Self-Healing** | Auto-restart on infrastructure failures with exponential backoff |
-| **Multi-Tenant** | Namespace isolation, RBAC, governance policies, per-user limits |
-| **Observable** | OpenTelemetry logs/metrics/traces + Prometheus endpoint |
-| **Web UI** | React dashboard with sandbox management and terminal |
-| **Python SDK** | Programmatic sandbox management for agent orchestrators |
-| **CLI** | Full-featured command-line tool |
+### Sandbox lifecycle
+
+- **Declarative sandboxes** — Kubernetes CRDs (`Sandbox`, `SandboxTemplate`, `ClusterSandboxTemplate`) manage the full lifecycle with an operator-driven state machine.
+- **Stop and resume** — Stopped sandboxes preserve their PVC, workspace, packages, and git state; resuming re-attaches the same volume in seconds.
+- **Idle and max-runtime timeouts** — Per-sandbox and per-namespace policies auto-stop sandboxes, with configurable grace periods to notify connected sessions.
+- **Self-healing** — Automatic restart with exponential backoff on infrastructure failures, permanent Error state after retry budget exhausted.
+- **Sub-second warm pool** — Optional pre-provisioned Pod + PVC pool claims a sandbox in ~800ms (measured) vs ~10s cold start.
+
+### Templates and agent harnesses
+
+- **Template inheritance** — Templates can extend other templates via `inheritsFrom`, with field-level merge and sandbox-level overrides.
+- **Agent harness config** — Templates describe the shell, tools, system prompt, hooks, and init scripts needed to run a specific agent (Claude Code, Cursor, Aider, custom).
+- **Ready-to-use images** — Bundled Dockerfiles for `general-coding`, `claude-code-developer`, `minimal-shell`, `security-scanner`, and `data-analysis` workloads.
+- **Claude Code + Bedrock** — First-class support for running Claude Code against Amazon Bedrock, including IRSA-based IAM credential injection.
+
+### Security and isolation
+
+- **Network isolation** — Default deny-all egress with configurable allow rules, always-on DNS, and optional inter-sandbox peering via label selectors.
+- **Hardened pod defaults** — Non-root user, read-only root filesystem, all capabilities dropped, `seccomp=RuntimeDefault`, and per-sandbox ServiceAccounts with no cluster permissions.
+- **Kernel-level isolation** — Optional gVisor RuntimeClass for untrusted agent workloads.
+- **Per-session credentials** — STS AssumeRole or secret credentials injected at terminal session start (not baked into the image).
+- **IRSA / Workload Identity** — Cloud-native credential attachment on EKS and GKE without long-lived secrets.
+
+### Interactive access
+
+- **Browser terminal** — Full PTY over WebSocket with xterm.js, resize, ANSI colors, and reconnection after transient drops.
+- **Session reconnection** — 30s default grace window lets network blips and laptop sleeps reconnect without losing shell state.
+- **Non-interactive exec API** — `POST /api/v1/sandboxes/{id}/exec` for request-response and fire-and-forget commands.
+- **File transfer API** — Upload, download, and list files in the sandbox workspace through the REST API.
+
+### Multi-tenancy and governance
+
+- **OIDC + API keys** — Cognito, Okta, Azure AD, or any OIDC-compliant provider; API keys stored as SHA-256 hashes with LRU caching.
+- **Hierarchical governance policies** — Cluster > namespace > user policy resolution for max sandboxes, resource caps, timeout limits, approved registries, and allowed templates.
+- **Audit trail** — Lifecycle, terminal, credential, share, clone, and port-forward events recorded to Kubernetes events (and optional SQL backend for long-term retention).
+- **Sharing and collaboration** — User or group sharing with viewer/collaborator roles and expiring share links.
+
+### Web UI
+
+- **Dashboard** — Sandbox cards with status, template, age, and one-click Stop / Resume / Delete / Open Terminal.
+- **Templates editor** — In-browser YAML editor for creating, editing, and deleting `ClusterSandboxTemplate`s with syntax highlighting.
+- **Activity log** — Time-ordered audit events with filter-by-action, user, and time range.
+- **Metrics and cost estimator** — Live sandbox counts, average startup time, and estimated monthly cost based on current running resources.
+- **Settings** — Warm pool sizing, default template, and operational knobs persisted to the backend.
+
+### Client tooling
+
+- **Python SDK (`pip install agenttier`)** — Sync + async clients with auto-detected auth (kubeconfig / OIDC / API key), typed Pydantic models, and streaming file transfers.
+- **CLI (`agenttier`)** — Go binary for sandbox and template management from the terminal, distributed for linux/darwin/windows on amd64 + arm64.
+- **REST API** — Fully documented REST endpoints for sandboxes, templates, governance, audit, sharing, and port forwarding.
+
+### Performance
+
+- **Startup duration logging** — Per-sandbox `startupDurationMs` in controller logs and Kubernetes events for regression tracking.
+- **Immediate PVC binding** — Warm pool uses `gp3-immediate` so EBS volumes are provisioned ahead of pod scheduling.
+- **Image pre-pull** — Optional DaemonSet pre-caches sandbox images on every node to eliminate first-pull latency.
+
+### Observability
+
+- **OpenTelemetry** — Distributed traces across controller and router with trace context in structured JSON logs; OTLP export.
+- **Prometheus metrics** — `/metrics` endpoint exposes sandbox counts, startup duration histogram, reconciliation queue depth, error counters, and terminal session stats.
+- **Kubernetes-native events** — Every lifecycle transition emits a typed Event on the Sandbox resource for native `kubectl describe` inspection.
+
+### Deployment and operations
+
+- **Single Helm chart** — One `helm install` deploys controller, router, web UI, CRDs, RBAC, and optional add-ons (gVisor, ServiceMonitor, PDB, image pre-pull, OTel Collector).
+- **Terraform EKS module** — Opinionated VPC + EKS + managed node groups + gVisor nodes + EBS CSI + ALB controller + IRSA + Helm release for one-command provisioning.
+- **Multi-cluster ready** — Works on EKS, GKE, AKS, and self-managed Kubernetes 1.27+ with any CNI that supports NetworkPolicy.
+- **Leader-elected controller** — Multi-replica HA with Lease-based election; degraded mode for non-critical dependency failures.
+- **Kubernetes-native state** — Defaults to using Kubernetes etcd + Events for all state; optional SQL backend for compliance-driven long-term retention.
 
 ## Architecture
 
