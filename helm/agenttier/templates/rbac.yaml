@@ -36,6 +36,14 @@ rules:
   - apiGroups: [""]
     resources: ["services"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Ingresses (for port forwarding preview URLs)
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # ConfigMaps (warm pool + governance policy storage, plus leader election)
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
   # Events
   - apiGroups: [""]
     resources: ["events"]
@@ -52,9 +60,9 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # ConfigMaps and Secrets (for template file references)
+  # Secrets (for template file references; read-only)
   - apiGroups: [""]
-    resources: ["configmaps", "secrets"]
+    resources: ["secrets"]
     verbs: ["get", "list", "watch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1

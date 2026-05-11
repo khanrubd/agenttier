@@ -7,6 +7,7 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Sandbox } from '../types';
 import StatusBadge from './StatusBadge';
+import PortForwardsPanel from './PortForwardsPanel';
 
 interface SandboxCardProps {
   sandbox: Sandbox;
@@ -99,6 +100,8 @@ export default function SandboxCard({ sandbox, busy = false, onStop, onResume, o
         <button data-testid="btn-delete" disabled={!canDelete}
           onClick={() => onDelete(id)} style={btnStyle(canDelete, '#ef4444')}>Delete</button>
       </div>
+
+      <PortForwardsPanel sandboxId={id} running={status === 'running'} />
     </div>
   );
 }

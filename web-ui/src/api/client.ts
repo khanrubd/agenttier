@@ -161,7 +161,36 @@ export async function setWarmPoolConfig(desiredCount: number, template: string):
   });
 }
 
-// --- Governance API ---
+// --- Port Forwarding API ---
+
+export interface PortForward {
+  port: number;
+  protocol: string;
+  previewUrl?: string;
+  internalUrl?: string;
+}
+
+export async function listPorts(sandboxId: string): Promise<PortForward[]> {
+  const data = await request<{ ports: PortForward[] | null }>(`/sandboxes/${sandboxId}/ports`);
+  return data.ports ?? [];
+}
+
+export async function forwardPort(sandboxId: string, port: number, protocol = 'http'): Promise<PortForward> {
+  return request<PortForward>(`/sandboxes/${sandboxId}/ports`, {
+    method: 'POST',
+    body: JSON.stringify({ port, protocol }),
+  });
+}
+
+export async function removePort(sandboxId: string, port: number): Promise<void> {
+  await request(`/sandboxes/${sandboxId}/ports/${port}`, { method: 'DELETE' });
+}
+
+// previewProxyUrl returns the in-Router proxied URL that a user can click to
+// reach their forwarded port even without a public Ingress.
+export function previewProxyUrl(sandboxId: string, port: number): string {
+  return `${API_BASE}/sandboxes/${sandboxId}/preview/${port}/`;
+}
 
 export interface GovernancePolicy {
   maxSandboxesPerUser?: number;

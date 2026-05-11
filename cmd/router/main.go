@@ -46,13 +46,14 @@ func init() {
 
 func main() {
 	var (
-		listenAddr    string
-		oidcIssuer    string
-		oidcClientID  string
-		adminGroup    string
-		groupClaim    string
-		previewDomain string
-		showVersion   bool
+		listenAddr       string
+		oidcIssuer       string
+		oidcClientID     string
+		adminGroup       string
+		groupClaim       string
+		previewDomain    string
+		ingressClassName string
+		showVersion      bool
 	)
 
 	flag.StringVar(&listenAddr, "listen-addr", ":8080", "HTTP listen address")
@@ -61,6 +62,7 @@ func main() {
 	flag.StringVar(&adminGroup, "admin-group", "agenttier-admins", "Admin group name")
 	flag.StringVar(&groupClaim, "group-claim", "groups", "JWT claim for groups")
 	flag.StringVar(&previewDomain, "preview-domain", "", "Domain for port forwarding preview URLs")
+	flag.StringVar(&ingressClassName, "ingress-class-name", "", "Ingress class to use for port-forward Ingresses (empty = cluster default)")
 	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
 	flag.Parse()
 
@@ -95,12 +97,13 @@ func main() {
 
 	// Create and start server
 	config := &router.Config{
-		ListenAddr:    listenAddr,
-		OIDCIssuerURL: oidcIssuer,
-		OIDCClientID:  oidcClientID,
-		AdminGroup:    adminGroup,
-		GroupClaim:    groupClaim,
-		PreviewDomain: previewDomain,
+		ListenAddr:       listenAddr,
+		OIDCIssuerURL:    oidcIssuer,
+		OIDCClientID:     oidcClientID,
+		AdminGroup:       adminGroup,
+		GroupClaim:       groupClaim,
+		PreviewDomain:    previewDomain,
+		IngressClassName: ingressClassName,
 	}
 
 	server := router.NewServer(config, k8sClient, bridge)

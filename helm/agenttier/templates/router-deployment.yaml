@@ -32,6 +32,7 @@ spec:
             - --admin-group={{ .Values.auth.oidc.adminGroup }}
             - --group-claim={{ .Values.auth.oidc.groupClaim }}
             - --preview-domain={{ .Values.networking.previewDomain }}
+            - --ingress-class-name={{ .Values.networking.portForwardIngressClass }}
           env:
             {{- if .Values.observability.otlp.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT

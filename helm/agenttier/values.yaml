@@ -108,6 +108,9 @@ networking:
   previewDomain: ""
   # Gateway API gateway name for port forwarding
   gatewayName: ""
+  # Ingress class name used by port-forward Ingresses. Empty = cluster default.
+  # Set this to "nginx", "alb", or "traefik" depending on your ingress controller.
+  portForwardIngressClass: ""
 
 # --- Security ---
 security:

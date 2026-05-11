@@ -21,6 +21,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
 
 	"github.com/gorilla/mux"
@@ -33,6 +34,7 @@ import (
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
 	"github.com/agenttier/agenttier/pkg/controller/warmpool"
 	"github.com/agenttier/agenttier/pkg/governance"
+	"github.com/agenttier/agenttier/pkg/router/portforward"
 	"github.com/agenttier/agenttier/pkg/router/terminal"
 )
 
@@ -607,13 +609,178 @@ func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request) {
 	respondError(w, http.StatusNotImplemented, "not yet implemented")
 }
 func (s *Server) handleListPorts(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]interface{}{"ports": []interface{}{}})
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	sandboxID := mux.Vars(r)["id"]
+	sandbox, err := s.getSandboxWithAuthCheck(r.Context(), sandboxID, claims)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	ports, err := s.portForward.List(r.Context(), sandbox)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to list ports: "+err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]interface{}{"ports": ports})
 }
+
 func (s *Server) handleForwardPort(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "not yet implemented")
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	sandboxID := mux.Vars(r)["id"]
+	sandbox, err := s.getSandboxWithAuthCheck(r.Context(), sandboxID, claims)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	var req struct {
+		Port     int32  `json:"port"`
+		Protocol string `json:"protocol"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if req.Port <= 0 {
+		respondError(w, http.StatusBadRequest, "port must be > 0")
+		return
+	}
+
+	fp, err := s.portForward.Create(r.Context(), sandbox, req.Port, req.Protocol)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to create port forward: "+err.Error())
+		return
+	}
+
+	// Mirror the new port into sandbox status so `kubectl get sandbox -o yaml`
+	// and the Web UI both see the same list. If the status update fails we
+	// still return success — the cluster is the source of truth for routing.
+	updated := appendForwardedPort(sandbox, fp)
+	if updated {
+		if err := s.k8sClient.Status().Update(r.Context(), sandbox); err != nil {
+			s.logger.Warn("failed to update sandbox status with forwarded port",
+				"sandbox", sandbox.Name, "port", req.Port, "error", err)
+		}
+	}
+
+	respondJSON(w, http.StatusCreated, fp)
 }
+
 func (s *Server) handleRemovePort(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "not yet implemented")
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	sandboxID := mux.Vars(r)["id"]
+	sandbox, err := s.getSandboxWithAuthCheck(r.Context(), sandboxID, claims)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+
+	portStr := mux.Vars(r)["port"]
+	port, err := strconv.ParseInt(portStr, 10, 32)
+	if err != nil || port <= 0 {
+		respondError(w, http.StatusBadRequest, "invalid port: "+portStr)
+		return
+	}
+
+	if err := s.portForward.Delete(r.Context(), sandbox, int32(port)); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to remove port: "+err.Error())
+		return
+	}
+
+	if removeForwardedPort(sandbox, int32(port)) {
+		if err := s.k8sClient.Status().Update(r.Context(), sandbox); err != nil {
+			s.logger.Warn("failed to update sandbox status after removing port",
+				"sandbox", sandbox.Name, "port", port, "error", err)
+		}
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// handlePortPreview proxies an authenticated HTTP request from the Router to
+// the cluster-internal Service backing the sandbox's forwarded port. This is
+// what lets developers hit a sandbox port from a browser without DNS /
+// Ingress setup — especially useful in dev and for E2E testing.
+func (s *Server) handlePortPreview(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	vars := mux.Vars(r)
+	sandboxID := vars["id"]
+	portStr := vars["port"]
+	port, err := strconv.ParseInt(portStr, 10, 32)
+	if err != nil || port <= 0 {
+		respondError(w, http.StatusBadRequest, "invalid port: "+portStr)
+		return
+	}
+	sandbox, err := s.getSandboxWithAuthCheck(r.Context(), sandboxID, claims)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if sandbox.Status.Phase != agenttierv1alpha1.SandboxPhaseRunning {
+		respondError(w, http.StatusConflict, "sandbox is not running")
+		return
+	}
+	// Look up the forwarded port to confirm it's been explicitly exposed.
+	ports, err := s.portForward.List(r.Context(), sandbox)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to verify port: "+err.Error())
+		return
+	}
+	known := false
+	for _, p := range ports {
+		if p.Port == int32(port) {
+			known = true
+			break
+		}
+	}
+	if !known {
+		respondError(w, http.StatusNotFound, fmt.Sprintf("port %d is not forwarded", port))
+		return
+	}
+
+	stripPrefix := fmt.Sprintf("/api/v1/sandboxes/%s/preview/%d", sandboxID, port)
+	proxy := s.portForward.Proxy(sandbox.Name, sandbox.Namespace, int32(port), stripPrefix)
+	proxy.ServeHTTP(w, r)
+}
+
+func appendForwardedPort(sandbox *agenttierv1alpha1.Sandbox, fp *portforward.ForwardedPort) bool {
+	for _, existing := range sandbox.Status.ForwardedPorts {
+		if existing.Port == fp.Port {
+			return false
+		}
+	}
+	sandbox.Status.ForwardedPorts = append(sandbox.Status.ForwardedPorts, agenttierv1alpha1.ForwardedPort{
+		Port:       fp.Port,
+		PreviewURL: fp.PreviewURL,
+		Protocol:   fp.Protocol,
+	})
+	return true
+}
+
+func removeForwardedPort(sandbox *agenttierv1alpha1.Sandbox, port int32) bool {
+	for i, existing := range sandbox.Status.ForwardedPorts {
+		if existing.Port == port {
+			sandbox.Status.ForwardedPorts = append(sandbox.Status.ForwardedPorts[:i], sandbox.Status.ForwardedPorts[i+1:]...)
+			return true
+		}
+	}
+	return false
 }
 func (s *Server) handleGetSharing(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{"users": []interface{}{}})

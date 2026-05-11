@@ -33,20 +33,22 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/agenttier/agenttier/pkg/governance"
+	"github.com/agenttier/agenttier/pkg/router/portforward"
 	"github.com/agenttier/agenttier/pkg/router/terminal"
 )
 
 // Config holds the Router server configuration.
 type Config struct {
-	ListenAddr    string
-	MetricsAddr   string
-	OIDCIssuerURL string
-	OIDCClientID  string
-	AdminGroup    string
-	GroupClaim    string
-	PreviewDomain string
-	GatewayName   string
-	KubeConfig    string
+	ListenAddr       string
+	MetricsAddr      string
+	OIDCIssuerURL    string
+	OIDCClientID     string
+	AdminGroup       string
+	GroupClaim       string
+	PreviewDomain    string
+	GatewayName      string
+	IngressClassName string
+	KubeConfig       string
 }
 
 // Server is the main Router HTTP server.
@@ -59,6 +61,7 @@ type Server struct {
 	bridge          *terminal.Bridge
 	sessionManager  *terminal.Manager
 	governanceStore governance.Store
+	portForward     *portforward.Manager
 }
 
 // NewServer creates a new Router server with all routes registered.
@@ -76,6 +79,10 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 		bridge:          bridge,
 		sessionManager:  terminal.NewManager(logger),
 		governanceStore: governance.NewConfigMapStore(k8sClient),
+		portForward: portforward.New(k8sClient, portforward.Options{
+			PreviewDomain:    config.PreviewDomain,
+			IngressClassName: config.IngressClassName,
+		}),
 	}
 
 	// Register middleware
@@ -113,6 +120,10 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	api.HandleFunc("/sandboxes/{id}/ports", s.handleListPorts).Methods("GET")
 	api.HandleFunc("/sandboxes/{id}/ports", s.handleForwardPort).Methods("POST")
 	api.HandleFunc("/sandboxes/{id}/ports/{port}", s.handleRemovePort).Methods("DELETE")
+	// Authenticated HTTP proxy into a forwarded port. Works even without a
+	// public Ingress — useful for dev clusters and end-to-end testing.
+	api.PathPrefix("/sandboxes/{id}/preview/{port}/").HandlerFunc(s.handlePortPreview)
+	api.HandleFunc("/sandboxes/{id}/preview/{port}", s.handlePortPreview)
 
 	// Sharing
 	api.HandleFunc("/sandboxes/{id}/share", s.handleGetSharing).Methods("GET")
