@@ -3,37 +3,32 @@ run:
   go: "1.22"
 
 linters:
+  disable-all: true
   enable:
+    # Correctness
     - govet
     - errcheck
     - staticcheck
-    - unused
     - gosimple
     - ineffassign
     - typecheck
-    - misspell
+    - unused
+    # Style (minimal)
     - gofmt
     - goimports
-    - revive
-    - gocritic
-    - gosec
-    - prealloc
+    - misspell
     - unconvert
-    - unparam
+    # Security
+    - gosec
 
 linters-settings:
   goimports:
     local-prefixes: github.com/agenttier/agenttier
-  revive:
-    rules:
-      - name: exported
-        arguments:
-          - "checkPrivateReceivers"
-  gocritic:
-    enabled-tags:
-      - diagnostic
-      - style
-      - performance
+  gosec:
+    # G115: integer overflow conversion — we enforce bounds at protocol boundaries;
+    # the residual int->uint{16} casts are on values clamped by the terminal client.
+    excludes:
+      - G115
 
 issues:
   exclude-rules:

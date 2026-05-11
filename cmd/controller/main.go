@@ -50,13 +50,13 @@ func init() {
 
 func main() {
 	var (
-		metricsAddr          string
-		healthProbeAddr      string
-		leaderElect          bool
-		maxConcurrency       int
-		defaultImage         string
-		defaultStorageSize   string
-		defaultMountPath     string
+		metricsAddr        string
+		healthProbeAddr    string
+		leaderElect        bool
+		maxConcurrency     int
+		defaultImage       string
+		defaultStorageSize string
+		defaultMountPath   string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8081", "The address the metrics endpoint binds to.")

@@ -42,12 +42,12 @@ var upgrader = websocket.Upgrader{
 // --- Sandbox CRUD Handlers ---
 
 type CreateSandboxRequest struct {
-	Name        string                          `json:"name"`
-	Namespace   string                          `json:"namespace,omitempty"`
+	Name        string                               `json:"name"`
+	Namespace   string                               `json:"namespace,omitempty"`
 	TemplateRef *agenttierv1alpha1.TemplateReference `json:"templateRef"`
-	Timeout     string                          `json:"timeout,omitempty"`
-	IdleTimeout string                          `json:"idleTimeout,omitempty"`
-	Storage     *agenttierv1alpha1.StorageSpec  `json:"storage,omitempty"`
+	Timeout     string                               `json:"timeout,omitempty"`
+	IdleTimeout string                               `json:"idleTimeout,omitempty"`
+	Storage     *agenttierv1alpha1.StorageSpec       `json:"storage,omitempty"`
 }
 
 func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
@@ -118,10 +118,10 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 
 	respondJSON(w, http.StatusCreated, map[string]interface{}{
-		"sandboxId": sandbox.Name,
-		"name":      sandbox.Name,
-		"namespace": sandbox.Namespace,
-		"status":    "Creating",
+		"sandboxId":   sandbox.Name,
+		"name":        sandbox.Name,
+		"namespace":   sandbox.Namespace,
+		"status":      "Creating",
 		"templateRef": sandbox.Spec.TemplateRef.Name,
 	})
 }
@@ -447,7 +447,7 @@ func (s *Server) handleCreateTemplate(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Name string                              `json:"name"`
+		Name string                                `json:"name"`
 		Spec agenttierv1alpha1.SandboxTemplateSpec `json:"spec"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -572,18 +572,42 @@ func templateToJSON(t *agenttierv1alpha1.ClusterSandboxTemplate) map[string]inte
 
 // --- Placeholder handlers for features not yet wired ---
 
-func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request)       { respondError(w, http.StatusNotImplemented, "not yet implemented") }
-func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request)         { respondError(w, http.StatusNotImplemented, "not yet implemented") }
-func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request)         { respondError(w, http.StatusNotImplemented, "not yet implemented") }
-func (s *Server) handleListPorts(w http.ResponseWriter, r *http.Request)       { respondJSON(w, http.StatusOK, map[string]interface{}{"ports": []interface{}{}}) }
-func (s *Server) handleForwardPort(w http.ResponseWriter, r *http.Request)     { respondError(w, http.StatusNotImplemented, "not yet implemented") }
-func (s *Server) handleRemovePort(w http.ResponseWriter, r *http.Request)      { respondError(w, http.StatusNotImplemented, "not yet implemented") }
-func (s *Server) handleGetSharing(w http.ResponseWriter, r *http.Request)      { respondJSON(w, http.StatusOK, map[string]interface{}{"users": []interface{}{}}) }
-func (s *Server) handleShareSandbox(w http.ResponseWriter, r *http.Request)    { respondError(w, http.StatusNotImplemented, "not yet implemented") }
-func (s *Server) handleRevokeShare(w http.ResponseWriter, r *http.Request)     { respondError(w, http.StatusNotImplemented, "not yet implemented") }
-func (s *Server) handleCreateShareLink(w http.ResponseWriter, r *http.Request) { respondError(w, http.StatusNotImplemented, "not yet implemented") }
-func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request)    { respondJSON(w, http.StatusOK, map[string]interface{}{"policies": []interface{}{}}) }
-func (s *Server) handleSetPolicy(w http.ResponseWriter, r *http.Request)       { respondError(w, http.StatusNotImplemented, "not yet implemented") }
+func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
+	respondError(w, http.StatusNotImplemented, "not yet implemented")
+}
+func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
+	respondError(w, http.StatusNotImplemented, "not yet implemented")
+}
+func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request) {
+	respondError(w, http.StatusNotImplemented, "not yet implemented")
+}
+func (s *Server) handleListPorts(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, map[string]interface{}{"ports": []interface{}{}})
+}
+func (s *Server) handleForwardPort(w http.ResponseWriter, r *http.Request) {
+	respondError(w, http.StatusNotImplemented, "not yet implemented")
+}
+func (s *Server) handleRemovePort(w http.ResponseWriter, r *http.Request) {
+	respondError(w, http.StatusNotImplemented, "not yet implemented")
+}
+func (s *Server) handleGetSharing(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, map[string]interface{}{"users": []interface{}{}})
+}
+func (s *Server) handleShareSandbox(w http.ResponseWriter, r *http.Request) {
+	respondError(w, http.StatusNotImplemented, "not yet implemented")
+}
+func (s *Server) handleRevokeShare(w http.ResponseWriter, r *http.Request) {
+	respondError(w, http.StatusNotImplemented, "not yet implemented")
+}
+func (s *Server) handleCreateShareLink(w http.ResponseWriter, r *http.Request) {
+	respondError(w, http.StatusNotImplemented, "not yet implemented")
+}
+func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, map[string]interface{}{"policies": []interface{}{}})
+}
+func (s *Server) handleSetPolicy(w http.ResponseWriter, r *http.Request) {
+	respondError(w, http.StatusNotImplemented, "not yet implemented")
+}
 func (s *Server) handleListAuditEvents(w http.ResponseWriter, r *http.Request) {
 	// Get Kubernetes events for sandboxes as activity log
 	var events []map[string]interface{}
@@ -710,21 +734,35 @@ func (s *Server) handleGetCostEstimates(w http.ResponseWriter, r *http.Request) 
 	}
 
 	respondJSON(w, http.StatusOK, map[string]interface{}{
-		"running_sandboxes":        running,
-		"stopped_sandboxes":        stopped,
-		"total_hourly_compute":     totalHourlyCost,
-		"total_hourly_storage":     storageCostMonthly,
-		"total_estimated_monthly":  (totalHourlyCost + storageCostMonthly) * 24 * 30,
-		"per_template":             perTemplate,
+		"running_sandboxes":       running,
+		"stopped_sandboxes":       stopped,
+		"total_hourly_compute":    totalHourlyCost,
+		"total_hourly_storage":    storageCostMonthly,
+		"total_estimated_monthly": (totalHourlyCost + storageCostMonthly) * 24 * 30,
+		"per_template":            perTemplate,
 	})
 }
-func (s *Server) handleAdminListSandboxes(w http.ResponseWriter, r *http.Request) { respondJSON(w, http.StatusOK, map[string]interface{}{"sandboxes": []interface{}{}}) }
-func (s *Server) handleAdminListSharing(w http.ResponseWriter, r *http.Request)   { respondJSON(w, http.StatusOK, map[string]interface{}{}) }
-func (s *Server) handleGetPreferences(w http.ResponseWriter, r *http.Request)     { respondJSON(w, http.StatusOK, map[string]interface{}{}) }
-func (s *Server) handleUpdatePreferences(w http.ResponseWriter, r *http.Request)  { respondError(w, http.StatusNotImplemented, "not yet implemented") }
-func (s *Server) handleListAPIKeys(w http.ResponseWriter, r *http.Request)        { respondJSON(w, http.StatusOK, map[string]interface{}{"keys": []interface{}{}}) }
-func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request)       { respondError(w, http.StatusNotImplemented, "not yet implemented") }
-func (s *Server) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request)       { respondError(w, http.StatusNotImplemented, "not yet implemented") }
+func (s *Server) handleAdminListSandboxes(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, map[string]interface{}{"sandboxes": []interface{}{}})
+}
+func (s *Server) handleAdminListSharing(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, map[string]interface{}{})
+}
+func (s *Server) handleGetPreferences(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, map[string]interface{}{})
+}
+func (s *Server) handleUpdatePreferences(w http.ResponseWriter, r *http.Request) {
+	respondError(w, http.StatusNotImplemented, "not yet implemented")
+}
+func (s *Server) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
+	respondJSON(w, http.StatusOK, map[string]interface{}{"keys": []interface{}{}})
+}
+func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
+	respondError(w, http.StatusNotImplemented, "not yet implemented")
+}
+func (s *Server) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
+	respondError(w, http.StatusNotImplemented, "not yet implemented")
+}
 
 // --- Warm Pool Handlers ---
 
@@ -824,13 +862,13 @@ func parseDuration(s string) (*metav1.Duration, error) {
 func respondJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(data)
+	_ = json.NewEncoder(w).Encode(data)
 }
 
 func respondError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(map[string]string{"error": message})
+	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
 // Ensure terminal package is referenced

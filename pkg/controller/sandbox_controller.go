@@ -171,7 +171,9 @@ func (r *SandboxReconciler) reconcileCreating(ctx context.Context, sandbox *agen
 					if networkSpec == nil && templateSpec != nil {
 						networkSpec = templateSpec.Network
 					}
-					r.ensureNetworkPolicy(ctx, sandbox, networkSpec)
+					if err := r.ensureNetworkPolicy(ctx, sandbox, networkSpec); err != nil {
+						logger.Error(err, "failed to ensure network policy for warm-pool sandbox", "sandbox", sandbox.Name)
+					}
 
 					return ctrl.Result{RequeueAfter: DefaultRequeueDelay}, nil
 				}

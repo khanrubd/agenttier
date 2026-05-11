@@ -180,7 +180,7 @@ func TestCalculateBackoffDelay(t *testing.T) {
 		{2, 40 * time.Second},
 		{3, 80 * time.Second},
 		{4, 160 * time.Second},
-		{5, 160 * time.Second}, // Capped
+		{5, 160 * time.Second},  // Capped
 		{10, 160 * time.Second}, // Capped
 	}
 

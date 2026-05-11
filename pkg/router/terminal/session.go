@@ -28,42 +28,42 @@ import (
 
 // Session represents an active terminal session bridging a WebSocket to a K8s exec stream.
 type Session struct {
-	ID          string
-	SandboxID   string
-	Namespace   string
-	UserID      string
-	UserEmail   string
-	PodName     string
-	Shell       string
-	Conn        *websocket.Conn
-	LastActive  time.Time
-	CreatedAt   time.Time
-	BytesIn     int64
-	BytesOut    int64
-	IsViewer    bool // Read-only spectator mode
+	ID         string
+	SandboxID  string
+	Namespace  string
+	UserID     string
+	UserEmail  string
+	PodName    string
+	Shell      string
+	Conn       *websocket.Conn
+	LastActive time.Time
+	CreatedAt  time.Time
+	BytesIn    int64
+	BytesOut   int64
+	IsViewer   bool // Read-only spectator mode
 
 	// Internal state
-	sizeQueue   *TerminalSizeQueue
-	mu          sync.Mutex
-	closed      bool
+	sizeQueue      *TerminalSizeQueue
+	mu             sync.Mutex
+	closed         bool
 	disconnectedAt time.Time
 }
 
 // NewSession creates a new terminal session.
 func NewSession(id, sandboxID, namespace, userID, email, podName, shell string, conn *websocket.Conn, isViewer bool) *Session {
 	s := &Session{
-		ID:        id,
-		SandboxID: sandboxID,
-		Namespace: namespace,
-		UserID:    userID,
-		UserEmail: email,
-		PodName:   podName,
-		Shell:     shell,
-		Conn:      conn,
+		ID:         id,
+		SandboxID:  sandboxID,
+		Namespace:  namespace,
+		UserID:     userID,
+		UserEmail:  email,
+		PodName:    podName,
+		Shell:      shell,
+		Conn:       conn,
 		LastActive: time.Now(),
-		CreatedAt: time.Now(),
-		IsViewer:  isViewer,
-		sizeQueue: NewTerminalSizeQueue(),
+		CreatedAt:  time.Now(),
+		IsViewer:   isViewer,
+		sizeQueue:  NewTerminalSizeQueue(),
 	}
 	// Push a reasonable default size — will be overridden by the first resize from the client
 	s.sizeQueue.Push(remotecommand.TerminalSize{Width: 120, Height: 40})
@@ -144,7 +144,7 @@ func (s *Session) SendError(message string) {
 	defer s.mu.Unlock()
 
 	data, _ := MarshalError(message)
-	s.Conn.WriteMessage(websocket.TextMessage, data)
+	_ = s.Conn.WriteMessage(websocket.TextMessage, data)
 }
 
 // SendClose sends a close message to the client with a reason.
@@ -153,7 +153,7 @@ func (s *Session) SendClose(reason CloseReason, code int) {
 	defer s.mu.Unlock()
 
 	data, _ := MarshalClose(reason, code)
-	s.Conn.WriteMessage(websocket.TextMessage, data)
+	_ = s.Conn.WriteMessage(websocket.TextMessage, data)
 	s.closed = true
 }
 
@@ -202,7 +202,7 @@ func (s *Session) sendPong() {
 	defer s.mu.Unlock()
 
 	data, _ := json.Marshal(WSMessage{Type: MessageTypePong})
-	s.Conn.WriteMessage(websocket.TextMessage, data)
+	_ = s.Conn.WriteMessage(websocket.TextMessage, data)
 }
 
 // --- Terminal Size Queue ---

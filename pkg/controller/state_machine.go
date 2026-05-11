@@ -34,9 +34,9 @@ const (
 // validTransitions defines the allowed state transitions for the sandbox state machine.
 // Key: current phase, Value: list of allowed actions.
 var validTransitions = map[agenttierv1alpha1.SandboxPhase][]Action{
-	agenttierv1alpha1.SandboxPhaseCreating: {},                                    // Creating can only transition internally (to Running or Error)
-	agenttierv1alpha1.SandboxPhaseRunning:  {ActionStop, ActionDelete},             // Running → Stopped or Deleting
-	agenttierv1alpha1.SandboxPhaseStopped:  {ActionResume, ActionDelete},           // Stopped → Running or Deleting
+	agenttierv1alpha1.SandboxPhaseCreating: {},                                       // Creating can only transition internally (to Running or Error)
+	agenttierv1alpha1.SandboxPhaseRunning:  {ActionStop, ActionDelete},               // Running → Stopped or Deleting
+	agenttierv1alpha1.SandboxPhaseStopped:  {ActionResume, ActionDelete},             // Stopped → Running or Deleting
 	agenttierv1alpha1.SandboxPhaseError:    {ActionResume, ActionStop, ActionDelete}, // Error → Running, Stopped, or Deleting
 }
 

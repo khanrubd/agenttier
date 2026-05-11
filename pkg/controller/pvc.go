@@ -38,8 +38,8 @@ const (
 
 // PVCBuilder constructs PersistentVolumeClaims for sandboxes.
 type PVCBuilder struct {
-	DefaultStorageSize string
-	DefaultMountPath   string
+	DefaultStorageSize  string
+	DefaultMountPath    string
 	DefaultStorageClass string
 }
 

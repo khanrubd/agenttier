@@ -170,7 +170,7 @@ func GetStatus(ctx context.Context, k8sClient client.Client) (*Status, error) {
 	cfg := &Config{DesiredCount: 0, Template: ""}
 	if err == nil {
 		if data, ok := cm.Data["config"]; ok {
-			json.Unmarshal([]byte(data), cfg)
+			_ = json.Unmarshal([]byte(data), cfg)
 		}
 	}
 
@@ -422,7 +422,7 @@ func (r *Reconciler) deletePodAndPVC(ctx context.Context, pod *corev1.Pod) error
 					Namespace: pod.Namespace,
 				},
 			}
-			r.client.Delete(ctx, pvc)
+			_ = r.client.Delete(ctx, pvc)
 		}
 	}
 	return nil

@@ -49,14 +49,14 @@ const (
 
 // WSMessage is the JSON message format for the terminal WebSocket protocol.
 type WSMessage struct {
-	Type   MessageType `json:"type"`
-	Data   string      `json:"data,omitempty"`
-	Stream string      `json:"stream,omitempty"` // "stdout" or "stderr"
-	Cols   int         `json:"cols,omitempty"`
-	Rows   int         `json:"rows,omitempty"`
-	Reason CloseReason `json:"reason,omitempty"`
-	Code   int         `json:"code,omitempty"`
-	Message string     `json:"message,omitempty"`
+	Type    MessageType `json:"type"`
+	Data    string      `json:"data,omitempty"`
+	Stream  string      `json:"stream,omitempty"` // "stdout" or "stderr"
+	Cols    int         `json:"cols,omitempty"`
+	Rows    int         `json:"rows,omitempty"`
+	Reason  CloseReason `json:"reason,omitempty"`
+	Code    int         `json:"code,omitempty"`
+	Message string      `json:"message,omitempty"`
 }
 
 // MarshalInput creates an input message.

@@ -32,13 +32,13 @@ import (
 
 // OIDCValidator validates JWT tokens against an OIDC provider's JWKS endpoint.
 type OIDCValidator struct {
-	issuerURL    string
-	clientID     string
-	adminGroup   string
-	groupClaim   string
-	jwksURL      string
-	jwksCache    *JWKSCache
-	httpClient   *http.Client
+	issuerURL  string
+	clientID   string
+	adminGroup string
+	groupClaim string
+	jwksURL    string
+	jwksCache  *JWKSCache
+	httpClient *http.Client
 }
 
 // OIDCConfig holds OIDC configuration.
@@ -51,11 +51,11 @@ type OIDCConfig struct {
 
 // Claims represents the authenticated user's identity.
 type Claims struct {
-	Sub    string   `json:"sub"`
-	Email  string   `json:"email"`
-	Name   string   `json:"name"`
-	Groups []string `json:"groups"`
-	IsAdmin bool   `json:"isAdmin"`
+	Sub     string   `json:"sub"`
+	Email   string   `json:"email"`
+	Name    string   `json:"name"`
+	Groups  []string `json:"groups"`
+	IsAdmin bool     `json:"isAdmin"`
 }
 
 // NewOIDCValidator creates a new OIDC token validator.

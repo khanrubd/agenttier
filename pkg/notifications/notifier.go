@@ -31,24 +31,24 @@ import (
 type NotificationType string
 
 const (
-	NotifyIdleWarning       NotificationType = "idle_warning"
-	NotifyError             NotificationType = "error"
-	NotifyAutoRestart       NotificationType = "auto_restart"
-	NotifySharedChange      NotificationType = "shared_sandbox_changed"
-	NotifyGovernanceLimit   NotificationType = "governance_limit"
-	NotifyErrorSpike        NotificationType = "error_spike"
+	NotifyIdleWarning     NotificationType = "idle_warning"
+	NotifyError           NotificationType = "error"
+	NotifyAutoRestart     NotificationType = "auto_restart"
+	NotifySharedChange    NotificationType = "shared_sandbox_changed"
+	NotifyGovernanceLimit NotificationType = "governance_limit"
+	NotifyErrorSpike      NotificationType = "error_spike"
 )
 
 // Notification represents a notification to be delivered.
 type Notification struct {
-	Type       NotificationType `json:"type"`
-	SandboxID  string           `json:"sandboxId,omitempty"`
-	SandboxName string          `json:"sandboxName,omitempty"`
-	UserID     string           `json:"userId,omitempty"`
-	UserEmail  string           `json:"userEmail,omitempty"`
-	Message    string           `json:"message"`
-	Timestamp  time.Time        `json:"timestamp"`
-	Details    map[string]string `json:"details,omitempty"`
+	Type        NotificationType  `json:"type"`
+	SandboxID   string            `json:"sandboxId,omitempty"`
+	SandboxName string            `json:"sandboxName,omitempty"`
+	UserID      string            `json:"userId,omitempty"`
+	UserEmail   string            `json:"userEmail,omitempty"`
+	Message     string            `json:"message"`
+	Timestamp   time.Time         `json:"timestamp"`
+	Details     map[string]string `json:"details,omitempty"`
 }
 
 // Channel defines a notification delivery channel.

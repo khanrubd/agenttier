@@ -134,6 +134,9 @@ func ValidateStateTransition(currentPhase agenttierv1alpha1.SandboxPhase, action
 }
 
 // executeHook runs a lifecycle hook script inside the sandbox pod.
+// TODO(13.10): wire into state machine when self-healing/hook execution lands.
+//
+//nolint:unused // retained for task 13.10 (self-healing and hooks)
 func (r *SandboxReconciler) executeHook(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox, hookName, script string) error {
 	if script == "" {
 		return nil
@@ -163,6 +166,8 @@ func calculateBackoffDelay(restartCount int) time.Duration {
 
 // isInfrastructureFailure determines if a pod termination was caused by infrastructure
 // (OOM, eviction, node failure) vs user-initiated stop.
+//
+//nolint:unused // retained for task 13.10 (self-healing and restart backoff)
 func isInfrastructureFailure(pod *corev1.Pod) bool {
 	if pod == nil {
 		return true // Pod disappeared entirely — infrastructure failure

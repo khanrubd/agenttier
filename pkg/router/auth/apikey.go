@@ -41,13 +41,13 @@ type APIKeyStore interface {
 
 // APIKeyRecord represents a stored API key.
 type APIKeyRecord struct {
-	KeyHash           string    `json:"keyHash"`
-	UserID            string    `json:"userId"`
-	Email             string    `json:"email"`
-	Name              string    `json:"name"`
-	Scopes            []string  `json:"scopes"`
-	AllowedNamespaces []string  `json:"allowedNamespaces"`
-	CreatedAt         time.Time `json:"createdAt"`
+	KeyHash           string     `json:"keyHash"`
+	UserID            string     `json:"userId"`
+	Email             string     `json:"email"`
+	Name              string     `json:"name"`
+	Scopes            []string   `json:"scopes"`
+	AllowedNamespaces []string   `json:"allowedNamespaces"`
+	CreatedAt         time.Time  `json:"createdAt"`
 	ExpiresAt         *time.Time `json:"expiresAt,omitempty"`
 	LastUsedAt        *time.Time `json:"lastUsedAt,omitempty"`
 }

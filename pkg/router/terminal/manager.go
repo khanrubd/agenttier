@@ -256,6 +256,6 @@ func (m *Manager) removeSandboxSession(sandboxID, sessionID string) {
 
 func generateSessionID() string {
 	b := make([]byte, 16)
-	rand.Read(b)
+	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }

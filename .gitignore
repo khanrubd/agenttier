@@ -27,6 +27,9 @@ coverage.html
 # Kiro (internal development tooling)
 .kiro/
 
+# Local working todo (not shipped)
+/todo.md
+
 # Node.js (web-ui)
 web-ui/node_modules/
 web-ui/dist/
