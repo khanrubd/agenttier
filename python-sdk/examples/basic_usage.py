@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-# Copyright 2024 AgentLoft Authors.
+# Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Basic usage example for the AgentLoft Python SDK."""
+"""Basic usage example for the AgentTier Python SDK."""
 
-from agentloft import AgentLoftClient
+from agenttier import AgentTierClient
 
-# Connect to AgentLoft (uses AGENTLOFT_API_KEY or AGENTLOFT_TOKEN env var)
-client = AgentLoftClient(api_url="https://agentloft.internal.company.com")
+# Connect to AgentTier (uses AGENTTIER_API_KEY or AGENTTIER_TOKEN env var)
+client = AgentTierClient(api_url="https://agenttier.internal.company.com")
 
 # Create a sandbox from a template
 sandbox = client.create_sandbox(
@@ -22,7 +22,7 @@ sandbox.wait_until_running(timeout=60)
 print("Sandbox is running!")
 
 # Execute commands
-result = sandbox.commands.run("echo 'Hello from AgentLoft!'")
+result = sandbox.commands.run("echo 'Hello from AgentTier!'")
 print(f"stdout: {result.stdout}")
 print(f"exit code: {result.exit_code}")
 

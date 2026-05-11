@@ -1,7 +1,7 @@
-# Copyright 2024 AgentLoft Authors.
+# Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Pydantic models for AgentLoft API responses."""
+"""Pydantic models for AgentTier API responses."""
 
 from __future__ import annotations
 

@@ -1,7 +1,7 @@
-# Copyright 2024 AgentLoft Authors.
+# Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Authentication providers for the AgentLoft SDK."""
+"""Authentication providers for the AgentTier SDK."""
 
 from __future__ import annotations
 
@@ -76,15 +76,15 @@ def auto_detect_auth() -> AuthProvider:
     """Auto-detect the best authentication method from environment.
 
     Priority:
-    1. AGENTLOFT_API_KEY environment variable
-    2. AGENTLOFT_TOKEN environment variable
+    1. AGENTTIER_API_KEY environment variable
+    2. AGENTTIER_TOKEN environment variable
     3. Kubeconfig / in-cluster ServiceAccount token
     """
-    api_key = os.environ.get("AGENTLOFT_API_KEY")
+    api_key = os.environ.get("AGENTTIER_API_KEY")
     if api_key:
         return APIKeyAuth(api_key)
 
-    token = os.environ.get("AGENTLOFT_TOKEN")
+    token = os.environ.get("AGENTTIER_TOKEN")
     if token:
         return BearerTokenAuth(token)
 

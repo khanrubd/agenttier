@@ -1,7 +1,7 @@
-# Copyright 2024 AgentLoft Authors.
+# Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-"""AgentLoft client for managing sandboxes."""
+"""AgentTier client for managing sandboxes."""
 
 from __future__ import annotations
 
@@ -9,16 +9,16 @@ from typing import Optional
 
 import httpx
 
-from agentloft.auth import AuthProvider, auto_detect_auth
-from agentloft.models import SandboxSpec, Template
-from agentloft.sandbox import Sandbox
+from agenttier.auth import AuthProvider, auto_detect_auth
+from agenttier.models import SandboxSpec, Template
+from agenttier.sandbox import Sandbox
 
 
-class AgentLoftClient:
-    """High-level client for the AgentLoft REST API.
+class AgentTierClient:
+    """High-level client for the AgentTier REST API.
 
     Usage:
-        client = AgentLoftClient(api_url="https://agentloft.company.com")
+        client = AgentTierClient(api_url="https://agenttier.company.com")
         sandbox = client.create_sandbox(template="general-coding", name="my-sandbox")
         sandbox.wait_until_running()
         result = sandbox.commands.run("echo hello")
@@ -32,10 +32,10 @@ class AgentLoftClient:
         auth: Optional[AuthProvider] = None,
         timeout: float = 30.0,
     ) -> None:
-        """Initialize the AgentLoft client.
+        """Initialize the AgentTier client.
 
         Args:
-            api_url: Base URL of the AgentLoft API (e.g., "https://agentloft.company.com")
+            api_url: Base URL of the AgentTier API (e.g., "https://agenttier.company.com")
             auth: Authentication provider. Auto-detected if not provided.
             timeout: Default request timeout in seconds.
         """
@@ -73,7 +73,7 @@ class AgentLoftClient:
         Returns:
             A Sandbox handle for the created sandbox.
         """
-        body: dict = {
+        body: dict[str, object] = {
             "name": name,
             "namespace": namespace,
             "templateRef": {"name": template, "kind": "ClusterSandboxTemplate"},
@@ -157,7 +157,7 @@ class AgentLoftClient:
         """Close the HTTP client."""
         self._http.close()
 
-    def __enter__(self) -> "AgentLoftClient":
+    def __enter__(self) -> "AgentTierClient":
         return self
 
     def __exit__(self, *args: object) -> None:

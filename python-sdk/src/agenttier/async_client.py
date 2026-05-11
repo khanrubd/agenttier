@@ -1,7 +1,7 @@
-# Copyright 2024 AgentLoft Authors.
+# Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Async client for AgentLoft using httpx.AsyncClient."""
+"""Async client for AgentTier using httpx.AsyncClient."""
 
 from __future__ import annotations
 
@@ -10,15 +10,15 @@ from typing import Optional
 
 import httpx
 
-from agentloft.auth import AuthProvider, auto_detect_auth
-from agentloft.models import CommandResult, FileInfo, SandboxSpec, Template
+from agenttier.auth import AuthProvider, auto_detect_auth
+from agenttier.models import CommandResult, FileInfo, SandboxSpec, Template
 
 
-class AsyncAgentLoftClient:
-    """Async client for the AgentLoft REST API.
+class AsyncAgentTierClient:
+    """Async client for the AgentTier REST API.
 
     Usage:
-        async with AsyncAgentLoftClient(api_url="https://agentloft.company.com") as client:
+        async with AsyncAgentTierClient(api_url="https://agenttier.company.com") as client:
             sandbox = await client.create_sandbox(template="general-coding", name="my-sandbox")
             await sandbox.wait_until_running()
             result = await sandbox.exec("echo hello")
@@ -50,7 +50,7 @@ class AsyncAgentLoftClient:
         namespace: str = "default",
         timeout: Optional[str] = None,
     ) -> "AsyncSandbox":
-        body: dict = {
+        body: dict[str, object] = {
             "name": name,
             "namespace": namespace,
             "templateRef": {"name": template, "kind": "ClusterSandboxTemplate"},
@@ -88,7 +88,7 @@ class AsyncAgentLoftClient:
     async def close(self) -> None:
         await self._http.aclose()
 
-    async def __aenter__(self) -> "AsyncAgentLoftClient":
+    async def __aenter__(self) -> "AsyncAgentTierClient":
         return self
 
     async def __aexit__(self, *args: object) -> None:

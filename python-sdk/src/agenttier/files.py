@@ -1,4 +1,4 @@
-# Copyright 2024 AgentLoft Authors.
+# Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 
 """File operations API for sandboxes."""
@@ -10,7 +10,7 @@ from typing import Optional
 
 import httpx
 
-from agentloft.models import FileInfo
+from agenttier.models import FileInfo
 
 
 class FilesAPI:

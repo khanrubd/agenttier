@@ -1,4 +1,4 @@
-# Copyright 2024 AgentLoft Authors.
+# Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 
 """Sandbox handle for lifecycle management, commands, and file operations."""
@@ -10,9 +10,9 @@ from typing import Optional
 
 import httpx
 
-from agentloft.commands import CommandsAPI
-from agentloft.files import FilesAPI
-from agentloft.models import CommandResult, SandboxStatus
+from agenttier.commands import CommandsAPI
+from agenttier.files import FilesAPI
+from agenttier.models import CommandResult, SandboxStatus
 
 
 class Sandbox:

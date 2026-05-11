@@ -1,4 +1,4 @@
-# Copyright 2024 AgentLoft Authors.
+# Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 
 """Command execution API for sandboxes."""
@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import httpx
 
-from agentloft.models import CommandResult
+from agenttier.models import CommandResult
 
 
 class CommandsAPI:
