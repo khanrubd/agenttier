@@ -37,12 +37,15 @@ web-ui/.env.local
 web-ui/.env.*.local
 
 # Python (SDK)
-python-sdk/__pycache__/
+python-sdk/**/__pycache__/
 python-sdk/*.egg-info/
 python-sdk/dist/
 python-sdk/build/
 python-sdk/.venv/
 python-sdk/.env
+python-sdk/.pytest_cache/
+python-sdk/.mypy_cache/
+python-sdk/.ruff_cache/
 
 # Environment
 .env
