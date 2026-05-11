@@ -170,9 +170,9 @@ func (s *Server) validateJWT(ctx context.Context, token string) (*Claims, error)
 	return nil, fmt.Errorf("OIDC validation not yet implemented")
 }
 
-// validateAPIKey validates an API key against MongoDB.
+// validateAPIKey validates an API key.
 func (s *Server) validateAPIKey(ctx context.Context, key string) (*Claims, error) {
-	// TODO: Implement API key validation with MongoDB lookup + LRU cache
+	// TODO: Implement API key validation against a future SQL datastore + LRU cache
 	_ = ctx
 	_ = key
 	return nil, fmt.Errorf("API key validation not yet implemented")

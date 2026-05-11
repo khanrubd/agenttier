@@ -17,7 +17,7 @@ Get from zero to a running sandbox with terminal access in under 10 minutes.
 helm repo add agenttier https://charts.agenttier.io
 helm repo update
 
-# Install with default settings (includes MongoDB)
+# Install with default settings
 helm install agenttier agenttier/agenttier \
   --namespace agenttier \
   --create-namespace
@@ -43,7 +43,6 @@ kubectl get pods -n agenttier
 # agenttier-controller-xxx                1/1     Running   0          30s
 # agenttier-router-xxx                    1/1     Running   0          30s
 # agenttier-webui-xxx                     1/1     Running   0          30s
-# agenttier-mongodb-0                     1/1     Running   0          30s
 
 # Check CRDs installed
 kubectl get crd | grep agenttier

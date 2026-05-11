@@ -54,22 +54,15 @@ webui:
     type: ClusterIP
     port: 80
 
-# --- MongoDB ---
-mongodb:
-  # Set to false to use an external MongoDB instance
-  enabled: true
-  external:
-    # Full connection string for external MongoDB (Atlas, DocumentDB, etc.)
-    connectionString: ""
-  auth:
-    rootUsername: agenttier
-    # Auto-generated if not set; or reference an existing secret
-    existingSecret: ""
-  storage:
-    size: 10Gi
-    storageClass: ""
-  replicaSet:
-    enabled: false
+# --- External Database (future) ---
+# AgentTier stores all state in Kubernetes (etcd) by default.
+# To enable persistent audit history, governance policies, and analytics
+# beyond what Kubernetes Events retain, configure an external database.
+# Currently planned: SQL (PostgreSQL, MySQL) — not yet implemented.
+# database:
+#   enabled: false
+#   type: postgres
+#   connectionString: ""
 
 # --- Authentication ---
 auth:

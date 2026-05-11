@@ -52,15 +52,6 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s:%s" .Values.webui.image.repository (default .Chart.AppVersion .Values.webui.image.tag) }}
 {{- end }}
 
-{{/* MongoDB connection string */}}
-{{- define "agenttier.mongodbURI" -}}
-{{- if .Values.mongodb.enabled }}
-{{- printf "mongodb://%s-mongodb:27017/agenttier" (include "agenttier.fullname" .) }}
-{{- else }}
-{{- .Values.mongodb.external.connectionString }}
-{{- end }}
-{{- end }}
-
 {{/* Service account name */}}
 {{- define "agenttier.serviceAccountName" -}}
 {{- printf "%s-controller" (include "agenttier.fullname" .) }}

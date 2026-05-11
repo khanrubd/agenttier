@@ -25,7 +25,8 @@ import (
 	"time"
 )
 
-// APIKeyValidator validates API keys against the MongoDB datastore.
+// APIKeyValidator validates API keys. API key storage is planned for a future
+// SQL datastore. For now, it validates against a static in-memory map.
 type APIKeyValidator struct {
 	store    APIKeyStore
 	cache    *LRUCache

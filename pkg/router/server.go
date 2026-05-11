@@ -43,7 +43,6 @@ type Config struct {
 	OIDCClientID  string
 	AdminGroup    string
 	GroupClaim    string
-	MongoDBURI    string
 	PreviewDomain string
 	GatewayName   string
 	KubeConfig    string
@@ -195,7 +194,7 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
-	// TODO: Check MongoDB connectivity, K8s API reachability
+	// TODO: Check K8s API reachability
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "ok")
 }

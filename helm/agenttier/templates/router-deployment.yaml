@@ -33,8 +33,6 @@ spec:
             - --group-claim={{ .Values.auth.oidc.groupClaim }}
             - --preview-domain={{ .Values.networking.previewDomain }}
           env:
-            - name: MONGODB_URI
-              value: {{ include "agenttier.mongodbURI" . }}
             {{- if .Values.observability.otlp.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.observability.otlp.endpoint }}

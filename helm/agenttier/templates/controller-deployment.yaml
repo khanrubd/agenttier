@@ -32,8 +32,6 @@ spec:
             - --metrics-bind-address=:8081
             - --health-probe-bind-address=:8082
           env:
-            - name: MONGODB_URI
-              value: {{ include "agenttier.mongodbURI" . }}
             {{- if .Values.observability.otlp.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.observability.otlp.endpoint }}

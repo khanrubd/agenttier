@@ -150,7 +150,6 @@ helm install agenttier "${ROOT_DIR}/helm/agenttier/" \
   --set router.image.repository="${ECR_REGISTRY}/agenttier/router" \
   --set router.image.tag=v0.1.0 \
   --set defaults.sandbox.image="${ECR_REGISTRY}/agenttier/sandbox-general:latest" \
-  --set mongodb.enabled=false \
   --set auth.oidc.issuerUrl="" \
   --wait --timeout=120s
 

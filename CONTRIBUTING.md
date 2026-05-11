@@ -94,7 +94,7 @@ All PRs must include appropriate tests:
 
 ```bash
 make test              # Unit tests
-make test-integration  # Integration tests (requires MongoDB)
+make test-integration  # Integration tests (requires a Kubernetes cluster)
 make test-property     # Property-based tests
 make test-e2e          # End-to-end tests (requires Kind cluster)
 make test-all          # All tests except e2e
@@ -102,7 +102,7 @@ make test-all          # All tests except e2e
 
 ### Test Coverage
 
-We aim for >80% coverage on core packages (`pkg/controller/`, `pkg/router/`, `pkg/governance/`).
+We aim for >80% coverage on core packages (`pkg/controller/`, `pkg/router/`).
 
 ## Pull Request Process
 

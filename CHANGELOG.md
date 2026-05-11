@@ -12,7 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sandbox and SandboxTemplate CRD definitions
 - Controller reconciliation loop with state machine
 - Router with WebSocket terminal and REST API
-- MongoDB integration for audit and governance
+- Audit logs retained in Kubernetes Events (SQL/Postgres support planned)
 - Web UI with dashboard, terminal, and admin pages
 - Helm chart for deployment
 - Python SDK

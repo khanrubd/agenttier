@@ -47,8 +47,8 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 │                      Kubernetes Cluster                           │
 │                                                                   │
 │  ┌────────────┐  ┌────────────┐  ┌──────────┐  ┌───────────┐  │
-│  │ Controller │  │   Router   │  │  Web UI  │  │  MongoDB  │  │
-│  │ (operator) │  │ (API + WS) │  │ (nginx)  │  │(optional) │  │
+│  │ Controller │  │   Router   │  │  Web UI  │  │    etcd    │  │
+│  │ (operator) │  │ (API + WS) │  │ (nginx)  │  │ (built-in) │  │
 │  └─────┬──────┘  └─────┬──────┘  └──────────┘  └───────────┘  │
 │        │                │                                        │
 │  ┌─────┴────────────────┴────────────────────────────────────┐  │
@@ -176,7 +176,6 @@ Key settings:
 - `defaults.sandbox.*` — Default sandbox resources, storage, timeouts
 - `security.gvisor.enabled` — Enable gVisor kernel isolation
 - `networking.defaultPolicy` — Default network policy (deny-all or allow-internet)
-- `mongodb.enabled` — Enable persistent datastore for audit/governance
 
 ## Troubleshooting
 
@@ -224,8 +223,6 @@ agenttier/
 ├── api/v1alpha1/       # CRD type definitions
 ├── pkg/controller/     # Reconciliation logic
 ├── pkg/router/         # HTTP handlers, auth, terminal bridge
-├── pkg/mongodb/        # Persistent datastore
-├── pkg/governance/     # Policy enforcement
 ├── web-ui/             # React frontend (TypeScript + Vite)
 ├── helm/agenttier/     # Helm chart
 ├── terraform/aws-eks/  # AWS infrastructure (EKS + Cognito + ECR)
