@@ -22,6 +22,8 @@ jobs:
         uses: golangci/golangci-lint-action@v6
         with:
           version: latest
+      - name: License header check
+        run: ./hack/check-license-headers.sh
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -88,3 +90,113 @@ jobs:
       - name: Type check
         working-directory: python-sdk
         run: mypy src/agenttier/
+
+  # Security posture checks. These jobs are advisory: a noisy scanner
+  # should not permanently block development. Where a finding matters
+  # we promote it to the blocking lint/test jobs instead.
+  security:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      # Required so we can write results to the repo's Security tab via
+      # GitHub's code-scanning SARIF uploader.
+      security-events: write
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # gitleaks needs the full history to diff against earlier commits
+          fetch-depth: 0
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      # go.mod integrity: ensure downloaded modules match recorded hashes.
+      - name: go mod verify
+        run: go mod verify
+
+      # Scan Go source for CVEs in imported modules (runs against the
+      # Go vulnerability database at vuln.go.dev).
+      - name: govulncheck
+        run: |
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+          govulncheck ./...
+        continue-on-error: true
+
+      # Static analysis for Go-specific security bugs (unsafe pointers,
+      # integer overflow, weak crypto, SQL injection patterns, etc.).
+      - name: gosec
+        uses: securego/gosec@master
+        with:
+          # Skip test files because they have unique patterns (hardcoded
+          # "credentials" for fixtures) that trip the scanner without
+          # reflecting real risk.
+          args: "-exclude-dir=test -exclude-generated -fmt=sarif -out=gosec.sarif ./..."
+        continue-on-error: true
+
+      - name: Upload gosec SARIF to code-scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: gosec.sarif
+          category: gosec
+        continue-on-error: true
+
+      # Trivy filesystem scan: picks up vulnerable dependencies in the
+      # repo itself (go.sum, package-lock.json, python-sdk pyproject).
+      - name: Trivy filesystem scan
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "sarif"
+          output: "trivy-fs.sarif"
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+        continue-on-error: true
+
+      - name: Upload Trivy SARIF to code-scanning
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-fs.sarif
+          category: trivy-fs
+        continue-on-error: true
+
+      # Secret scanning: catches anything that looks like a credential
+      # that got committed. Complements GitHub's own secret scanning by
+      # checking newly-added files in PRs.
+      - name: gitleaks
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Exit 0 even on findings; treat as advisory.
+          GITLEAKS_ENABLE_COMMENTS: "false"
+        continue-on-error: true
+
+      # Container image scans. These run only on pushes to main so we
+      # don't rebuild on every PR (it's slow and the build job already
+      # validates the images); the result is still written to the
+      # Security tab for baseline visibility.
+      - name: Build controller image for scanning
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker build -t agenttier-controller:scan -f Dockerfile.controller .
+
+      - name: Trivy image scan (controller)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "agenttier-controller:scan"
+          format: "sarif"
+          output: "trivy-controller.sarif"
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+        continue-on-error: true
+
+      - name: Upload Trivy controller image SARIF
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-controller.sarif
+          category: trivy-controller
+        continue-on-error: true
