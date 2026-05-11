@@ -8,6 +8,18 @@ updates:
     labels:
       - "dependencies"
       - "go"
+    groups:
+      # Bundle the Kubernetes client libraries together. These are version-locked
+      # in practice — upgrading one without the others causes compile failures.
+      kubernetes:
+        patterns:
+          - "k8s.io/*"
+          - "sigs.k8s.io/controller-runtime"
+      # Bundle OpenTelemetry packages — they share a release train and expect
+      # matching minor versions across otel, otel/sdk, otel/trace, exporters, etc.
+      opentelemetry:
+        patterns:
+          - "go.opentelemetry.io/*"
 
   - package-ecosystem: "npm"
     directory: "/web-ui"
@@ -17,6 +29,17 @@ updates:
     labels:
       - "dependencies"
       - "javascript"
+    # Hold off on major upgrades — we'll do a coordinated tooling refresh
+    # (React Router, Vite, TypeScript, ESLint) together rather than piecemeal.
+    ignore:
+      - dependency-name: "react-router-dom"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "vite"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "typescript"
+        update-types: ["version-update:semver-major"]
+      - dependency-name: "eslint"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "docker"
     directory: "/"
@@ -25,6 +48,10 @@ updates:
     labels:
       - "dependencies"
       - "docker"
+    # Skip major Go runtime bumps; we upgrade Go explicitly when we move go.mod.
+    ignore:
+      - dependency-name: "docker/library/golang"
+        update-types: ["version-update:semver-major"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
