@@ -4,8 +4,9 @@
  */
 
 import { useState, useEffect } from 'react';
-import { fetchWarmPoolStatus, setWarmPoolConfig, fetchTemplates } from '../api/client';
+import { fetchWarmPoolStatus, setWarmPoolConfig, fetchTemplates, fetchCurrentUser } from '../api/client';
 import type { Template } from '../types';
+import GovernanceEditor from '../components/GovernanceEditor';
 
 export default function Settings() {
   const [warmPoolCount, setWarmPoolCount] = useState(0);
@@ -14,6 +15,7 @@ export default function Settings() {
   const [currentStatus, setCurrentStatus] = useState<{ readyCount: number; pendingCount: number; desiredCount: number } | null>(null);
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
 
   useEffect(() => {
     fetchTemplates().then(setTemplates).catch(() => {});
@@ -22,6 +24,9 @@ export default function Settings() {
       setWarmPoolCount(s.desiredCount);
       if (s.template) setWarmPoolTemplate(s.template);
     }).catch(() => {});
+    fetchCurrentUser()
+      .then(u => setIsAdmin(Boolean(u.isAdmin)))
+      .catch(() => setIsAdmin(false));
   }, []);
 
   const handleSave = async () => {
@@ -43,8 +48,10 @@ export default function Settings() {
   };
 
   return (
-    <div style={{ padding: '32px', maxWidth: '600px' }}>
+    <div style={{ padding: '32px', maxWidth: '760px' }}>
       <h1 style={{ fontSize: '22px', fontWeight: 700, color: '#08060d', marginBottom: '24px' }}>Settings</h1>
+
+      <GovernanceEditor isAdmin={isAdmin} />
 
       <section style={{ marginBottom: '32px' }}>
         <h2 style={{ fontSize: '16px', fontWeight: 600, color: '#08060d', marginBottom: '12px' }}>Warm Pool</h2>
@@ -78,21 +85,21 @@ export default function Settings() {
             </select>
           </div>
         </div>
+
+        {message && (
+          <div style={{ padding: '8px 12px', borderRadius: '6px', fontSize: '13px', marginBottom: '16px',
+            background: message.startsWith('Error') ? '#fef2f2' : '#f0fdf4',
+            color: message.startsWith('Error') ? '#dc2626' : '#16a34a',
+            border: `1px solid ${message.startsWith('Error') ? '#fecaca' : '#bbf7d0'}` }}>
+            {message}
+          </div>
+        )}
+
+        <button onClick={handleSave} disabled={saving}
+          style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', background: saving ? '#d1d5db' : '#aa3bff', color: '#fff', fontSize: '14px', fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer' }}>
+          {saving ? 'Saving…' : 'Save'}
+        </button>
       </section>
-
-      {message && (
-        <div style={{ padding: '8px 12px', borderRadius: '6px', fontSize: '13px', marginBottom: '16px',
-          background: message.startsWith('Error') ? '#fef2f2' : '#f0fdf4',
-          color: message.startsWith('Error') ? '#dc2626' : '#16a34a',
-          border: `1px solid ${message.startsWith('Error') ? '#fecaca' : '#bbf7d0'}` }}>
-          {message}
-        </div>
-      )}
-
-      <button onClick={handleSave} disabled={saving}
-        style={{ padding: '8px 20px', borderRadius: '8px', border: 'none', background: saving ? '#d1d5db' : '#aa3bff', color: '#fff', fontSize: '14px', fontWeight: 600, cursor: saving ? 'not-allowed' : 'pointer' }}>
-        {saving ? 'Saving…' : 'Save'}
-      </button>
     </div>
   );
 }

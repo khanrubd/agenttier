@@ -32,6 +32,7 @@ import (
 
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
 	"github.com/agenttier/agenttier/pkg/controller/warmpool"
+	"github.com/agenttier/agenttier/pkg/governance"
 	"github.com/agenttier/agenttier/pkg/router/terminal"
 )
 
@@ -108,6 +109,30 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		d, err := parseDuration(req.IdleTimeout)
 		if err == nil {
 			sandbox.Spec.IdleTimeout = d
+		}
+	}
+
+	// Governance enforcement. Violations short-circuit before the CR ever
+	// reaches the API server so users get a crisp 403 with details instead of
+	// a half-created sandbox that trips over a later webhook.
+	if s.governanceStore != nil {
+		policy, err := governance.Resolve(r.Context(), s.governanceStore, namespace)
+		if err != nil {
+			s.logger.Warn("failed to resolve governance policy; proceeding without enforcement", "namespace", namespace, "error", err)
+		} else if !policy.IsEmpty() {
+			existing := &agenttierv1alpha1.SandboxList{}
+			if err := s.k8sClient.List(r.Context(), existing, client.InNamespace(namespace)); err != nil {
+				respondError(w, http.StatusInternalServerError, "failed to check namespace usage: "+err.Error())
+				return
+			}
+			usage := governance.CountUsage(existing, claims.Sub)
+			if v := governance.Check(policy, usage, sandbox); v.Violated() {
+				respondJSON(w, http.StatusForbidden, map[string]interface{}{
+					"error":      "policy_violation",
+					"violations": v,
+				})
+				return
+			}
 		}
 	}
 
@@ -603,10 +628,108 @@ func (s *Server) handleCreateShareLink(w http.ResponseWriter, r *http.Request) {
 	respondError(w, http.StatusNotImplemented, "not yet implemented")
 }
 func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]interface{}{"policies": []interface{}{}})
+	policies, err := s.governanceStore.ListPolicies(r.Context())
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to list policies: "+err.Error())
+		return
+	}
+	// Shape the response so the UI can find the cluster default easily.
+	var cluster *governance.Policy
+	namespaces := make([]map[string]interface{}, 0, len(policies))
+	for _, sp := range policies {
+		if sp.Scope == "" {
+			p := sp.Policy
+			cluster = &p
+			continue
+		}
+		namespaces = append(namespaces, map[string]interface{}{
+			"namespace": sp.Scope,
+			"policy":    sp.Policy,
+		})
+	}
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"cluster":    cluster,
+		"namespaces": namespaces,
+	})
 }
+
+func (s *Server) handleGetPolicy(w http.ResponseWriter, r *http.Request) {
+	namespace := mux.Vars(r)["namespace"]
+	policy, err := s.governanceStore.GetPolicy(r.Context(), namespace)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to get policy: "+err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"namespace": namespace,
+		"policy":    policy,
+	})
+}
+
+func (s *Server) handleUpsertClusterPolicy(w http.ResponseWriter, r *http.Request) {
+	var policy governance.Policy
+	if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if err := s.governanceStore.SetPolicy(r.Context(), "", policy); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to save policy: "+err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"scope":  "cluster",
+		"policy": policy,
+	})
+}
+
 func (s *Server) handleSetPolicy(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "not yet implemented")
+	namespace := mux.Vars(r)["namespace"]
+	if namespace == "" {
+		respondError(w, http.StatusBadRequest, "namespace is required")
+		return
+	}
+	var policy governance.Policy
+	if err := json.NewDecoder(r.Body).Decode(&policy); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if err := s.governanceStore.SetPolicy(r.Context(), namespace, policy); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to save policy: "+err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"namespace": namespace,
+		"policy":    policy,
+	})
+}
+
+func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request) {
+	namespace := mux.Vars(r)["namespace"]
+	if namespace == "" {
+		respondError(w, http.StatusBadRequest, "namespace is required")
+		return
+	}
+	if err := s.governanceStore.DeletePolicy(r.Context(), namespace); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to delete policy: "+err.Error())
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (s *Server) handleGetEffectivePolicy(w http.ResponseWriter, r *http.Request) {
+	namespace := r.URL.Query().Get("namespace")
+	if namespace == "" {
+		namespace = "default"
+	}
+	policy, err := governance.Resolve(r.Context(), s.governanceStore, namespace)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to resolve policy: "+err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"namespace": namespace,
+		"policy":    policy,
+	})
 }
 func (s *Server) handleListAuditEvents(w http.ResponseWriter, r *http.Request) {
 	// Get Kubernetes events for sandboxes as activity log
@@ -753,6 +876,20 @@ func (s *Server) handleGetPreferences(w http.ResponseWriter, r *http.Request) {
 }
 func (s *Server) handleUpdatePreferences(w http.ResponseWriter, r *http.Request) {
 	respondError(w, http.StatusNotImplemented, "not yet implemented")
+}
+func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"sub":     claims.Sub,
+		"email":   claims.Email,
+		"name":    claims.Name,
+		"groups":  claims.Groups,
+		"isAdmin": claims.IsAdmin,
+	})
 }
 func (s *Server) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{"keys": []interface{}{}})

@@ -210,3 +210,18 @@ func generateRequestID() string {
 	_, _ = rand.Read(b)
 	return hex.EncodeToString(b)
 }
+
+// requireAdmin wraps a handler so only admin users may reach it. In dev mode
+// (no OIDC configured), the authMiddleware already stamps every request with
+// an admin identity, so this is a no-op there; in production it enforces the
+// `IsAdmin` claim.
+func (s *Server) requireAdmin(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		claims := GetClaims(r.Context())
+		if claims == nil || !claims.IsAdmin {
+			http.Error(w, `{"error":"admin_required"}`, http.StatusForbidden)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}

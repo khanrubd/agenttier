@@ -133,10 +133,12 @@ export interface User {
   sub: string;
   email: string;
   name: string;
+  isAdmin?: boolean;
+  groups?: string[];
 }
 
 export async function fetchCurrentUser(): Promise<User> {
-  return request<User>('/user/preferences');
+  return request<User>('/user/me');
 }
 
 // --- Warm Pool API ---
@@ -157,6 +159,59 @@ export async function setWarmPoolConfig(desiredCount: number, template: string):
     method: 'PUT',
     body: JSON.stringify({ desiredCount, template }),
   });
+}
+
+// --- Governance API ---
+
+export interface GovernancePolicy {
+  maxSandboxesPerUser?: number;
+  maxSandboxesTotal?: number;
+  maxCpu?: string;
+  maxMemory?: string;
+  maxStorage?: string;
+  maxTimeout?: string;
+  maxIdleTimeout?: string;
+  allowedTemplates?: string[];
+  approvedRegistries?: string[];
+  description?: string;
+}
+
+export interface GovernanceNamespacePolicy {
+  namespace: string;
+  policy: GovernancePolicy;
+}
+
+export interface GovernanceBundle {
+  cluster: GovernancePolicy | null;
+  namespaces: GovernanceNamespacePolicy[];
+}
+
+export async function fetchGovernance(): Promise<GovernanceBundle> {
+  return request<GovernanceBundle>('/governance/policies');
+}
+
+export async function setClusterGovernance(policy: GovernancePolicy): Promise<void> {
+  await request('/governance/policies', {
+    method: 'PUT',
+    body: JSON.stringify(policy),
+  });
+}
+
+export async function setNamespaceGovernance(namespace: string, policy: GovernancePolicy): Promise<void> {
+  await request(`/governance/policies/${encodeURIComponent(namespace)}`, {
+    method: 'PUT',
+    body: JSON.stringify(policy),
+  });
+}
+
+export async function deleteNamespaceGovernance(namespace: string): Promise<void> {
+  await request(`/governance/policies/${encodeURIComponent(namespace)}`, { method: 'DELETE' });
+}
+
+export async function fetchEffectiveGovernance(namespace: string): Promise<{ namespace: string; policy: GovernancePolicy }> {
+  return request<{ namespace: string; policy: GovernancePolicy }>(
+    `/governance/effective?namespace=${encodeURIComponent(namespace)}`,
+  );
 }
 
 // --- Helpers ---

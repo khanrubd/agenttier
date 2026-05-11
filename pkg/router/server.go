@@ -32,6 +32,7 @@ import (
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
+	"github.com/agenttier/agenttier/pkg/governance"
 	"github.com/agenttier/agenttier/pkg/router/terminal"
 )
 
@@ -50,13 +51,14 @@ type Config struct {
 
 // Server is the main Router HTTP server.
 type Server struct {
-	config         *Config
-	router         *mux.Router
-	httpServer     *http.Server
-	logger         *slog.Logger
-	k8sClient      client.Client
-	bridge         *terminal.Bridge
-	sessionManager *terminal.Manager
+	config          *Config
+	router          *mux.Router
+	httpServer      *http.Server
+	logger          *slog.Logger
+	k8sClient       client.Client
+	bridge          *terminal.Bridge
+	sessionManager  *terminal.Manager
+	governanceStore governance.Store
 }
 
 // NewServer creates a new Router server with all routes registered.
@@ -67,12 +69,13 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 
 	r := mux.NewRouter()
 	s := &Server{
-		config:         config,
-		router:         r,
-		logger:         logger,
-		k8sClient:      k8sClient,
-		bridge:         bridge,
-		sessionManager: terminal.NewManager(logger),
+		config:          config,
+		router:          r,
+		logger:          logger,
+		k8sClient:       k8sClient,
+		bridge:          bridge,
+		sessionManager:  terminal.NewManager(logger),
+		governanceStore: governance.NewConfigMapStore(k8sClient),
 	}
 
 	// Register middleware
@@ -126,7 +129,11 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 
 	// Governance
 	api.HandleFunc("/governance/policies", s.handleListPolicies).Methods("GET")
-	api.HandleFunc("/governance/policies/{namespace}", s.handleSetPolicy).Methods("PUT")
+	api.Handle("/governance/policies", s.requireAdmin(http.HandlerFunc(s.handleUpsertClusterPolicy))).Methods("PUT")
+	api.HandleFunc("/governance/policies/{namespace}", s.handleGetPolicy).Methods("GET")
+	api.Handle("/governance/policies/{namespace}", s.requireAdmin(http.HandlerFunc(s.handleSetPolicy))).Methods("PUT")
+	api.Handle("/governance/policies/{namespace}", s.requireAdmin(http.HandlerFunc(s.handleDeletePolicy))).Methods("DELETE")
+	api.HandleFunc("/governance/effective", s.handleGetEffectivePolicy).Methods("GET")
 
 	// Audit
 	api.HandleFunc("/audit/events", s.handleListAuditEvents).Methods("GET")
@@ -140,6 +147,7 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	api.HandleFunc("/admin/sharing", s.handleAdminListSharing).Methods("GET")
 
 	// User preferences
+	api.HandleFunc("/user/me", s.handleGetMe).Methods("GET")
 	api.HandleFunc("/user/preferences", s.handleGetPreferences).Methods("GET")
 	api.HandleFunc("/user/preferences", s.handleUpdatePreferences).Methods("PUT")
 	api.HandleFunc("/user/api-keys", s.handleListAPIKeys).Methods("GET")

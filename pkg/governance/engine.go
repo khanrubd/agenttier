@@ -1,0 +1,193 @@
+/*
+Copyright 2024 AgentTier Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package governance
+
+import (
+	"fmt"
+	"strings"
+	"time"
+
+	"k8s.io/apimachinery/pkg/api/resource"
+
+	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
+)
+
+// Violation describes a single policy check that failed, with a stable machine
+// code and a human-readable message. The Router surfaces the code to the UI so
+// it can render a friendly error next to the right form field.
+type Violation struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// Error implements error.
+func (v Violation) Error() string { return v.Message }
+
+// Violations is a slice of policy violations.
+type Violations []Violation
+
+// Error joins all violations with "; ".
+func (vs Violations) Error() string {
+	if len(vs) == 0 {
+		return ""
+	}
+	msgs := make([]string, len(vs))
+	for i, v := range vs {
+		msgs[i] = v.Message
+	}
+	return strings.Join(msgs, "; ")
+}
+
+// Violated reports whether there are any violations.
+func (vs Violations) Violated() bool { return len(vs) > 0 }
+
+// Check runs every applicable policy rule against a proposed sandbox create.
+//
+// `policy` is the effective namespace-resolved policy (see Resolve).
+// `usage` is the current consumption snapshot for the scope.
+func Check(policy Policy, usage Usage, sandbox *agenttierv1alpha1.Sandbox) Violations {
+	var out Violations
+
+	// Template restrictions apply first — if the template isn't allowed, no
+	// other checks matter.
+	if len(policy.AllowedTemplates) > 0 && sandbox.Spec.TemplateRef != nil {
+		if !contains(policy.AllowedTemplates, sandbox.Spec.TemplateRef.Name) {
+			out = append(out, Violation{
+				Code:    "template_not_allowed",
+				Message: fmt.Sprintf("template %q is not permitted in this namespace (allowed: %s)", sandbox.Spec.TemplateRef.Name, strings.Join(policy.AllowedTemplates, ", ")),
+			})
+		}
+	}
+
+	// Image registry allowlist — only applies when the sandbox overrides the
+	// template image. The template's own image is trusted.
+	if len(policy.ApprovedRegistries) > 0 && sandbox.Spec.Image != nil && sandbox.Spec.Image.Repository != "" {
+		if !hasRegistryPrefix(sandbox.Spec.Image.Repository, policy.ApprovedRegistries) {
+			out = append(out, Violation{
+				Code:    "image_registry_not_approved",
+				Message: fmt.Sprintf("image %q is not in an approved registry (%s)", sandbox.Spec.Image.Repository, strings.Join(policy.ApprovedRegistries, ", ")),
+			})
+		}
+	}
+
+	// Quota checks.
+	if policy.MaxSandboxesTotal > 0 && usage.TotalSandboxes >= policy.MaxSandboxesTotal {
+		out = append(out, Violation{
+			Code:    "namespace_quota_exceeded",
+			Message: fmt.Sprintf("namespace already has %d sandboxes (max %d)", usage.TotalSandboxes, policy.MaxSandboxesTotal),
+		})
+	}
+	if policy.MaxSandboxesPerUser > 0 && usage.UserSandboxes >= policy.MaxSandboxesPerUser {
+		out = append(out, Violation{
+			Code:    "user_quota_exceeded",
+			Message: fmt.Sprintf("user already owns %d sandboxes in this namespace (max %d)", usage.UserSandboxes, policy.MaxSandboxesPerUser),
+		})
+	}
+
+	// Resource caps — only check sandbox overrides. The template's own
+	// resource requests are validated at template-creation time (future).
+	if policy.MaxCPU != "" && sandbox.Spec.Resources != nil {
+		if cpu, ok := sandbox.Spec.Resources.Limits["cpu"]; ok {
+			if exceedsQuantity(cpu, policy.MaxCPU) {
+				out = append(out, Violation{
+					Code:    "cpu_limit_exceeded",
+					Message: fmt.Sprintf("cpu limit %s exceeds governance cap %s", cpu.String(), policy.MaxCPU),
+				})
+			}
+		}
+	}
+	if policy.MaxMemory != "" && sandbox.Spec.Resources != nil {
+		if mem, ok := sandbox.Spec.Resources.Limits["memory"]; ok {
+			if exceedsQuantity(mem, policy.MaxMemory) {
+				out = append(out, Violation{
+					Code:    "memory_limit_exceeded",
+					Message: fmt.Sprintf("memory limit %s exceeds governance cap %s", mem.String(), policy.MaxMemory),
+				})
+			}
+		}
+	}
+	if policy.MaxStorage != "" && sandbox.Spec.Storage != nil && !sandbox.Spec.Storage.Size.IsZero() {
+		if exceedsQuantity(sandbox.Spec.Storage.Size, policy.MaxStorage) {
+			out = append(out, Violation{
+				Code:    "storage_limit_exceeded",
+				Message: fmt.Sprintf("storage size %s exceeds governance cap %s", sandbox.Spec.Storage.Size.String(), policy.MaxStorage),
+			})
+		}
+	}
+
+	// Timeout caps.
+	if policy.MaxTimeout != "" && sandbox.Spec.Timeout != nil {
+		if exceedsDuration(sandbox.Spec.Timeout.Duration, policy.MaxTimeout) {
+			out = append(out, Violation{
+				Code:    "timeout_exceeded",
+				Message: fmt.Sprintf("timeout %s exceeds governance cap %s", sandbox.Spec.Timeout.Duration, policy.MaxTimeout),
+			})
+		}
+	}
+	if policy.MaxIdleTimeout != "" && sandbox.Spec.IdleTimeout != nil {
+		if exceedsDuration(sandbox.Spec.IdleTimeout.Duration, policy.MaxIdleTimeout) {
+			out = append(out, Violation{
+				Code:    "idle_timeout_exceeded",
+				Message: fmt.Sprintf("idleTimeout %s exceeds governance cap %s", sandbox.Spec.IdleTimeout.Duration, policy.MaxIdleTimeout),
+			})
+		}
+	}
+
+	return out
+}
+
+func contains(list []string, v string) bool {
+	for _, item := range list {
+		if item == v {
+			return true
+		}
+	}
+	return false
+}
+
+func hasRegistryPrefix(image string, registries []string) bool {
+	for _, prefix := range registries {
+		if prefix == "" {
+			continue
+		}
+		if strings.HasPrefix(image, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+func exceedsQuantity(got resource.Quantity, capStr string) bool {
+	capQ, err := resource.ParseQuantity(capStr)
+	if err != nil {
+		// Misconfigured cap — fail open rather than wedge every create.
+		return false
+	}
+	return got.Cmp(capQ) > 0
+}
+
+func exceedsDuration(got time.Duration, capStr string) bool {
+	// `0` means "infinite" on the sandbox side, which always exceeds any cap.
+	cap, err := time.ParseDuration(capStr)
+	if err != nil {
+		return false
+	}
+	if got == 0 {
+		return true
+	}
+	return got > cap
+}
