@@ -1,7 +1,12 @@
 # AgentTier General Coding Sandbox Image
 # Full development environment with Node.js, Python, Go, and common tools.
+# Builds for linux/amd64 and linux/arm64 via buildx TARGETARCH.
 
 FROM public.ecr.aws/docker/library/ubuntu:22.04
+
+# Declared by buildx when --platform is set. We re-declare as an ARG so the
+# value is visible inside the layer that downloads arch-specific tarballs.
+ARG TARGETARCH
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -24,7 +29,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     fd-find \
     && rm -rf /var/lib/apt/lists/*
 
-# Node.js 20 LTS
+# Node.js 20 LTS (nodesource setup handles both architectures).
 RUN curl -fsSL https://deb.nodesource.com/setup_20.x | bash - \
     && apt-get install -y nodejs \
     && npm install -g npm@latest \
@@ -39,8 +44,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
-# Go 1.22
-RUN curl -fsSL https://go.dev/dl/go1.22.5.linux-amd64.tar.gz | tar -C /usr/local -xzf -
+# Go 1.22 — install the right tarball for the build architecture.
+RUN case "${TARGETARCH}" in \
+      amd64) GOARCH=amd64 ;; \
+      arm64) GOARCH=arm64 ;; \
+      *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1 ;; \
+    esac \
+    && curl -fsSL "https://go.dev/dl/go1.22.5.linux-${GOARCH}.tar.gz" | tar -C /usr/local -xzf -
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # Create non-root user

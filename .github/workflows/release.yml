@@ -8,13 +8,41 @@ env:
   REGISTRY: ghcr.io/agenttier
 
 jobs:
+  # ------------------------------------------------------------------
+  # Build and publish container images to ghcr.io.
+  # A matrix drives one buildx job per image so the 6 images build in
+  # parallel and any single failure surfaces immediately.
+  # ------------------------------------------------------------------
   release-images:
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: controller
+            context: .
+            dockerfile: Dockerfile.controller
+          - name: router
+            context: .
+            dockerfile: Dockerfile.router
+          - name: web-ui
+            context: web-ui
+            dockerfile: web-ui/Dockerfile
+          - name: sandbox-general
+            context: images/general-coding
+            dockerfile: images/general-coding/Dockerfile
+          - name: sandbox-claude-code
+            context: images/claude-code
+            dockerfile: images/claude-code/Dockerfile
+          - name: sandbox-minimal
+            context: images/minimal
+            dockerfile: images/minimal/Dockerfile
     steps:
       - uses: actions/checkout@v6
+      - uses: docker/setup-qemu-action@v3
       - uses: docker/setup-buildx-action@v3
       - uses: docker/login-action@v3
         with:
@@ -23,68 +51,208 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Extract version
         id: version
-        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
-      - name: Build and push controller
+        run: |
+          VERSION="${GITHUB_REF#refs/tags/}"
+          echo "VERSION=$VERSION" >> "$GITHUB_OUTPUT"
+          # Only mark the image `:latest` on GA tags (no "-rc", "-beta", etc.)
+          if [[ "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "TAG_LATEST=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "TAG_LATEST=false" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Build and push ${{ matrix.name }}
         uses: docker/build-push-action@v7
         with:
-          context: .
-          file: Dockerfile.controller
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
+          # We only tag `:latest` on GA; release candidates stay versioned.
           tags: |
-            ${{ env.REGISTRY }}/controller:${{ steps.version.outputs.VERSION }}
-            ${{ env.REGISTRY }}/controller:latest
+            ${{ env.REGISTRY }}/${{ matrix.name }}:${{ steps.version.outputs.VERSION }}
+            ${{ steps.version.outputs.TAG_LATEST == 'true' && format('{0}/{1}:latest', env.REGISTRY, matrix.name) || '' }}
           build-args: |
             VERSION=${{ steps.version.outputs.VERSION }}
-      - name: Build and push router
-        uses: docker/build-push-action@v7
-        with:
-          context: .
-          file: Dockerfile.router
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/router:${{ steps.version.outputs.VERSION }}
-            ${{ env.REGISTRY }}/router:latest
-      - name: Build and push web-ui
-        uses: docker/build-push-action@v7
-        with:
-          context: web-ui
-          file: web-ui/Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: |
-            ${{ env.REGISTRY }}/web-ui:${{ steps.version.outputs.VERSION }}
-            ${{ env.REGISTRY }}/web-ui:latest
 
+  # ------------------------------------------------------------------
+  # Package the Helm chart, push it to the `gh-pages` branch, and
+  # regenerate the `index.yaml` so users can do:
+  #   helm repo add agenttier https://agenttier.github.io/agenttier
+  #   helm install agenttier agenttier/agenttier
+  # ------------------------------------------------------------------
   release-helm:
     runs-on: ubuntu-latest
     needs: release-images
+    permissions:
+      contents: write
     steps:
       - uses: actions/checkout@v6
-      - name: Package Helm chart
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
+      - name: Package chart
         run: |
-          helm package helm/agenttier/ --version ${GITHUB_REF#refs/tags/v} --app-version ${GITHUB_REF#refs/tags/v}
-      - name: Upload chart artifact
+          mkdir -p /tmp/charts
+          helm package helm/agenttier/ \
+            --version "${{ steps.version.outputs.VERSION }}" \
+            --app-version "${{ steps.version.outputs.VERSION }}" \
+            --destination /tmp/charts
+      - name: Upload chart as workflow artifact
         uses: actions/upload-artifact@v7
         with:
           name: helm-chart
-          path: "*.tgz"
+          path: /tmp/charts/*.tgz
+      - name: Publish chart to gh-pages
+        run: |
+          # Use a throwaway worktree so we don't disturb the tag checkout.
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin gh-pages:gh-pages 2>/dev/null || true
+          # If gh-pages doesn't exist yet, create an empty branch.
+          if ! git show-ref --verify --quiet refs/heads/gh-pages; then
+            git worktree add --detach /tmp/pages
+            cd /tmp/pages
+            git checkout --orphan gh-pages
+            git rm -rf . 2>/dev/null || true
+          else
+            git worktree add /tmp/pages gh-pages
+            cd /tmp/pages
+          fi
 
+          cp /tmp/charts/*.tgz .
+          helm repo index . --url "https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
+
+          git add .
+          # Nothing to commit if the chart version is already published.
+          if git diff --cached --quiet; then
+            echo "No chart changes to publish."
+            exit 0
+          fi
+          git commit -m "Publish chart v${{ steps.version.outputs.VERSION }}"
+          git push origin HEAD:gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ------------------------------------------------------------------
+  # Build CLI binaries for the five most-used platforms, SHA256-sum
+  # them, and attach everything to the GitHub Release.
+  # ------------------------------------------------------------------
+  release-cli:
+    runs-on: ubuntu-latest
+    needs: release-images
+    permissions:
+      contents: write
+    strategy:
+      matrix:
+        include:
+          - goos: linux
+            goarch: amd64
+          - goos: linux
+            goarch: arm64
+          - goos: darwin
+            goarch: amd64
+          - goos: darwin
+            goarch: arm64
+          - goos: windows
+            goarch: amd64
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.22"
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+      - name: Build CLI
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          ext=""
+          if [ "$GOOS" = "windows" ]; then ext=".exe"; fi
+          out="agenttier-${VERSION}-${GOOS}-${GOARCH}${ext}"
+          CGO_ENABLED=0 go build \
+            -trimpath \
+            -ldflags "-s -w -X github.com/agenttier/agenttier/pkg/version.Version=${VERSION}" \
+            -o "$out" \
+            ./cmd/cli/
+          sha256sum "$out" > "${out}.sha256"
+          mkdir -p dist
+          mv "$out" "${out}.sha256" dist/
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*
+
+  # ------------------------------------------------------------------
+  # Create a GitHub Release and attach CLI binaries + Helm chart.
+  # ------------------------------------------------------------------
+  github-release:
+    runs-on: ubuntu-latest
+    needs: [release-images, release-helm, release-cli]
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/download-artifact@v7
+        with:
+          path: artifacts
+      - name: Collate release assets
+        run: |
+          mkdir -p release-assets
+          # CLI binaries and their checksums.
+          find artifacts -type f \( -name 'agenttier-*' -o -name '*.sha256' \) -exec cp {} release-assets/ \;
+          # Helm chart tarball.
+          find artifacts -type f -name '*.tgz' -exec cp {} release-assets/ \;
+          ls -la release-assets
+      - name: Extract version
+        id: version
+        run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.VERSION }}
+          name: ${{ steps.version.outputs.VERSION }}
+          generate_release_notes: true
+          prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
+          files: release-assets/*
+
+  # ------------------------------------------------------------------
+  # Python SDK publish. Skipped automatically if PYPI_TOKEN is absent
+  # so the very first release doesn't block on a secret we haven't
+  # configured yet; the SDK can still be installed from the git tag.
+  # ------------------------------------------------------------------
   release-sdk:
     runs-on: ubuntu-latest
     needs: release-images
+    if: ${{ !contains(github.ref, '-rc') }}
     steps:
       - uses: actions/checkout@v6
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
-      - name: Build and publish to PyPI
+      - name: Build wheel and sdist
+        working-directory: python-sdk
+        run: |
+          pip install --upgrade build twine
+          python -m build
+          twine check dist/*
+      - name: Upload SDK artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: python-sdk-dist
+          path: python-sdk/dist/*
+      - name: Publish to PyPI
         working-directory: python-sdk
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_TOKEN }}
         run: |
-          pip install build twine
-          python -m build
+          if [ -z "${TWINE_PASSWORD}" ]; then
+            echo "PYPI_TOKEN secret not configured; skipping PyPI upload."
+            echo "The wheel + sdist are still attached to the run as artifacts."
+            exit 0
+          fi
+          pip install --upgrade twine
           twine upload dist/*

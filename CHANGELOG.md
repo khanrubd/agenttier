@@ -7,13 +7,71 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0] — 2026-05-11
+
+First public release.
+
 ### Added
-- Initial project scaffold
-- Sandbox and SandboxTemplate CRD definitions
-- Controller reconciliation loop with state machine
-- Router with WebSocket terminal and REST API
-- Audit logs retained in Kubernetes Events (SQL/Postgres support planned)
-- Web UI with dashboard, terminal, and admin pages
-- Helm chart for deployment
-- Python SDK
-- CLI tool
+
+**Core platform**
+- Kubernetes-native `Sandbox`, `SandboxTemplate`, and `ClusterSandboxTemplate` CRDs under `agenttier.io/v1alpha1`.
+- Controller with state machine (Creating/Running/Stopped/Error/Deleting), finalizer-based cleanup, idle-timeout and max-runtime enforcement, leader election, and Prometheus metrics.
+- Template resolution with inheritance (max depth 10), field-level merge, additive env-var merge, and `resourceVersion`-stamped audit trail in sandbox status.
+- Warm pod pool with leader-elected reconciler, `gp3-immediate` StorageClass, per-template claim + auto-replenish, configurable from the Settings page. Measured 791 ms sandbox startup vs ~10 s cold start.
+- Structured JSON logging with per-sandbox `startupDurationMs`.
+
+**Router, terminal, and API**
+- REST API at `/api/v1/*` for sandboxes, templates, governance, port forwarding, warm pool, audit events, analytics, cost estimation, and user identity (`/user/me`).
+- WebSocket terminal at `/ws/terminal/{sandboxId}` bridging JSON messages to SPDY exec with full PTY semantics (resize, raw-mode input, ANSI passthrough) and 30 s reconnection window.
+- Per-session credential injection (STS, secrets) plumbed through at session start.
+- Non-interactive command execution via `POST /api/v1/sandboxes/{id}/exec`.
+- OIDC JWT and API-key authentication middleware with a dev-mode bypass (auto-admin when `--oidc-issuer` is empty).
+
+**Governance (phase 7.1)**
+- `pkg/governance` engine with ConfigMap-backed policy store, cluster + per-namespace resolution with field-level merge, and enforcement at sandbox creation returning structured `policy_violation` errors.
+- Admin-gated `GET/PUT/DELETE` REST endpoints for cluster and namespace policies, plus `/governance/effective` for previewing the resolved policy.
+- Settings-page `GovernanceEditor` React component. Read-only for non-admin, editable for admin. Dev mode is auto-admin.
+
+**Port forwarding (phase 7.3)**
+- `pkg/router/portforward` creates Kubernetes Services per forwarded port, plus Ingresses when `previewDomain` is configured (no Gateway API CRD required).
+- Authenticated in-Router reverse proxy at `/api/v1/sandboxes/{id}/preview/{port}/...` lets users hit a forwarded port from the browser even without public DNS.
+- Sandbox status mirrors forwarded ports so `kubectl get sandbox -o yaml` and the Web UI stay in sync.
+- Web UI: port-forwarding panel on every running sandbox card with inline add/remove and preview links.
+
+**Web UI**
+- React 19 + TypeScript + Vite SPA with pages for Dashboard, Templates (inline YAML editor), Terminal (xterm.js), Activity Log, Metrics, Cost Estimator, and Settings.
+- OIDC PKCE login flow via `oidc-client-ts`, protected route wrapper, silent refresh, in-memory token storage.
+- Multi-stage Dockerfile (node build → nginx serve) with reverse-proxy config for REST and WebSocket.
+
+**Python SDK (phase 5)**
+- `agenttier` package on PyPI with sync (`AgentTierClient`) and async (`AsyncAgentTierClient`) clients.
+- Authentication auto-detection from `AGENTTIER_API_KEY` / `AGENTTIER_TOKEN` / kubeconfig, plus explicit `APIKeyAuth`, `BearerTokenAuth`, and kubeconfig providers.
+- Typed Pydantic models, streaming file transfers, and `CommandsAPI` / `FilesAPI` exposed off the `Sandbox` handle.
+
+**Helm chart and templates**
+- Single `helm install agenttier agenttier/agenttier` deploys the controller, router, web UI, CRDs, and RBAC.
+- Reference `ClusterSandboxTemplate`s for `general-coding` and `claude-code-bedrock`.
+- Optional components: gVisor RuntimeClass, Prometheus ServiceMonitor, PodDisruptionBudget, image pre-pull DaemonSet, OTel Collector sidecar, Ingress for Web UI.
+
+**Sandbox images (published to ghcr.io/agenttier)**
+- `controller`, `router`, `web-ui` — platform services.
+- `sandbox-general` — Ubuntu 22.04 + Node.js 20 + Python 3.11 + Go 1.22 + developer tooling.
+- `sandbox-claude-code` — Node.js 20 + Claude Code CLI 2.1.81 + AWS CLI v2, wired for Bedrock via IRSA.
+- `sandbox-minimal` — Alpine 3.20 + bash + git + curl.
+- All images published for `linux/amd64` and `linux/arm64`.
+
+**Operations and CI**
+- Multi-arch Docker Buildx builds (amd64 + arm64) for every image on every `v*` tag.
+- Helm chart published to `gh-pages` at `https://agenttier.github.io/agenttier` on every release.
+- CLI binaries built for linux/darwin/windows on amd64 + arm64 with SHA-256 checksums attached to the GitHub Release.
+- Python SDK auto-published to PyPI when `PYPI_TOKEN` is configured; wheel + sdist otherwise attached as artifacts.
+- Security CI job running gosec, govulncheck, Trivy filesystem + container image scans, and gitleaks secret scanning with SARIF upload to the repo Security tab.
+- License-header gate script in `hack/check-license-headers.sh` keeps every first-party Go file carrying the Apache 2.0 boilerplate.
+- Dependabot groups for `k8s.io/*` and `go.opentelemetry.io/*`, with major-version ignores for web-ui tooling and the Go toolchain pending coordinated upgrades.
+
+### Known limitations
+
+- MongoDB-backed audit and governance persistence has been retired in favor of Kubernetes Events + ConfigMaps. Long-term retention requires the optional SQL backend (phase 7.13, not yet implemented).
+- Sharing and collaboration (phase 7.2), file transfer API (7.4), notifications (7.5), and sandbox cloning (7.6) are stubbed but not yet functional.
+- Image signing + SBOM (phase 8.2), release-notes template (8.7), and docs-site auto-deploy (8.8) still pending.
+- WebSocket ping frames (9.8), ALB migration (9.9), and application-level heartbeat (9.10) pending — sessions through AWS Classic ELBs may still need manual reconnection every 60 minutes.
