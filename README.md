@@ -6,8 +6,15 @@
   <p align="center">
     <a href="https://github.com/agenttier/agenttier/actions"><img src="https://github.com/agenttier/agenttier/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
     <a href="https://github.com/agenttier/agenttier/releases"><img src="https://img.shields.io/github/v/release/agenttier/agenttier" alt="Release"></a>
+    <a href="https://pypi.org/project/agenttier/"><img src="https://img.shields.io/pypi/v/agenttier.svg" alt="PyPI"></a>
     <a href="https://goreportcard.com/report/github.com/agenttier/agenttier"><img src="https://goreportcard.com/badge/github.com/agenttier/agenttier" alt="Go Report Card"></a>
     <a href="LICENSE"><img src="https://img.shields.io/badge/License-Apache%202.0-blue.svg" alt="License"></a>
+  </p>
+  <p align="center">
+    <a href="https://agenttier.github.io/agenttier/"><strong>Documentation</strong></a> ·
+    <a href="https://agenttier.github.io/agenttier/quickstart/">Quickstart</a> ·
+    <a href="https://agenttier.github.io/agenttier/sdk/">SDK</a> ·
+    <a href="https://github.com/agenttier/agenttier/releases/latest">Releases</a>
   </p>
 </p>
 
