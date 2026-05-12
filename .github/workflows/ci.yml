@@ -91,6 +91,21 @@ jobs:
         working-directory: python-sdk
         run: mypy src/agenttier/
 
+  # Build the docs site on every PR to catch broken nav entries, missing
+  # pages, or dead internal links before they land on main.
+  docs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install MkDocs
+        run: pip install mkdocs mkdocs-material
+      - name: Build site
+        working-directory: docs
+        run: mkdocs build --strict --site-dir /tmp/site
+
   # Security posture checks. These jobs are advisory: a noisy scanner
   # should not permanently block development. Where a finding matters
   # we promote it to the blocking lint/test jobs instead.

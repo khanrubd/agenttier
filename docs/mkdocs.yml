@@ -1,44 +1,62 @@
-site_name: AgentTier Documentation
-site_url: https://docs.agenttier.io
+site_name: AgentTier
+site_description: Kubernetes-native platform for isolated, persistent AI agent sandboxes.
+site_url: https://agenttier.github.io/agenttier/
 repo_url: https://github.com/agenttier/agenttier
 repo_name: agenttier/agenttier
+edit_uri: edit/main/docs/docs/
 
 theme:
   name: material
   palette:
-    scheme: slate
-    primary: indigo
-    accent: indigo
+    - scheme: default
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - scheme: slate
+      primary: deep purple
+      accent: deep purple
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
   features:
     - navigation.tabs
     - navigation.sections
+    - navigation.top
     - content.code.copy
+    - content.action.edit
+    - search.highlight
+    - search.suggest
 
 nav:
   - Home: index.md
-  - Getting Started:
-    - Quickstart: quickstart.md
-    - Installation: installation.md
+  - Quickstart: quickstart.md
+  - Installation: installation.md
   - User Guide:
     - Templates: templates.md
     - Governance: governance.md
-    - Security: security.md
+    - Port Forwarding: port-forwarding.md
   - Reference:
     - CLI: cli.md
     - Python SDK: sdk.md
-    - REST API: api.md
   - Operations:
-    - Observability: observability.md
+    - Verifying images: verifying-images.md
     - Troubleshooting: troubleshooting.md
-    - Upgrade: upgrade.md
 
 markdown_extensions:
   - pymdownx.highlight
-  - pymdownx.superfences:
-      custom_fences:
-        - name: mermaid
-          class: mermaid
-          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
   - admonition
+  - attr_list
+  - md_in_html
   - toc:
       permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/agenttier/agenttier

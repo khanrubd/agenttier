@@ -138,7 +138,7 @@ Install from the public Helm chart and container images at `ghcr.io/agenttier/*`
 
 ```bash
 # 1. Add the AgentTier Helm repo and refresh
-helm repo add agenttier https://agenttier.github.io/agenttier
+helm repo add agenttier https://agenttier.github.io/agenttier/charts
 helm repo update
 
 # 2. Install the chart (CRDs are bundled)
@@ -163,6 +163,9 @@ kubectl get sandboxes
 # 5. Open a terminal
 kubectl exec -it my-sandbox-pod -c sandbox -- /bin/bash
 ```
+
+> Docs site: **https://agenttier.github.io/agenttier/**
+> Pre-v0.2.0 users can still `helm repo add` at `https://agenttier.github.io/agenttier` (root) — both paths resolve to the same charts.
 
 ## Sandbox Lifecycle
 

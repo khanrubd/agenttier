@@ -163,6 +163,18 @@ jobs:
             cd /tmp/pages
           fi
 
+          # Charts live under /charts/ so the root of gh-pages is free for
+          # the MkDocs site. Old consumers of the legacy root-level repo URL
+          # continue to work because we keep the root-level index.yaml too
+          # (the release-docs job replaces the site but preserves the chart
+          # assets).
+          mkdir -p charts
+          cp /tmp/charts/*.tgz charts/
+          helm repo index charts --url "https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}/charts"
+
+          # Also publish a copy at the old root path so existing users don't
+          # break. Remove this block once the docs site migration is
+          # announced (task 8.8).
           cp /tmp/charts/*.tgz .
           helm repo index . --url "https://${GITHUB_REPOSITORY_OWNER}.github.io/${GITHUB_REPOSITORY#*/}"
 
@@ -178,7 +190,79 @@ jobs:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   # ------------------------------------------------------------------
-  # Build CLI binaries for the five most-used platforms, SHA256-sum
+  # Build the MkDocs site and deploy to gh-pages, preserving the
+  # chart tarballs + index.yaml at the paths release-helm publishes.
+  # Must run after release-helm because both jobs write to gh-pages.
+  # ------------------------------------------------------------------
+  release-docs:
+    runs-on: ubuntu-latest
+    needs: release-helm
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - name: Install MkDocs
+        run: pip install mkdocs mkdocs-material
+      - name: Build site
+        working-directory: docs
+        run: mkdocs build --strict --site-dir /tmp/site
+      - name: Deploy to gh-pages
+        run: |
+          git config --global user.name "github-actions[bot]"
+          git config --global user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git fetch origin gh-pages:gh-pages
+          git worktree add /tmp/pages gh-pages
+          cd /tmp/pages
+
+          # Preserve every file that belongs to Helm — chart tarballs at
+          # the root (for backward compatibility) and under /charts/, plus
+          # both index.yaml locations.
+          mkdir -p /tmp/preserved/charts
+          cp charts/*.tgz /tmp/preserved/charts/ 2>/dev/null || true
+          cp charts/index.yaml /tmp/preserved/charts/ 2>/dev/null || true
+          cp *.tgz /tmp/preserved/ 2>/dev/null || true
+          cp index.yaml /tmp/preserved/legacy-index.yaml 2>/dev/null || true
+
+          # Wipe everything else (stale docs files) and replace with the
+          # freshly-built site.
+          find . -maxdepth 1 \
+            -not -name '.' \
+            -not -name '.git' \
+            -not -name 'charts' \
+            -exec rm -rf {} + 2>/dev/null || true
+          rm -rf charts
+          cp -r /tmp/site/. .
+
+          # Mkdocs Material output includes asset paths starting with
+          # underscore directories (`_mkdocs/`, `assets/`, etc.). GitHub
+          # Pages runs Jekyll by default and hides anything starting with
+          # `_`, which would break search + theme assets. The `.nojekyll`
+          # marker disables that.
+          touch .nojekyll
+
+          # Restore the Helm bits. The mkdocs build may have written its
+          # own index.yaml; we do not let it clobber the Helm one.
+          mkdir -p charts
+          cp /tmp/preserved/charts/*.tgz charts/ 2>/dev/null || true
+          cp /tmp/preserved/charts/index.yaml charts/ 2>/dev/null || true
+          cp /tmp/preserved/*.tgz . 2>/dev/null || true
+          if [ -f /tmp/preserved/legacy-index.yaml ]; then
+            cp /tmp/preserved/legacy-index.yaml index.yaml
+          fi
+
+          git add -A
+          if git diff --cached --quiet; then
+            echo "No docs changes."
+            exit 0
+          fi
+          git commit -m "Publish docs for ${GITHUB_REF#refs/tags/}"
+          git push origin HEAD:gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
   # them, and attach everything to the GitHub Release.
   # ------------------------------------------------------------------
   release-cli:
