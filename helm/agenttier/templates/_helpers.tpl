@@ -8,13 +8,22 @@ SPDX-License-Identifier: Apache-2.0
 {{- default .Chart.Name .Values.nameOverride | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
-{{/* Fullname */}}
+{{/* Fullname
+
+Use the release name when it already contains the chart name (the documented
+install path `helm install agenttier agenttier/agenttier`), otherwise
+concatenate release name and chart name so multiple releases in the same
+cluster don't collide. Mirrors the standard Bitnami helper. */}}
 {{- define "agenttier.fullname" -}}
 {{- if .Values.fullnameOverride }}
 {{- .Values.fullnameOverride | trunc 63 | trimSuffix "-" }}
 {{- else }}
 {{- $name := default .Chart.Name .Values.nameOverride }}
+{{- if contains $name .Release.Name }}
+{{- .Release.Name | trunc 63 | trimSuffix "-" }}
+{{- else }}
 {{- printf "%s-%s" .Release.Name $name | trunc 63 | trimSuffix "-" }}
+{{- end }}
 {{- end }}
 {{- end }}
 
@@ -52,7 +61,12 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s:%s" .Values.webui.image.repository (default .Chart.AppVersion .Values.webui.image.tag) }}
 {{- end }}
 
-{{/* Service account name */}}
+{{/* Service account name
+
+Shared by the controller and router deployments (both need the same
+sandbox / pod / pvc / service / ingress / configmap permissions granted by
+the cluster role). Historically named `<fullname>-controller` for backward
+compat. */}}
 {{- define "agenttier.serviceAccountName" -}}
 {{- printf "%s-controller" (include "agenttier.fullname" .) }}
 {{- end }}

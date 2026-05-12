@@ -7,6 +7,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-05-12
+
+### Added
+
+- Server-side WebSocket keepalive: the Router now sends RFC 6455 control pings and application-level heartbeat messages every 30 seconds on every terminal session. Browser WebSocket connections survive the default 60-second AWS load-balancer idle timeout without disconnects (#9.8).
+- Client-side heartbeat watchdog: the Web UI tracks the server's 30-second heartbeat, surfaces a "stale" connection banner, and force-reconnects after 90 seconds of silence so a wedged Router pod is noticed immediately (#9.10).
+- Optional Ingress template for the Web UI (`helm/agenttier/templates/webui-ingress.yaml`) with AWS Load Balancer Controller defaults — `idle_timeout.timeout_seconds=4000`, `lb_cookie` stickiness, and `inbound-cidrs` support for IP allowlisting. Compatible with `ingress-nginx` and Traefik by overriding `optional.ingress.className` (#9.9).
+- File transfer REST API (`GET /api/v1/sandboxes/{id}/files/` to list, `GET/PUT .../files/{path}` to read and write). Drives sandbox-side `ls`/`stat`/`base64` through the existing SPDY exec bridge, enforces a 32 MiB per-request cap, and rejects shell-metachar path traversal (#7.4).
+- Optional image pre-pull DaemonSet (`helm/agenttier/templates/image-prepull-daemonset.yaml`). Gated on `optional.imagePrepull.enabled`; pre-pulls the configured sandbox image, the Claude Code image, and anything in `optional.imagePrepull.extraImages` on every node, cutting the cold-start image-pull leg from 15–30s to near zero (#9.2, #7.11).
+- Web UI: Settings page now polls warm pool status every 5s so ready/pending counts update live without a page refresh (QL.1).
+- Web UI: Create Sandbox dialog pre-selects `claude-code-bedrock` as the default template when available, with fallback to the first installed template (QL.2).
+
+### Changed
+
+- Router Deployment now runs as the `agenttier-controller` ServiceAccount. Previously the router ran as the `default` SA and could not create sandbox CRs in a clean install.
+- Helm chart `fullname` no longer stutters when release name equals chart name; resources render as `agenttier-controller`, `agenttier-router`, `agenttier-webui` instead of `agenttier-agenttier-…`.
+- `docs/docs/installation.md` — ALB Ingress section now pins the AWS Load Balancer Controller IAM policy to the upstream `main` snapshot (adds `elasticloadbalancing:DescribeListenerAttributes`, which older frozen policies lacked) and documents the zombie-CRD cleanup for pre-rename installs.
+- Warm pool ConfigMap moved to the install namespace as `agenttier-warmpool-config` (previously hardcoded to the legacy `agentloft-warmpool-config`).
+
+### Fixed
+
+- `helm/agenttier/templates/NOTES.txt` no longer crashes when ingress is enabled without TLS (`index ... 0` on an empty slice).
+
 ## [0.1.1] — 2026-05-12
 
 ### SDK (0.1.1)

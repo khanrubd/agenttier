@@ -22,7 +22,18 @@ export default function CreateSandboxDialog({ open, onClose, onCreated }: Props)
 
   useEffect(() => {
     if (open) {
-      fetchTemplates().then(setTemplates).catch(() => {});
+      fetchTemplates().then(list => {
+        setTemplates(list);
+        // Preselect `claude-code-bedrock` if present (the flagship reference
+        // template) so the common case is one click instead of two; otherwise
+        // fall back to the first template the Router returned.
+        setTemplate(prev => {
+          if (prev) return prev;
+          const preferred = list.find(t => t.name === 'claude-code-bedrock');
+          if (preferred) return preferred.name;
+          return list[0]?.name ?? '';
+        });
+      }).catch(() => {});
     }
   }, [open]);
 

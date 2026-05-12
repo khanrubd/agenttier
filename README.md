@@ -73,9 +73,10 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 
 - **Browser terminal** — Full PTY over WebSocket with xterm.js, resize, ANSI colors, and reconnection after transient drops.
 - **Session reconnection** — 30s default grace window lets network blips and laptop sleeps reconnect without losing shell state.
+- **Keepalive pings and heartbeats** — The Router sends RFC 6455 WebSocket control pings and application-level heartbeat messages every 30 seconds, so long idle terminal sessions survive behind 60-second load balancer timeouts without disconnects. The browser tracks heartbeat staleness and auto-reconnects after 90 seconds of silence.
 - **Non-interactive exec API** — `POST /api/v1/sandboxes/{id}/exec` for request-response and fire-and-forget commands.
 - **Port forwarding** — Expose any container port via `POST /api/v1/sandboxes/{id}/ports`; the controller creates a Service (and optional Ingress when a preview domain is configured), the Router provides an authenticated in-cluster reverse proxy at `/api/v1/sandboxes/{id}/preview/{port}/...`, and exposed ports show up both in the Web UI sandbox card and in `Sandbox.status.forwardedPorts`.
-- **File transfer API** — Upload, download, and list files in the sandbox workspace through the REST API.
+- **File transfer API** — `GET /api/v1/sandboxes/{id}/files/` lists a directory, `GET .../files/{path}` streams a file, and `PUT .../files/{path}` writes one. 32 MiB per request; drives the existing exec bridge so it works on any cluster without extra infra.
 
 ### Multi-tenancy and governance
 
@@ -103,7 +104,7 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 
 - **Startup duration logging** — Per-sandbox `startupDurationMs` in controller logs and Kubernetes events for regression tracking.
 - **Immediate PVC binding** — Warm pool uses `gp3-immediate` so EBS volumes are provisioned ahead of pod scheduling.
-- **Image pre-pull** — Optional DaemonSet pre-caches sandbox images on every node to eliminate first-pull latency.
+- **Image pre-pull** — Optional DaemonSet pre-caches the configured sandbox and Claude Code images (plus any extras you list) on every node, eliminating the 15–30s first-pull latency on cold sandbox starts.
 
 ### Observability
 
@@ -114,6 +115,7 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 ### Deployment and operations
 
 - **Single Helm chart** — One `helm install` deploys controller, router, web UI, CRDs, RBAC, and optional add-ons (gVisor, ServiceMonitor, PDB, image pre-pull, OTel Collector).
+- **AWS ALB ready** — Optional Ingress template with sensible AWS Load Balancer Controller defaults (`idle_timeout.timeout_seconds=4000`, sticky sessions, IP allowlist support) so the Web UI and WebSocket terminals survive long idle sessions. Compatible with `ingress-nginx` and Traefik by overriding `optional.ingress.className`.
 - **Terraform EKS module** — Opinionated VPC + EKS + managed node groups + gVisor nodes + EBS CSI + ALB controller + IRSA + Helm release for one-command provisioning.
 - **Multi-cluster ready** — Works on EKS, GKE, AKS, and self-managed Kubernetes 1.27+ with any CNI that supports NetworkPolicy.
 - **Leader-elected controller** — Multi-replica HA with Lease-based election; degraded mode for non-critical dependency failures.
@@ -262,14 +264,18 @@ Key settings:
 
 ## Troubleshooting
 
-### Terminal disconnects every 60 seconds
-The AWS Classic Load Balancer has a default idle timeout of 60 seconds. Increase it:
-```bash
-aws elb modify-load-balancer-attributes \
-  --load-balancer-name <elb-name> \
-  --load-balancer-attributes '{"ConnectionSettings":{"IdleTimeout":3600}}'
-```
-Or use the Kubernetes annotation: `service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout: "3600"`
+### Terminal disconnects after long idle periods
+The Router already sends RFC 6455 WebSocket control pings and application-level heartbeat messages every 30 seconds, so any load balancer with an idle timeout ≥ 60s will see traffic in both directions and keep the connection open. If you still see drops:
+
+- On **AWS ALB**, the chart's `optional.ingress.annotations` sets `idle_timeout.timeout_seconds=4000` by default. Verify it's applied: `kubectl get ingress agenttier-webui -n agenttier -o yaml`.
+- On **AWS Classic ELB**, set the annotation
+  `service.beta.kubernetes.io/aws-load-balancer-connection-idle-timeout: "3600"` on the web-ui Service, or run:
+  ```bash
+  aws elb modify-load-balancer-attributes \
+    --load-balancer-name <elb-name> \
+    --load-balancer-attributes '{"ConnectionSettings":{"IdleTimeout":3600}}'
+  ```
+- With multi-replica routers, enable sticky sessions on the target group so a reconnecting browser lands on the same pod. The chart's default ALB annotations already include `stickiness.enabled=true`.
 
 ### Terminal shows garbled text / line wrapping issues
 Ensure the Router image includes the `Tty: true` fix in StreamOptions. Run `stty size` in the terminal — it should show your actual terminal dimensions (e.g., `40 120`), not `0 0`.

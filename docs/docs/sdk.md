@@ -273,7 +273,7 @@ For a pinned install in your own project, prefer an explicit range:
 ```toml
 # pyproject.toml
 [project]
-dependencies = ["agenttier>=0.1.1,<0.2"]
+dependencies = ["agenttier>=0.2.0,<0.3"]
 ```
 
 ## Upgrading the SDK

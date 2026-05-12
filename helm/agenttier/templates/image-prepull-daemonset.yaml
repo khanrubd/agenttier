@@ -1,0 +1,99 @@
+{{- /*
+Copyright 2024 AgentTier Authors.
+SPDX-License-Identifier: Apache-2.0
+
+Optional DaemonSet that pre-pulls sandbox images onto every node so the first
+sandbox on a given node starts in ~1-2s (pod schedule + PVC attach) instead
+of 15-30s (image pull).
+
+How it works:
+  * One container per image that runs `true` and exits immediately. The node
+    still has to pull the image before kubelet can start the container, which
+    is the entire point.
+  * `restartPolicy: Always` (implicit for DaemonSets) keeps the containers in
+    `CrashLoopBackOff` between restarts. That's fine — kubelet retries with
+    an exponentially growing backoff and the images stay cached in the
+    containerd image store either way.
+  * Resource requests are near zero. We use `tini` from the sandbox image
+    (`sleep infinity`) if you prefer a non-crashing variant; switch
+    `command` below to `["sleep", "infinity"]` if the CrashLoopBackOff
+    noise bothers monitoring dashboards.
+
+Images prepulled:
+  * The reference sandbox images baked into `defaults.sandbox.image` and
+    `defaults.claudeCode.image`.
+  * Anything extra listed under `optional.imagePrepull.extraImages`.
+
+Scope:
+  * Runs on every Linux node by default. Override via `optional.imagePrepull.nodeSelector`.
+  * Honors the chart-wide `tolerations` value so pools with taints still pre-warm.
+*/ -}}
+{{- if .Values.optional.imagePrepull.enabled }}
+{{- $images := list .Values.defaults.sandbox.image }}
+{{- if .Values.defaults.claudeCode.image }}
+{{- $images = append $images .Values.defaults.claudeCode.image }}
+{{- end }}
+{{- range .Values.optional.imagePrepull.extraImages }}
+{{- $images = append $images . }}
+{{- end }}
+{{- $uniqImages := $images | uniq | compact }}
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: {{ include "agenttier.fullname" . }}-image-prepull
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+    app.kubernetes.io/component: image-prepull
+spec:
+  selector:
+    matchLabels:
+      {{- include "agenttier.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: image-prepull
+  template:
+    metadata:
+      labels:
+        {{- include "agenttier.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: image-prepull
+    spec:
+      terminationGracePeriodSeconds: 0
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with (default .Values.nodeSelector .Values.optional.imagePrepull.nodeSelector) }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # `sleep infinity` via Alpine keeps each prepull container running so
+      # the kubelet doesn't thrash them in CrashLoopBackOff. We fetch Alpine
+      # from ECR Public to avoid Docker Hub rate limits.
+      initContainers:
+        {{- range $i, $img := $uniqImages }}
+        - name: prepull-{{ $i }}
+          image: {{ $img | quote }}
+          imagePullPolicy: IfNotPresent
+          command: ["/bin/sh", "-c", "echo 'prepulled {{ $img }}' && exit 0"]
+          resources:
+            requests:
+              cpu: 1m
+              memory: 8Mi
+            limits:
+              cpu: 10m
+              memory: 16Mi
+        {{- end }}
+      containers:
+        - name: idle
+          image: public.ecr.aws/docker/library/alpine:3.20
+          command: ["/bin/sh", "-c", "sleep infinity"]
+          resources:
+            requests:
+              cpu: 1m
+              memory: 8Mi
+            limits:
+              cpu: 10m
+              memory: 16Mi
+{{- end }}

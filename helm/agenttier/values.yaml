@@ -83,7 +83,7 @@ defaults:
   sandbox:
     # Defaults to the chart's appVersion when the tag is omitted at render
     # time. Users can override to pin a specific image.
-    image: ghcr.io/agenttier/sandbox-general:v0.1.0
+    image: ghcr.io/agenttier/sandbox-general:v0.2.0
     resources:
       requests:
         cpu: 500m
@@ -98,7 +98,7 @@ defaults:
     timeout: 8h
     idleTimeout: 1h
   claudeCode:
-    image: ghcr.io/agenttier/sandbox-claude-code:v0.1.0
+    image: ghcr.io/agenttier/sandbox-claude-code:v0.2.0
     # IRSA role ARN for Bedrock access (annotated on sandbox ServiceAccount)
     irsaRoleArn: ""
 
@@ -136,19 +136,58 @@ observability:
 # --- Optional Components ---
 optional:
   # Image pre-pull DaemonSet
+  #
+  # When enabled the chart creates a DaemonSet that pre-pulls sandbox images
+  # onto every node. Each node's kubelet fetches the images once on startup
+  # and caches them in the container runtime, so the first sandbox on a node
+  # skips the 15-30s image-pull leg and starts in ~1-2s.
+  #
+  # The sandbox image listed in `defaults.sandbox.image` and the Claude Code
+  # image in `defaults.claudeCode.image` are pre-pulled automatically; add
+  # any custom template images to `extraImages`.
   imagePrepull:
     enabled: false
     # Additional images to pre-pull (template images are auto-detected)
     extraImages: []
+    # Optional nodeSelector for the DaemonSet. Defaults to the chart-wide
+    # `nodeSelector` value. Set this if you want to pre-pull only on a
+    # dedicated sandbox node pool.
+    nodeSelector: {}
   # PodDisruptionBudget for controller and router
   pdb:
     enabled: true
     minAvailable: 1
   # Ingress for Web UI
+  #
+  # When enabled the chart creates a single Ingress routing `/`, `/api/`, and
+  # `/ws/` to the web-ui Service (which already terminates via nginx). The
+  # default annotations below are tuned for the AWS Load Balancer Controller
+  # (ALB). Set `className` to `alb`, `nginx`, or `traefik` depending on your
+  # ingress controller.
+  #
+  # Important for WebSocket terminals:
+  #   * `idle_timeout.timeout_seconds` must be well above your longest idle
+  #     terminal session. We default to 4000s. The Router also sends
+  #     RFC 6455 control pings + application-level heartbeats every 30s to
+  #     keep middleboxes from considering the connection idle.
+  #   * Sticky sessions keep a reconnecting browser on the same Router pod
+  #     so the in-memory session reattaches cleanly.
   ingress:
     enabled: false
-    className: ""
-    annotations: {}
+    # Ingress class name: `alb`, `nginx`, `traefik`, ...
+    className: "alb"
+    # Annotations merged onto the Ingress. These defaults assume the AWS Load
+    # Balancer Controller is installed.
+    annotations:
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80}]'
+      alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=4000
+      alb.ingress.kubernetes.io/target-group-attributes: stickiness.enabled=true,stickiness.type=lb_cookie,stickiness.lb_cookie.duration_seconds=3600
+      # Uncomment to serve HTTPS with an ACM certificate and force HTTP→HTTPS.
+      # alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+      # alb.ingress.kubernetes.io/ssl-redirect: '443'
+      # alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:111122223333:certificate/xxxxxxxx
     hosts:
       - host: agenttier.local
         paths:

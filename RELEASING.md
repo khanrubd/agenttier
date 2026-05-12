@@ -40,10 +40,11 @@ before you push the tag.
 - [ ] `cd docs && mkdocs build --strict` — no broken nav or missing pages
 - [ ] New or changed features from this release have docs pages or README blurbs
 
-### Versioning (all three must match)
+### Versioning (all four must match)
 
 - [ ] `helm/agenttier/Chart.yaml` — `version` and `appVersion` updated
 - [ ] `python-sdk/pyproject.toml` — `version` updated
+- [ ] `python-sdk/src/agenttier/_version.py` — `__version__` constant updated (this is imported by the SDK's runtime and `User-Agent` header; hatchling reads pyproject.toml separately)
 - [ ] (Go: version is set via ldflags in `make build`; no source change)
 
 ### Changelog and README

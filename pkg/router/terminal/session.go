@@ -17,13 +17,31 @@ limitations under the License.
 package terminal
 
 import (
+	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/gorilla/websocket"
 	"k8s.io/client-go/tools/remotecommand"
+)
+
+// Keepalive tuning.
+//
+//   - KeepaliveInterval: how often we send a WS control ping and an app-level
+//     heartbeat. 30s is well below the 60s default Classic ELB idle timeout
+//     and the 60s default ALB idle timeout, so any correctly-configured LB
+//     will see traffic before timing out.
+//   - PongWait: how long we wait for a pong after a ping before considering
+//     the socket dead. On timeout the read side fails and the session closes.
+//   - WriteWait: maximum time a write operation may block. Keeps a slow
+//     client from blocking the exec stream indefinitely.
+const (
+	KeepaliveInterval = 30 * time.Second
+	PongWait          = 70 * time.Second
+	WriteWait         = 10 * time.Second
 )
 
 // Session represents an active terminal session bridging a WebSocket to a K8s exec stream.
@@ -125,12 +143,75 @@ func (s *Session) Write(p []byte) (int, error) {
 	}
 
 	s.BytesOut += int64(len(p))
+	_ = s.Conn.SetWriteDeadline(time.Now().Add(WriteWait))
 	err = s.Conn.WriteMessage(websocket.TextMessage, data)
 	if err != nil {
 		return 0, err
 	}
 
 	return len(p), nil
+}
+
+// StartKeepalive launches a goroutine that sends RFC 6455 ping control frames
+// and application-level heartbeat messages on KeepaliveInterval. The goroutine
+// exits when ctx is done or the session is closed.
+//
+// It also installs a pong handler that resets the read deadline. Callers
+// should set an initial read deadline (PongWait) before invoking the bridge so
+// that a peer that stops responding to pings is detected promptly.
+func (s *Session) StartKeepalive(ctx context.Context, logger *slog.Logger) {
+	// Reset read deadline on every pong the client sends in response to our
+	// control-frame pings. The deadline is enforced by the blocked ReadMessage
+	// call inside Session.Read.
+	s.Conn.SetPongHandler(func(string) error {
+		return s.Conn.SetReadDeadline(time.Now().Add(PongWait))
+	})
+	_ = s.Conn.SetReadDeadline(time.Now().Add(PongWait))
+
+	go func() {
+		ticker := time.NewTicker(KeepaliveInterval)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := s.writePingAndHeartbeat(); err != nil {
+					if logger != nil {
+						logger.Debug("keepalive write failed, ending session",
+							"sessionId", s.ID, "error", err)
+					}
+					s.Close()
+					return
+				}
+			}
+		}
+	}()
+}
+
+// writePingAndHeartbeat sends a WebSocket control ping (detected by proxies
+// and load balancers) and an application-level heartbeat message (consumed by
+// the client to detect a wedged server).
+func (s *Session) writePingAndHeartbeat() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return io.ErrClosedPipe
+	}
+
+	deadline := time.Now().Add(WriteWait)
+	if err := s.Conn.WriteControl(websocket.PingMessage, nil, deadline); err != nil {
+		return err
+	}
+
+	hb, err := MarshalHeartbeat(time.Now().UnixMilli())
+	if err != nil {
+		return err
+	}
+	_ = s.Conn.SetWriteDeadline(deadline)
+	return s.Conn.WriteMessage(websocket.TextMessage, hb)
 }
 
 // Next implements remotecommand.TerminalSizeQueue.
@@ -191,6 +272,7 @@ func (s *Session) Reconnect(conn *websocket.Conn) {
 	s.Conn = conn
 	s.disconnectedAt = time.Time{}
 	s.closed = false
+	_ = s.Conn.SetReadDeadline(time.Now().Add(PongWait))
 }
 
 func (s *Session) updateActivity() {

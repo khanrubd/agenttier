@@ -46,8 +46,8 @@ const (
 	LabelTemplate = "agenttier.io/pool-template"
 
 	// ConfigMap that stores the warm pool configuration
-	ConfigMapName      = "agentloft-warmpool-config"
-	ConfigMapNamespace = "agentloft"
+	ConfigMapName      = "agenttier-warmpool-config"
+	ConfigMapNamespace = "agenttier"
 
 	// StorageClass for warm pool PVCs (Immediate binding)
 	PoolStorageClass = "gp3-immediate"

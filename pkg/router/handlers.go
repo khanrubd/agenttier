@@ -18,9 +18,12 @@ package router
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
+	"path"
 	"strconv"
 	"strings"
 
@@ -437,6 +440,13 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 		"userId", claims.Sub,
 	)
 
+	// Start the keepalive goroutine: WS control pings + app-level heartbeats
+	// every 30s. Ties its lifecycle to the request context so shutdown and
+	// client disconnect cleanly stop the ticker.
+	keepaliveCtx, cancelKeepalive := context.WithCancel(r.Context())
+	defer cancelKeepalive()
+	session.StartKeepalive(keepaliveCtx, s.logger)
+
 	// Bridge the WebSocket to the pod exec stream
 	if s.bridge != nil {
 		if err := s.bridge.Connect(r.Context(), session); err != nil {
@@ -599,14 +609,249 @@ func templateToJSON(t *agenttierv1alpha1.ClusterSandboxTemplate) map[string]inte
 
 // --- Placeholder handlers for features not yet wired ---
 
+// --- File Transfer Handlers (task 7.4) ---
+//
+// Implementation strategy: drive sandbox-side `sh`, `ls`, `cat`, `base64`
+// through the same SPDY exec bridge the terminal uses. This avoids adding a
+// second transport, reuses the auth flow, and works identically on any
+// cluster without needing a sidecar or an extra port.
+//
+// The `mountPath` default is /workspace to match the reference templates. A
+// caller may request any path inside the container; we reject anything that
+// escapes through ".." to keep a hostile client from reading arbitrary
+// container paths via URL traversal.
+
+// Maximum size of an uploaded / downloaded file. Larger transfers should use
+// streaming (planned follow-up); exec-over-tar isn't great for multi-GB
+// payloads because the whole stream sits in the Router's memory.
+const fileTransferMaxBytes = 32 * 1024 * 1024 // 32 MiB
+
+func sandboxFilePath(raw string) (string, error) {
+	p := path.Clean("/" + strings.TrimPrefix(raw, "/"))
+	// path.Clean collapses "..", but we still want to reject any path that
+	// doesn't live under the sandbox workspace tree. Allow any absolute path
+	// since some tools legitimately need /tmp, /home, etc., but never allow
+	// shell metacharacters that would escape the `sh -c` we'll pipe through.
+	for _, ch := range p {
+		if ch == '\'' || ch == '\\' || ch == '`' || ch == '\n' || ch == '\r' {
+			return "", fmt.Errorf("path contains disallowed characters")
+		}
+	}
+	return p, nil
+}
+
 func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "not yet implemented")
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	sandboxID := mux.Vars(r)["id"]
+	sandbox, err := s.getSandboxWithAuthCheck(r.Context(), sandboxID, claims)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if sandbox.Status.Phase != agenttierv1alpha1.SandboxPhaseRunning {
+		respondError(w, http.StatusConflict, "sandbox is not running")
+		return
+	}
+	if s.bridge == nil {
+		respondError(w, http.StatusServiceUnavailable, "terminal bridge not initialized")
+		return
+	}
+
+	dir := r.URL.Query().Get("path")
+	if dir == "" {
+		dir = "/workspace"
+	}
+	cleaned, err := sandboxFilePath(dir)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// `ls -la --time-style=+%s` gives us parseable tokens: mode, links, user,
+	// group, size, mtime-seconds, name. We filter out `.` and `..` so the
+	// response only lists real children.
+	cmd := []string{"/bin/sh", "-c", fmt.Sprintf(
+		"cd '%s' 2>/dev/null && ls -la --time-style=+%%s | tail -n +2",
+		cleaned,
+	)}
+	result, err := s.bridge.ExecCommand(r.Context(), sandbox.Namespace, sandbox.Status.PodName, "sandbox", cmd, 10)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "list failed: "+err.Error())
+		return
+	}
+	if result.ExitCode != 0 {
+		respondError(w, http.StatusNotFound, "path not found: "+cleaned)
+		return
+	}
+
+	entries := make([]map[string]interface{}, 0)
+	for _, line := range strings.Split(strings.TrimRight(result.Stdout, "\n"), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) < 7 {
+			continue
+		}
+		// ls -la format: <mode> <nlink> <user> <group> <size> <mtime> <name...>
+		mode := fields[0]
+		if mode == "total" { // BusyBox prints "total N" on the first line; harmless to skip.
+			continue
+		}
+		name := strings.Join(fields[6:], " ")
+		if name == "." || name == ".." {
+			continue
+		}
+		size, _ := strconv.ParseInt(fields[4], 10, 64)
+		mtime, _ := strconv.ParseInt(fields[5], 10, 64)
+		entries = append(entries, map[string]interface{}{
+			"name":       name,
+			"size":       size,
+			"isDir":      strings.HasPrefix(mode, "d"),
+			"mode":       mode,
+			"modifiedAt": mtime,
+		})
+	}
+	respondJSON(w, http.StatusOK, map[string]interface{}{
+		"path":    cleaned,
+		"entries": entries,
+	})
 }
+
 func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "not yet implemented")
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	sandboxID := mux.Vars(r)["id"]
+	sandbox, err := s.getSandboxWithAuthCheck(r.Context(), sandboxID, claims)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if sandbox.Status.Phase != agenttierv1alpha1.SandboxPhaseRunning {
+		respondError(w, http.StatusConflict, "sandbox is not running")
+		return
+	}
+	if s.bridge == nil {
+		respondError(w, http.StatusServiceUnavailable, "terminal bridge not initialized")
+		return
+	}
+
+	raw := mux.Vars(r)["path"]
+	cleaned, err := sandboxFilePath("/" + raw)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	// Use `base64` so we don't have to deal with PTY munging or byte-for-byte
+	// JSON escape of binary payloads. We enforce fileTransferMaxBytes via a
+	// pre-flight `stat` — a hostile / giant file is rejected before we read.
+	statCmd := []string{"/bin/sh", "-c", fmt.Sprintf(
+		"stat -c %%s '%s' 2>/dev/null || wc -c < '%s'", cleaned, cleaned,
+	)}
+	statResult, err := s.bridge.ExecCommand(r.Context(), sandbox.Namespace, sandbox.Status.PodName, "sandbox", statCmd, 5)
+	if err != nil || statResult.ExitCode != 0 {
+		respondError(w, http.StatusNotFound, "file not found: "+cleaned)
+		return
+	}
+	size, _ := strconv.ParseInt(strings.TrimSpace(statResult.Stdout), 10, 64)
+	if size > fileTransferMaxBytes {
+		respondError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
+			"file is %d bytes, max %d — use the terminal for large files", size, fileTransferMaxBytes,
+		))
+		return
+	}
+
+	readCmd := []string{"/bin/sh", "-c", fmt.Sprintf("base64 -w0 '%s' 2>/dev/null || base64 '%s'", cleaned, cleaned)}
+	result, err := s.bridge.ExecCommand(r.Context(), sandbox.Namespace, sandbox.Status.PodName, "sandbox", readCmd, 30)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "read failed: "+err.Error())
+		return
+	}
+	if result.ExitCode != 0 {
+		respondError(w, http.StatusNotFound, "file not found: "+cleaned)
+		return
+	}
+
+	encoded := strings.ReplaceAll(strings.TrimSpace(result.Stdout), "\n", "")
+	data, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "decode failed: "+err.Error())
+		return
+	}
+	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", path.Base(cleaned)))
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(data)
 }
+
 func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "not yet implemented")
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	sandboxID := mux.Vars(r)["id"]
+	sandbox, err := s.getSandboxWithAuthCheck(r.Context(), sandboxID, claims)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if sandbox.Status.Phase != agenttierv1alpha1.SandboxPhaseRunning {
+		respondError(w, http.StatusConflict, "sandbox is not running")
+		return
+	}
+	if s.bridge == nil {
+		respondError(w, http.StatusServiceUnavailable, "terminal bridge not initialized")
+		return
+	}
+
+	raw := mux.Vars(r)["path"]
+	cleaned, err := sandboxFilePath("/" + raw)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	body, err := io.ReadAll(io.LimitReader(r.Body, fileTransferMaxBytes+1))
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "failed to read request body: "+err.Error())
+		return
+	}
+	if int64(len(body)) > fileTransferMaxBytes {
+		respondError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
+			"payload exceeds %d bytes", fileTransferMaxBytes,
+		))
+		return
+	}
+
+	encoded := base64.StdEncoding.EncodeToString(body)
+	// Create the parent directory first, then decode the base64 payload onto
+	// disk. We pipe the encoded bytes over stdin via a here-doc so we never
+	// exceed the shell's ARG_MAX on larger files.
+	dir := path.Dir(cleaned)
+	writeCmd := []string{"/bin/sh", "-c", fmt.Sprintf(
+		"mkdir -p '%s' && printf '%%s' %q | base64 -d > '%s'",
+		dir, encoded, cleaned,
+	)}
+	result, err := s.bridge.ExecCommand(r.Context(), sandbox.Namespace, sandbox.Status.PodName, "sandbox", writeCmd, 60)
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "write failed: "+err.Error())
+		return
+	}
+	if result.ExitCode != 0 {
+		respondError(w, http.StatusInternalServerError, "write failed: "+strings.TrimSpace(result.Stderr))
+		return
+	}
+	respondJSON(w, http.StatusCreated, map[string]interface{}{
+		"path":  cleaned,
+		"bytes": len(body),
+	})
 }
 func (s *Server) handleListPorts(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r.Context())

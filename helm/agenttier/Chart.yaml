@@ -2,8 +2,8 @@ apiVersion: v2
 name: agenttier
 description: Enterprise-grade Kubernetes operator for isolated, persistent sandboxes — for humans and AI agents.
 type: application
-version: 0.1.1
-appVersion: "0.1.1"
+version: 0.2.0
+appVersion: "0.2.0"
 home: https://github.com/agenttier/agenttier
 sources:
   - https://github.com/agenttier/agenttier

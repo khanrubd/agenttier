@@ -29,10 +29,11 @@ const (
 	MessageTypePing   MessageType = "ping"
 
 	// Server → Client messages
-	MessageTypeOutput MessageType = "output"
-	MessageTypeError  MessageType = "error"
-	MessageTypeClose  MessageType = "close"
-	MessageTypePong   MessageType = "pong"
+	MessageTypeOutput    MessageType = "output"
+	MessageTypeError     MessageType = "error"
+	MessageTypeClose     MessageType = "close"
+	MessageTypePong      MessageType = "pong"
+	MessageTypeHeartbeat MessageType = "heartbeat"
 )
 
 // CloseReason defines why a terminal session was closed.
@@ -57,6 +58,14 @@ type WSMessage struct {
 	Reason  CloseReason `json:"reason,omitempty"`
 	Code    int         `json:"code,omitempty"`
 	Message string      `json:"message,omitempty"`
+	Ts      int64       `json:"ts,omitempty"` // Epoch millis for heartbeat/pong timestamps
+}
+
+// MarshalHeartbeat creates a heartbeat message with a current server timestamp.
+// Clients use this to detect a wedged server: if more than ~90s pass without a
+// heartbeat, the client should consider the connection stale and reconnect.
+func MarshalHeartbeat(tsMillis int64) ([]byte, error) {
+	return json.Marshal(WSMessage{Type: MessageTypeHeartbeat, Ts: tsMillis})
 }
 
 // MarshalInput creates an input message.

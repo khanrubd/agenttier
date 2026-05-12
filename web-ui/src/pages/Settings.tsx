@@ -3,10 +3,14 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { fetchWarmPoolStatus, setWarmPoolConfig, fetchTemplates, fetchCurrentUser } from '../api/client';
 import type { Template } from '../types';
 import GovernanceEditor from '../components/GovernanceEditor';
+
+// How often to refetch the live warm pool status. Matches the Dashboard's
+// polling cadence so counts stay in sync without hammering the Router.
+const WARM_POOL_POLL_INTERVAL_MS = 5000;
 
 export default function Settings() {
   const [warmPoolCount, setWarmPoolCount] = useState(0);
@@ -16,17 +20,40 @@ export default function Settings() {
   const [saving, setSaving] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
+  // Tracks whether the inputs have been initialised from the server so the
+  // polling refresh doesn't clobber user edits they haven't saved yet.
+  const initialisedRef = useRef(false);
 
   useEffect(() => {
     fetchTemplates().then(setTemplates).catch(() => {});
-    fetchWarmPoolStatus().then(s => {
-      setCurrentStatus(s);
-      setWarmPoolCount(s.desiredCount);
-      if (s.template) setWarmPoolTemplate(s.template);
-    }).catch(() => {});
     fetchCurrentUser()
       .then(u => setIsAdmin(Boolean(u.isAdmin)))
       .catch(() => setIsAdmin(false));
+
+    let cancelled = false;
+    const refresh = async () => {
+      try {
+        const s = await fetchWarmPoolStatus();
+        if (cancelled) return;
+        setCurrentStatus(s);
+        // Only seed the editable form fields on the first successful fetch.
+        // Subsequent refreshes keep the user's unsaved edits intact.
+        if (!initialisedRef.current) {
+          setWarmPoolCount(s.desiredCount);
+          if (s.template) setWarmPoolTemplate(s.template);
+          initialisedRef.current = true;
+        }
+      } catch {
+        // Transient fetch failures are silently ignored — the status panel
+        // will just keep showing the last known values until the next poll.
+      }
+    };
+    refresh();
+    const interval = setInterval(refresh, WARM_POOL_POLL_INTERVAL_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(interval);
+    };
   }, []);
 
   const handleSave = async () => {

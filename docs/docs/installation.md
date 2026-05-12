@@ -50,7 +50,7 @@ security:
 
 defaults:
   sandbox:
-    image: "ghcr.io/agenttier/sandbox-general:v0.1.1"
+    image: "ghcr.io/agenttier/sandbox-general:v0.2.0"
     resources:
       requests:
         cpu: "500m"
@@ -79,6 +79,24 @@ router:
 optional:
   imagePrepull:
     enabled: true
+  ingress:
+    enabled: true
+    className: alb
+    annotations:
+      alb.ingress.kubernetes.io/scheme: internet-facing
+      alb.ingress.kubernetes.io/target-type: ip
+      alb.ingress.kubernetes.io/listen-ports: '[{"HTTP":80},{"HTTPS":443}]'
+      alb.ingress.kubernetes.io/ssl-redirect: "443"
+      alb.ingress.kubernetes.io/certificate-arn: arn:aws:acm:us-east-1:111122223333:certificate/xxxx
+      alb.ingress.kubernetes.io/load-balancer-attributes: idle_timeout.timeout_seconds=4000
+      alb.ingress.kubernetes.io/target-group-attributes: stickiness.enabled=true,stickiness.type=lb_cookie,stickiness.lb_cookie.duration_seconds=3600
+    hosts:
+      - host: agenttier.example.com
+        paths:
+          - path: /
+            pathType: Prefix
+    tls:
+      - hosts: [agenttier.example.com]
   serviceMonitor:
     enabled: true   # requires Prometheus Operator
   podDisruptionBudget:
@@ -179,12 +197,88 @@ See the [CHANGELOG](https://github.com/agenttier/agenttier/blob/main/CHANGELOG.m
 ```bash
 helm uninstall agenttier --namespace agenttier
 kubectl delete namespace agenttier
+
 # CRDs are kept by default so your sandboxes survive a re-install.
 # Remove them explicitly if you want a clean slate:
-kubectl delete crd sandboxes.agenttier.io \
+kubectl delete crd \
+  sandboxes.agenttier.io \
   sandboxtemplates.agenttier.io \
   clustersandboxtemplates.agenttier.io
+
+# If you're upgrading from the pre-rename `agentloft.io` CRDs (rare), also
+# remove those — Helm won't touch them:
+kubectl delete crd \
+  sandboxes.agentloft.io \
+  sandboxtemplates.agentloft.io \
+  clustersandboxtemplates.agentloft.io 2>/dev/null || true
 ```
+
+## Exposing the Web UI on AWS with ALB
+
+For production on EKS, use the [AWS Load Balancer
+Controller](https://kubernetes-sigs.github.io/aws-load-balancer-controller/)
+and enable the chart's Ingress. ALB has native WebSocket support, better idle
+timeout controls, TLS termination at the edge, and cleaner integration with
+WAF, ACM, and Route 53 than the legacy Classic ELB.
+
+Prerequisites (one-time per cluster):
+
+```bash
+# 1. Download the latest IAM policy from upstream. The version pinned below
+#    works with AWS Load Balancer Controller v2.13+ (it includes the
+#    `elasticloadbalancing:DescribeListenerAttributes` permission that newer
+#    controllers require; older policy snapshots lack it and cause the
+#    controller to fail with "AccessDenied" when creating listener rules).
+curl -sSL -o alb-iam-policy.json \
+  https://raw.githubusercontent.com/kubernetes-sigs/aws-load-balancer-controller/main/docs/install/iam_policy.json
+
+aws iam create-policy --policy-name AWSLoadBalancerControllerIAMPolicy \
+  --policy-document file://alb-iam-policy.json
+
+# 2. Associate the cluster's OIDC provider with IAM (safe to re-run).
+aws eks describe-cluster --name <cluster> --query 'cluster.identity.oidc.issuer'
+
+# 3. Create an IRSA role for the controller's ServiceAccount.
+eksctl create iamserviceaccount \
+  --cluster <cluster> --namespace kube-system \
+  --name aws-load-balancer-controller \
+  --role-name AmazonEKSLoadBalancerControllerRole \
+  --attach-policy-arn=arn:aws:iam::<account>:policy/AWSLoadBalancerControllerIAMPolicy \
+  --override-existing-serviceaccounts --approve
+
+# 4. Install the controller.
+helm repo add eks https://aws.github.io/eks-charts
+helm repo update
+helm install aws-load-balancer-controller eks/aws-load-balancer-controller \
+  --namespace kube-system --set clusterName=<cluster> \
+  --set serviceAccount.create=false \
+  --set serviceAccount.name=aws-load-balancer-controller
+```
+
+If you don't use `eksctl`, do step 3 manually: create an IAM role whose trust
+policy federates to the cluster OIDC provider with `sub` =
+`system:serviceaccount:kube-system:aws-load-balancer-controller`, attach the
+policy, then annotate the ServiceAccount with
+`eks.amazonaws.com/role-arn=<role-arn>`.
+
+Then enable the chart's Ingress. The chart ships sensible defaults under
+`optional.ingress.annotations` for `idle_timeout.timeout_seconds=4000` and
+sticky sessions, so long-running terminal sessions stay alive without
+disconnects. Override `host` and optionally point `certificate-arn` at an ACM
+certificate to terminate TLS at the ALB:
+
+```bash
+helm upgrade --install agenttier agenttier/agenttier \
+  --namespace agenttier --create-namespace \
+  --set optional.ingress.enabled=true \
+  --set optional.ingress.hosts[0].host=agenttier.example.com \
+  --set optional.ingress.hosts[0].paths[0].path=/ \
+  --set optional.ingress.hosts[0].paths[0].pathType=Prefix
+```
+
+The Router additionally sends WebSocket control-frame pings and application
+heartbeats every 30 seconds, so even with the 60s ALB default the browser
+terminal survives long idle periods.
 
 ## Verifying released images
 

@@ -2,7 +2,12 @@
 
 Get the Web UI URL:
 {{- if .Values.optional.ingress.enabled }}
-  http{{ if (index .Values.optional.ingress.tls 0) }}s{{ end }}://{{ (index .Values.optional.ingress.hosts 0).host }}
+{{- $firstHost := (index .Values.optional.ingress.hosts 0).host }}
+{{- if gt (len .Values.optional.ingress.tls) 0 }}
+  https://{{ $firstHost }}
+{{- else }}
+  http://{{ $firstHost }}
+{{- end }}
 {{- else }}
   kubectl port-forward svc/{{ include "agenttier.fullname" . }}-webui {{ .Values.webui.service.port }}:{{ .Values.webui.service.port }}
   Then open: http://localhost:{{ .Values.webui.service.port }}

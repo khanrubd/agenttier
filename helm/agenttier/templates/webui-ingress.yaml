@@ -1,0 +1,55 @@
+{{- /*
+Copyright 2024 AgentTier Authors.
+SPDX-License-Identifier: Apache-2.0
+
+Optional Ingress for the Web UI. Enable via `optional.ingress.enabled=true`.
+
+The chart ships sensible defaults for the AWS Load Balancer Controller (ALB).
+To use ingress-nginx, Traefik, or another controller, set
+`optional.ingress.className` to your class name and override
+`optional.ingress.annotations` as needed.
+
+ALB notes:
+  * WebSocket terminals need a high idle timeout. We default to 4000s via the
+    `alb.ingress.kubernetes.io/load-balancer-attributes` annotation.
+  * Sticky sessions keep a reconnecting browser on the same Router pod. We
+    default to lb_cookie stickiness for 1h.
+  * When `tls` is populated the chart adds `listen-ports` for HTTP+HTTPS and an
+    HTTP→HTTPS redirect via the `ssl-redirect` annotation.
+*/ -}}
+{{- if .Values.optional.ingress.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: {{ include "agenttier.fullname" . }}-webui
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+    app.kubernetes.io/component: webui
+  annotations:
+    {{- with .Values.optional.ingress.annotations }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  {{- with .Values.optional.ingress.className }}
+  ingressClassName: {{ . }}
+  {{- end }}
+  {{- with .Values.optional.ingress.tls }}
+  tls:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
+  rules:
+    {{- range .Values.optional.ingress.hosts }}
+    - host: {{ .host | quote }}
+      http:
+        paths:
+          {{- range .paths }}
+          - path: {{ .path }}
+            pathType: {{ .pathType | default "Prefix" }}
+            backend:
+              service:
+                name: {{ include "agenttier.fullname" $ }}-webui
+                port:
+                  number: {{ $.Values.webui.service.port }}
+          {{- end }}
+    {{- end }}
+{{- end }}

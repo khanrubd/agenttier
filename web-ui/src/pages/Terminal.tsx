@@ -18,6 +18,16 @@ const WS_BASE = import.meta.env.VITE_WS_BASE_URL || (() => {
 
 const MAX_RECONNECT_ATTEMPTS = 5;
 const RECONNECT_INTERVAL_MS = 3000;
+// Client→server app-level ping; mirrors the 30s server-side WebSocket ping so
+// intermediaries see traffic in both directions. Browsers cannot send WS
+// control frames from JavaScript, so we use the existing app protocol.
+const CLIENT_PING_INTERVAL_MS = 30_000;
+// If no server heartbeat arrives in this window we treat the connection as
+// stale and force a reconnect. Set well above the server's 30s heartbeat
+// cadence to tolerate a single dropped message.
+const HEARTBEAT_STALE_MS = 90_000;
+// How often we poll lastHeartbeat to detect staleness.
+const HEARTBEAT_CHECK_INTERVAL_MS = 10_000;
 
 export default function Terminal() {
   const { id } = useParams<{ id: string }>();
@@ -27,13 +37,24 @@ export default function Terminal() {
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const reconnectAttemptsRef = useRef(0);
-  const [connectionState, setConnectionState] = useState<'connecting' | 'connected' | 'reconnecting' | 'lost'>('connecting');
+  const clientPingTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const heartbeatCheckTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const lastHeartbeatRef = useRef<number>(Date.now());
+  const [connectionState, setConnectionState] = useState<'connecting' | 'connected' | 'reconnecting' | 'stale' | 'lost'>('connecting');
 
   const connectWebSocket = useCallback(() => {
     if (!id) return;
     if (wsRef.current) {
       wsRef.current.onclose = null;
       wsRef.current.close();
+    }
+    if (clientPingTimerRef.current) {
+      clearInterval(clientPingTimerRef.current);
+      clientPingTimerRef.current = null;
+    }
+    if (heartbeatCheckTimerRef.current) {
+      clearInterval(heartbeatCheckTimerRef.current);
+      heartbeatCheckTimerRef.current = null;
     }
 
     const ws = new WebSocket(`${WS_BASE}/ws/terminal/${id}`);
@@ -42,11 +63,30 @@ export default function Terminal() {
     ws.onopen = () => {
       reconnectAttemptsRef.current = 0;
       setConnectionState('connected');
+      lastHeartbeatRef.current = Date.now();
       xtermRef.current?.write('\x1b[32mConnected.\x1b[0m\r\n');
       // Send initial resize
       if (xtermRef.current) {
         ws.send(JSON.stringify({ type: 'resize', cols: xtermRef.current.cols, rows: xtermRef.current.rows }));
       }
+      // Client → server app-level pings keep LB middleboxes seeing traffic in
+      // both directions and give the server a liveness signal from the client.
+      clientPingTimerRef.current = setInterval(() => {
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(JSON.stringify({ type: 'ping' }));
+        }
+      }, CLIENT_PING_INTERVAL_MS);
+      // Watchdog: if no server heartbeat arrives in HEARTBEAT_STALE_MS, assume
+      // the router is wedged and reconnect.
+      heartbeatCheckTimerRef.current = setInterval(() => {
+        if (Date.now() - lastHeartbeatRef.current > HEARTBEAT_STALE_MS) {
+          setConnectionState('stale');
+          // Force-close so the onclose handler kicks off the reconnect flow.
+          if (wsRef.current) {
+            wsRef.current.close();
+          }
+        }
+      }, HEARTBEAT_CHECK_INTERVAL_MS);
     };
 
     ws.onmessage = (event) => {
@@ -59,6 +99,9 @@ export default function Terminal() {
         } else if (msg.type === 'close') {
           xtermRef.current?.write(`\r\n\x1b[33m[Session closed: ${msg.reason}]\x1b[0m\r\n`);
           setConnectionState('lost');
+        } else if (msg.type === 'heartbeat' || msg.type === 'pong') {
+          // Reset the staleness timer on any server-originated liveness signal.
+          lastHeartbeatRef.current = Date.now();
         }
       } catch {
         xtermRef.current?.write(event.data);
@@ -66,6 +109,14 @@ export default function Terminal() {
     };
 
     ws.onclose = (event) => {
+      if (clientPingTimerRef.current) {
+        clearInterval(clientPingTimerRef.current);
+        clientPingTimerRef.current = null;
+      }
+      if (heartbeatCheckTimerRef.current) {
+        clearInterval(heartbeatCheckTimerRef.current);
+        heartbeatCheckTimerRef.current = null;
+      }
       if (event.code === 4004 || event.code === 4009) {
         setConnectionState('lost');
         return;
@@ -124,6 +175,8 @@ export default function Terminal() {
     return () => {
       window.removeEventListener('resize', handleResize);
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
+      if (clientPingTimerRef.current) clearInterval(clientPingTimerRef.current);
+      if (heartbeatCheckTimerRef.current) clearInterval(heartbeatCheckTimerRef.current);
       if (wsRef.current) {
         wsRef.current.onclose = null;
         wsRef.current.close();
@@ -153,17 +206,22 @@ export default function Terminal() {
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
           <span style={{
             width: 8, height: 8, borderRadius: '50%',
-            background: connectionState === 'connected' ? '#22c55e' : connectionState === 'reconnecting' ? '#eab308' : '#ef4444',
+            background:
+              connectionState === 'connected' ? '#22c55e' :
+              connectionState === 'reconnecting' || connectionState === 'stale' ? '#eab308' :
+              '#ef4444',
           }} />
           <span style={{ color: '#9ca3af', fontSize: '12px' }}>{connectionState}</span>
         </div>
       </div>
 
-      {connectionState === 'reconnecting' && (
+      {(connectionState === 'reconnecting' || connectionState === 'stale') && (
         <div data-testid="reconnecting-banner" style={{
           padding: '6px 16px', background: '#eab308', color: '#000',
           textAlign: 'center', fontSize: '13px', flexShrink: 0,
-        }}>Reconnecting...</div>
+        }}>
+          {connectionState === 'stale' ? 'Connection stale, reconnecting…' : 'Reconnecting...'}
+        </div>
       )}
 
       {connectionState === 'lost' && (
