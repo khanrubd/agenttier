@@ -3,7 +3,7 @@
 
 """AgentTier Python SDK.
 
-Manage isolated AI agent sandboxes on Kubernetes from Python.
+Isolated, persistent Kubernetes sandboxes for humans and AI agents, from Python.
 
 Typical usage::
 

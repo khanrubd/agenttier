@@ -1,12 +1,12 @@
 # AgentTier
 
-**Kubernetes-native platform for isolated, persistent AI agent sandboxes.**
+**Kubernetes-native platform for isolated, persistent sandboxes — for humans and AI agents.**
 
-AgentTier gives you disposable, on-demand dev environments managed as Kubernetes
-CRDs. Each sandbox is a Pod + PVC + NetworkPolicy with its own persistent
-workspace, a full PTY terminal in the browser, and optional per-session
-credentials. The warm pod pool makes creation feel instant (~800 ms in our
-measurements vs ~10 s cold).
+AgentTier gives humans and AI agents disposable, on-demand dev environments
+managed as Kubernetes CRDs. Each sandbox is a Pod + PVC + NetworkPolicy with
+its own persistent workspace, a full PTY terminal in the browser, and
+optional per-session credentials. The warm pod pool makes creation feel
+instant (~800 ms in our measurements vs ~10 s cold).
 
 ## When to use it
 

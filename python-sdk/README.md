@@ -1,7 +1,8 @@
 # AgentTier Python SDK
 
 Programmatic client for [AgentTier](https://github.com/agenttier/agenttier) —
-manage isolated, persistent Kubernetes sandboxes for AI agents from Python.
+manage isolated, persistent Kubernetes sandboxes for humans and AI agents
+from Python.
 
 ```
 pip install agenttier

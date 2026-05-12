@@ -1,5 +1,5 @@
 site_name: AgentTier
-site_description: Kubernetes-native platform for isolated, persistent AI agent sandboxes.
+site_description: Kubernetes-native platform for isolated, persistent sandboxes — for humans and AI agents.
 site_url: https://agenttier.github.io/agenttier/
 repo_url: https://github.com/agenttier/agenttier
 repo_name: agenttier/agenttier

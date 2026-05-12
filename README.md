@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">AgentTier</h1>
   <p align="center">
-    <strong>Enterprise-grade Kubernetes operator for managing isolated, persistent sandboxes for AI agents.</strong>
+    <strong>Enterprise-grade Kubernetes operator for isolated, persistent sandboxes — for humans and AI agents.</strong>
   </p>
   <p align="center">
     <a href="https://github.com/agenttier/agenttier/actions"><img src="https://github.com/agenttier/agenttier/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
