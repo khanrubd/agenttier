@@ -20,6 +20,18 @@
 
 ---
 
+## Screenshots
+
+<p align="center">
+  <img src="docs/assets/dashboard.png" alt="AgentTier dashboard showing six sandboxes (a mix of human developers and AI agents) with per-sandbox template, creator, and one-click lifecycle actions" width="100%" />
+  <em>Dashboard with a mix of human developer sandboxes and Claude Code agent sandboxes.</em>
+</p>
+
+<p align="center">
+  <img src="docs/assets/terminal-claude-code.png" alt="Browser-based terminal attached to a running sandbox, with a Claude Code session waiting for input" width="100%" />
+  <em>Full PTY in the browser. This sandbox is running Claude Code against AWS Bedrock.</em>
+</p>
+
 ## What is AgentTier?
 
 AgentTier is a Kubernetes-native platform that provides isolated, persistent sandbox environments for running AI agents. Each sandbox is a pod with its own persistent storage, network isolation, and interactive terminal access — managed declaratively through Custom Resource Definitions.
