@@ -61,7 +61,7 @@ jobs:
             echo "TAG_LATEST=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Build and push ${{ matrix.name }}
-        uses: docker/build-push-action@v7
+        uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
@@ -98,7 +98,7 @@ jobs:
             --app-version "${{ steps.version.outputs.VERSION }}" \
             --destination /tmp/charts
       - name: Upload chart as workflow artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: helm-chart
           path: /tmp/charts/*.tgz
@@ -180,7 +180,7 @@ jobs:
           sha256sum "$out" > "${out}.sha256"
           mkdir -p dist
           mv "$out" "${out}.sha256" dist/
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@v4
         with:
           name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
@@ -195,9 +195,18 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v7
+      - uses: actions/download-artifact@v4
         with:
           path: artifacts
+          # buildx jobs leave .dockerbuild metadata artifacts behind. The
+          # github-release step only needs cli-* and helm-chart. Glob
+          # patterns keep the download fast and avoid download errors
+          # on the opaque buildx blobs.
+          pattern: "cli-*"
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          name: helm-chart
       - name: Collate release assets
         run: |
           mkdir -p release-assets
@@ -239,7 +248,7 @@ jobs:
           python -m build
           twine check dist/*
       - name: Upload SDK artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: python-sdk-dist
           path: python-sdk/dist/*
