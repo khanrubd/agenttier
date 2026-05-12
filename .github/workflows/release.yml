@@ -18,6 +18,9 @@ jobs:
     permissions:
       contents: read
       packages: write
+      # Required for cosign keyless signing via GitHub's OIDC provider
+      # (no long-lived keys; the Actions runner's identity is the signer).
+      id-token: write
     strategy:
       fail-fast: false
       matrix:
@@ -61,6 +64,7 @@ jobs:
             echo "TAG_LATEST=false" >> "$GITHUB_OUTPUT"
           fi
       - name: Build and push ${{ matrix.name }}
+        id: build
         uses: docker/build-push-action@v6
         with:
           context: ${{ matrix.context }}
@@ -73,6 +77,46 @@ jobs:
             ${{ steps.version.outputs.TAG_LATEST == 'true' && format('{0}/{1}:latest', env.REGISTRY, matrix.name) || '' }}
           build-args: |
             VERSION=${{ steps.version.outputs.VERSION }}
+
+      # ----------------------------------------------------------------
+      # Supply-chain hardening: keyless cosign signature + syft SBOM.
+      # Signatures and SBOMs are published as OCI artifacts alongside the
+      # image in the same ghcr.io repository, so consumers can verify with:
+      #
+      #   cosign verify --certificate-identity-regexp \
+      #     'https://github.com/agenttier/agenttier/.*' \
+      #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+      #     ghcr.io/agenttier/<image>:<version>
+      #
+      # and pull the SBOM with:
+      #   cosign download sbom ghcr.io/agenttier/<image>:<version>
+      # ----------------------------------------------------------------
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      - name: Sign image with cosign (keyless, GitHub OIDC)
+        env:
+          COSIGN_EXPERIMENTAL: "true"
+          IMAGE: ${{ env.REGISTRY }}/${{ matrix.name }}:${{ steps.version.outputs.VERSION }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Generate and attach SBOM
+        env:
+          IMAGE: ${{ env.REGISTRY }}/${{ matrix.name }}:${{ steps.version.outputs.VERSION }}
+          DIGEST: ${{ steps.build.outputs.digest }}
+        run: |
+          # SPDX is the most widely-recognized SBOM format in the
+          # compliance world; we also attach CycloneDX because Trivy
+          # and several other scanners prefer it.
+          syft "${IMAGE}@${DIGEST}" -o spdx-json=sbom.spdx.json
+          syft "${IMAGE}@${DIGEST}" -o cyclonedx-json=sbom.cdx.json
+          cosign attach sbom --sbom sbom.spdx.json "${IMAGE}@${DIGEST}"
+          cosign attest --yes --predicate sbom.spdx.json --type spdx "${IMAGE}@${DIGEST}"
+          cosign attest --yes --predicate sbom.cdx.json --type cyclonedx "${IMAGE}@${DIGEST}"
 
   # ------------------------------------------------------------------
   # Package the Helm chart, push it to the `gh-pages` branch, and

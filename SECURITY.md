@@ -37,3 +37,41 @@ Instead, please email: security@agenttier.io
 - Enable audit logging
 - Review governance policies periodically
 - Use approved image registries
+
+## Verifying released images
+
+All container images published to `ghcr.io/agenttier/*` on a `v*` tag are:
+
+1. **Keyless-signed with cosign** using GitHub Actions' OIDC identity.
+2. **Shipped with an SBOM** (SPDX + CycloneDX) attached as OCI artifacts.
+
+### Verify the signature
+
+Requires [cosign](https://docs.sigstore.dev/cosign/installation/) v2+.
+
+```bash
+cosign verify \
+  --certificate-identity-regexp 'https://github.com/agenttier/agenttier/.*' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  ghcr.io/agenttier/controller:v0.2.0
+```
+
+The command prints the certificate chain on success and exits non-zero if the
+signature is missing or the identity does not match.
+
+### Pull the SBOM
+
+```bash
+# SPDX
+cosign download sbom ghcr.io/agenttier/controller:v0.2.0 > controller.spdx.json
+
+# Or via the attest predicate (signed attestation, stronger guarantee)
+cosign verify-attestation \
+  --certificate-identity-regexp 'https://github.com/agenttier/agenttier/.*' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  --type spdx \
+  ghcr.io/agenttier/controller:v0.2.0
+```
+
+Signatures and attestations are required starting from **v0.2.0**. Earlier
+releases (v0.1.0 and below) shipped without them.
