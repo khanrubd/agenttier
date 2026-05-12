@@ -218,12 +218,54 @@ jobs:
       - name: Extract version
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/}" >> "$GITHUB_OUTPUT"
+      - name: Write release body preamble
+        id: preamble
+        run: |
+          VERSION="${{ steps.version.outputs.VERSION }}"
+          CHART_VERSION="${VERSION#v}"
+          cat > release-body.md <<EOF
+          ## Install
+
+          **Helm:**
+          \`\`\`bash
+          helm repo add agenttier https://agenttier.github.io/agenttier
+          helm repo update
+          helm install agenttier agenttier/agenttier \\
+            --version ${CHART_VERSION} \\
+            --namespace agenttier --create-namespace
+          \`\`\`
+
+          **Container images** (multi-arch amd64 + arm64):
+          \`\`\`
+          ghcr.io/agenttier/controller:${VERSION}
+          ghcr.io/agenttier/router:${VERSION}
+          ghcr.io/agenttier/web-ui:${VERSION}
+          ghcr.io/agenttier/sandbox-general:${VERSION}
+          ghcr.io/agenttier/sandbox-claude-code:${VERSION}
+          ghcr.io/agenttier/sandbox-minimal:${VERSION}
+          \`\`\`
+
+          **CLI:**
+          \`\`\`bash
+          curl -L -o agenttier \\
+            https://github.com/agenttier/agenttier/releases/download/${VERSION}/agenttier-${VERSION}-\$(uname -s | tr A-Z a-z)-\$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
+          chmod +x agenttier
+          \`\`\`
+
+          **Python SDK:** \`pip install agenttier==${CHART_VERSION}\` (once PyPI publish is enabled).
+
+          See the [README](https://github.com/agenttier/agenttier#readme) and [CHANGELOG](https://github.com/agenttier/agenttier/blob/main/CHANGELOG.md) for details.
+
+          ---
+          EOF
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ steps.version.outputs.VERSION }}
           name: ${{ steps.version.outputs.VERSION }}
           generate_release_notes: true
+          body_path: release-body.md
+          append_body: true
           prerelease: ${{ contains(steps.version.outputs.VERSION, '-') }}
           files: release-assets/*
 
