@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.1] — 2026-05-12
+
 ### SDK (0.1.1)
 
 - Rewrote the Python SDK to match the Router's camelCase JSON schema. The 0.1.0 SDK (not published) called `list_sandboxes()` and crashed with a Pydantic `ValidationError`.
@@ -17,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Added `User-Agent: agenttier-python-sdk/<version>` header, argument validation on all public methods, and 41 unit + integration tests against a mocked Router.
 
 ### Platform
+
+- Cosign keyless signatures + SPDX & CycloneDX SBOMs attached to every released image (see `docs/docs/verifying-images.md` for `cosign verify` + `verify-attestation` flows).
+- Docs site deploys to GitHub Pages on every release with Helm charts served from `/charts/` subpath; legacy root URL still works for existing users.
+- Release notes auto-grouped into Breaking / Features / Fixes / Security / Docs / Dependencies via `.github/release.yml`; Release body prepends install snippets for Helm, images, CLI, and PyPI.
+- Security scans run gosec + govulncheck + gitleaks + Trivy fs + Trivy image scans with SARIF upload to the repo Security tab (currently advisory pending the coordinated Go toolchain upgrade).
+- Added `RELEASING.md` with the canonical pre-release checklist.
 
 ## [0.1.0] — 2026-05-11
 
