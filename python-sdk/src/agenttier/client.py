@@ -1,55 +1,76 @@
 # Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-"""AgentTier client for managing sandboxes."""
+"""Sync client for the AgentTier REST API."""
 
 from __future__ import annotations
 
+from types import TracebackType
 from typing import Optional
 
 import httpx
 
+from agenttier._http import default_user_agent, raise_for_status
+from agenttier._version import __version__
 from agenttier.auth import AuthProvider, auto_detect_auth
-from agenttier.models import SandboxSpec, Template
+from agenttier.models import CurrentUser, SandboxSummary, Template
 from agenttier.sandbox import Sandbox
+
+_API_PREFIX = "/api/v1"
+_DEFAULT_TIMEOUT = 30.0
 
 
 class AgentTierClient:
-    """High-level client for the AgentTier REST API.
+    """High-level sync client for the AgentTier REST API.
 
-    Usage:
-        client = AgentTierClient(api_url="https://agenttier.company.com")
-        sandbox = client.create_sandbox(template="general-coding", name="my-sandbox")
-        sandbox.wait_until_running()
-        result = sandbox.commands.run("echo hello")
-        print(result.stdout)
-        sandbox.terminate()
+    Example:
+
+    .. code-block:: python
+
+        with AgentTierClient(api_url="https://agenttier.company.com") as client:
+            sandbox = client.create_sandbox(template="general-coding", name="demo")
+            sandbox.wait_until_running()
+            print(sandbox.exec("uname -a").stdout)
+            sandbox.terminate()
     """
 
     def __init__(
         self,
         api_url: str,
         auth: Optional[AuthProvider] = None,
-        timeout: float = 30.0,
+        timeout: float = _DEFAULT_TIMEOUT,
+        *,
+        verify: bool | str = True,
     ) -> None:
-        """Initialize the AgentTier client.
-
-        Args:
-            api_url: Base URL of the AgentTier API (e.g., "https://agenttier.company.com")
-            auth: Authentication provider. Auto-detected if not provided.
-            timeout: Default request timeout in seconds.
-        """
+        if not api_url:
+            raise ValueError("api_url must be a non-empty string")
         self._api_url = api_url.rstrip("/")
         self._auth = auth or auto_detect_auth()
         self._http = httpx.Client(
-            base_url=f"{self._api_url}/api/v1",
+            base_url=f"{self._api_url}{_API_PREFIX}",
             timeout=timeout,
+            verify=verify,
+            headers={"User-Agent": default_user_agent(__version__)},
             event_hooks={"request": [self._apply_auth]},
         )
 
-    def _apply_auth(self, request: httpx.Request) -> None:
-        """Apply authentication to outgoing requests."""
-        self._auth.apply(request)
+    # ------- context manager --------------------------------------------
+
+    def __enter__(self) -> "AgentTierClient":
+        return self
+
+    def __exit__(
+        self,
+        exc_type: Optional[type[BaseException]],
+        exc: Optional[BaseException],
+        tb: Optional[TracebackType],
+    ) -> None:
+        self.close()
+
+    def close(self) -> None:
+        self._http.close()
+
+    # ------- sandboxes --------------------------------------------------
 
     def create_sandbox(
         self,
@@ -60,19 +81,16 @@ class AgentTierClient:
         idle_timeout: Optional[str] = None,
         storage_size: Optional[str] = None,
     ) -> Sandbox:
-        """Create a new sandbox from a template.
+        """Create a sandbox from a ``ClusterSandboxTemplate``.
 
-        Args:
-            template: Name of the SandboxTemplate to use.
-            name: Name for the new sandbox.
-            namespace: Kubernetes namespace.
-            timeout: Max runtime duration (e.g., "8h"). None = use template default.
-            idle_timeout: Max idle duration (e.g., "1h"). None = use template default.
-            storage_size: PVC size (e.g., "20Gi"). None = use template default.
-
-        Returns:
-            A Sandbox handle for the created sandbox.
+        ``timeout`` and ``idle_timeout`` take Go-style duration strings
+        (``"8h"``, ``"30m"``).
         """
+        if not template:
+            raise ValueError("template must be a non-empty string")
+        if not name:
+            raise ValueError("name must be a non-empty string")
+
         body: dict[str, object] = {
             "name": name,
             "namespace": namespace,
@@ -86,54 +104,38 @@ class AgentTierClient:
             body["storage"] = {"size": storage_size}
 
         resp = self._http.post("/sandboxes", json=body)
-        resp.raise_for_status()
+        raise_for_status(resp)
         data = resp.json()
-
-        return Sandbox(self._http, data["sandboxId"], data.get("name", name), namespace)
+        return Sandbox(
+            self._http,
+            data["sandboxId"],
+            data.get("name", name),
+            data.get("namespace", namespace),
+        )
 
     def list_sandboxes(
         self,
         namespace: Optional[str] = None,
         status: Optional[str] = None,
-        template: Optional[str] = None,
-    ) -> list[SandboxSpec]:
-        """List sandboxes with optional filtering.
-
-        Args:
-            namespace: Filter by namespace.
-            status: Filter by status (Running, Stopped, etc.).
-            template: Filter by template name.
-
-        Returns:
-            List of sandbox specs.
-        """
+    ) -> list[SandboxSummary]:
+        """List sandboxes visible to the caller."""
         params: dict[str, str] = {}
         if namespace:
             params["namespace"] = namespace
         if status:
             params["status"] = status
-        if template:
-            params["template"] = template
 
         resp = self._http.get("/sandboxes", params=params)
-        resp.raise_for_status()
-        data = resp.json()
-
-        return [SandboxSpec(**s) for s in data.get("sandboxes", [])]
+        raise_for_status(resp)
+        return [SandboxSummary.model_validate(s) for s in (resp.json().get("sandboxes") or [])]
 
     def get_sandbox(self, sandbox_id: str) -> Sandbox:
-        """Get a sandbox by ID.
-
-        Args:
-            sandbox_id: The sandbox identifier.
-
-        Returns:
-            A Sandbox handle.
-        """
+        """Return a handle to an existing sandbox."""
+        if not sandbox_id:
+            raise ValueError("sandbox_id must be a non-empty string")
         resp = self._http.get(f"/sandboxes/{sandbox_id}")
-        resp.raise_for_status()
+        raise_for_status(resp)
         data = resp.json()
-
         return Sandbox(
             self._http,
             data["sandboxId"],
@@ -141,24 +143,33 @@ class AgentTierClient:
             data.get("namespace", "default"),
         )
 
+    # ------- templates --------------------------------------------------
+
     def list_templates(self) -> list[Template]:
-        """List available sandbox templates.
-
-        Returns:
-            List of templates.
-        """
         resp = self._http.get("/templates")
-        resp.raise_for_status()
-        data = resp.json()
+        raise_for_status(resp)
+        return [Template.model_validate(t) for t in (resp.json().get("templates") or [])]
 
-        return [Template(**t) for t in data.get("templates", [])]
+    def get_template(self, name: str) -> Template:
+        if not name:
+            raise ValueError("name must be a non-empty string")
+        resp = self._http.get(f"/templates/{name}")
+        raise_for_status(resp)
+        return Template.model_validate(resp.json())
 
-    def close(self) -> None:
-        """Close the HTTP client."""
-        self._http.close()
+    # ------- identity ---------------------------------------------------
 
-    def __enter__(self) -> "AgentTierClient":
-        return self
+    def current_user(self) -> CurrentUser:
+        """Return the server's view of the caller's identity.
 
-    def __exit__(self, *args: object) -> None:
-        self.close()
+        Uses the same logic as the Web UI — handy for verifying auth is wired
+        up correctly.
+        """
+        resp = self._http.get("/user/me")
+        raise_for_status(resp)
+        return CurrentUser.model_validate(resp.json())
+
+    # ------- internals --------------------------------------------------
+
+    def _apply_auth(self, request: httpx.Request) -> None:
+        self._auth.apply(request)

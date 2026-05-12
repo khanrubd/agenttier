@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### SDK (0.1.1)
+
+- Rewrote the Python SDK to match the Router's camelCase JSON schema. The 0.1.0 SDK (not published) called `list_sandboxes()` and crashed with a Pydantic `ValidationError`.
+- Removed the `FilesAPI`, `CommandsAPI`, and `clone()` surfaces because the corresponding server endpoints return 501. The surface now covers only endpoints the Router actually implements: create/list/get/stop/resume/terminate/exec/status/wait_until_running plus port forwarding, template listing, and `current_user()`.
+- Typed exception hierarchy: every error inherits from `AgentTierError`; 401 → `AuthenticationError`, 403 → `AuthorizationError` (or `PolicyViolationError` when the Router returns the structured `policy_violation` body with `.violations`), 404 → `NotFoundError`, 409 → `ConflictError`, everything else → `APIError(status_code, body)`.
+- Added `py.typed` marker and strict mypy support so downstream consumers get type checking.
+- Dropped unused `websockets` dependency; added `httpx` and `pydantic` upper bounds.
+- Added `User-Agent: agenttier-python-sdk/<version>` header, argument validation on all public methods, and 41 unit + integration tests against a mocked Router.
+
+### Platform
+
 ## [0.1.0] — 2026-05-11
 
 First public release.

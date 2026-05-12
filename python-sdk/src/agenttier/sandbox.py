@@ -1,118 +1,150 @@
 # Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Sandbox handle for lifecycle management, commands, and file operations."""
+"""Sync sandbox handle.
+
+Use :meth:`AgentTierClient.create_sandbox` / :meth:`AgentTierClient.get_sandbox`
+to obtain instances — don't construct :class:`Sandbox` directly.
+"""
 
 from __future__ import annotations
 
 import time
-from typing import Optional
+from typing import TYPE_CHECKING, Optional
 
-import httpx
+from agenttier._http import raise_for_status
+from agenttier.exceptions import SandboxErrorState, SandboxTimeoutError
+from agenttier.models import CommandResult, ForwardedPort, SandboxPhase, SandboxSummary
 
-from agenttier.commands import CommandsAPI
-from agenttier.files import FilesAPI
-from agenttier.models import CommandResult, SandboxStatus
+if TYPE_CHECKING:  # pragma: no cover
+    import httpx
+
+_DEFAULT_WAIT_TIMEOUT = 120.0
+_DEFAULT_POLL_INTERVAL = 2.0
 
 
 class Sandbox:
-    """Handle to a remote sandbox with lifecycle, command, and file operations.
+    """Remote handle for a sandbox running in an AgentTier cluster."""
 
-    Usage:
-        sandbox = client.create_sandbox(template="general-coding", name="my-sandbox")
-        sandbox.wait_until_running(timeout=60)
-        result = sandbox.commands.run("ls /workspace")
-        sandbox.files.write("/workspace/hello.txt", b"Hello, world!")
-        sandbox.stop()
-        sandbox.resume()
-        sandbox.terminate()
-    """
-
-    def __init__(self, http: httpx.Client, sandbox_id: str, name: str, namespace: str) -> None:
+    def __init__(
+        self,
+        http: "httpx.Client",
+        sandbox_id: str,
+        name: str,
+        namespace: str,
+    ) -> None:
         self._http = http
         self.id = sandbox_id
         self.name = name
         self.namespace = namespace
-        self.commands = CommandsAPI(http, sandbox_id)
-        self.files = FilesAPI(http, sandbox_id)
+
+    # ------- state -------------------------------------------------------
+
+    def status(self) -> SandboxSummary:
+        """Fetch the latest status from the server."""
+        resp = self._http.get(f"/sandboxes/{self.id}")
+        raise_for_status(resp)
+        return SandboxSummary.model_validate(resp.json())
 
     @property
-    def status(self) -> SandboxStatus:
-        """Get the current sandbox status."""
-        resp = self._http.get(f"/sandboxes/{self.id}")
-        resp.raise_for_status()
-        data = resp.json()
-        return SandboxStatus(
-            phase=data.get("status", "Unknown"),
-            pod_name=data.get("podName"),
-            pvc_name=data.get("pvcName"),
-            resolved_template=data.get("templateRef"),
-            restart_count=data.get("restartCount", 0),
-            message=data.get("message"),
+    def phase(self) -> SandboxPhase:
+        """Shortcut returning the typed phase of the current status."""
+        return self.status().phase
+
+    def wait_until_running(
+        self,
+        timeout: float = _DEFAULT_WAIT_TIMEOUT,
+        poll_interval: float = _DEFAULT_POLL_INTERVAL,
+    ) -> SandboxSummary:
+        """Block until the sandbox reaches ``Running``.
+
+        Returns the final :class:`SandboxSummary` on success.
+
+        Raises :class:`SandboxTimeoutError` on timeout and
+        :class:`SandboxErrorState` if the sandbox transitions to Error.
+        """
+        deadline = time.monotonic() + timeout
+        last: Optional[SandboxSummary] = None
+        while time.monotonic() < deadline:
+            last = self.status()
+            if last.phase is SandboxPhase.RUNNING:
+                return last
+            if last.phase is SandboxPhase.ERROR:
+                raise SandboxErrorState(last.message or f"sandbox {self.id} entered Error state")
+            time.sleep(poll_interval)
+        raise SandboxTimeoutError(
+            f"sandbox {self.id} did not reach Running within {timeout:.0f}s "
+            f"(last phase: {last.phase.value if last else 'unknown'})"
         )
 
-    def wait_until_running(self, timeout: float = 60.0, poll_interval: float = 2.0) -> None:
-        """Block until the sandbox reaches Running status.
-
-        Args:
-            timeout: Maximum seconds to wait.
-            poll_interval: Seconds between status checks.
-
-        Raises:
-            TimeoutError: If the sandbox doesn't reach Running within the timeout.
-            RuntimeError: If the sandbox enters Error state.
-        """
-        deadline = time.time() + timeout
-        while time.time() < deadline:
-            status = self.status
-            if status.phase == "Running":
-                return
-            if status.phase == "Error":
-                raise RuntimeError(f"Sandbox entered Error state: {status.message}")
-            time.sleep(poll_interval)
-
-        raise TimeoutError(f"Sandbox {self.id} did not reach Running within {timeout}s")
+    # ------- lifecycle ---------------------------------------------------
 
     def stop(self) -> None:
-        """Stop the sandbox (preserves PVC)."""
+        """Delete the sandbox Pod while preserving the PVC."""
         resp = self._http.post(f"/sandboxes/{self.id}/stop")
-        resp.raise_for_status()
+        raise_for_status(resp)
 
     def resume(self) -> None:
-        """Resume a stopped sandbox."""
+        """Re-create the Pod for a stopped sandbox; re-uses the same PVC."""
         resp = self._http.post(f"/sandboxes/{self.id}/resume")
-        resp.raise_for_status()
+        raise_for_status(resp)
 
     def terminate(self) -> None:
-        """Permanently delete the sandbox and all its data."""
+        """Permanently delete the sandbox and its workspace."""
         resp = self._http.delete(f"/sandboxes/{self.id}")
-        resp.raise_for_status()
+        raise_for_status(resp)
 
-    def clone(self, name: str) -> "Sandbox":
-        """Clone this sandbox (creates a copy via VolumeSnapshot).
+    # Alias kept for consistency with the REST name.
+    delete = terminate
 
-        Args:
-            name: Name for the cloned sandbox.
-
-        Returns:
-            A new Sandbox handle for the clone.
-        """
-        resp = self._http.post(f"/sandboxes/{self.id}/clone", json={"name": name})
-        resp.raise_for_status()
-        data = resp.json()
-        return Sandbox(self._http, data["sandboxId"], name, self.namespace)
+    # ------- execution ---------------------------------------------------
 
     def exec(self, command: str, timeout: int = 30) -> CommandResult:
-        """Execute a command in the sandbox (shortcut for commands.run).
+        """Run a shell command inside the sandbox and wait for the result.
 
-        Args:
-            command: Shell command to execute.
-            timeout: Maximum execution time in seconds.
-
-        Returns:
-            CommandResult with stdout, stderr, and exit_code.
+        ``timeout`` is applied both server-side (to the exec) and on the HTTP
+        call (with a small buffer for overhead).
         """
-        return self.commands.run(command, timeout=timeout)
+        if not command:
+            raise ValueError("command must be a non-empty string")
+        if timeout <= 0:
+            raise ValueError("timeout must be > 0")
+        # Give the HTTP call a small buffer over the server-side exec timeout
+        # so the server error bubbles up instead of httpx cutting us off.
+        resp = self._http.post(
+            f"/sandboxes/{self.id}/exec",
+            json={"command": command, "timeout": timeout},
+            timeout=timeout + 10,
+        )
+        raise_for_status(resp)
+        return CommandResult.model_validate(resp.json())
+
+    # ------- port forwarding --------------------------------------------
+
+    def list_ports(self) -> list[ForwardedPort]:
+        """Return the ports currently forwarded from this sandbox."""
+        resp = self._http.get(f"/sandboxes/{self.id}/ports")
+        raise_for_status(resp)
+        ports = resp.json().get("ports") or []
+        return [ForwardedPort.model_validate(p) for p in ports]
+
+    def forward_port(self, port: int, protocol: str = "http") -> ForwardedPort:
+        """Expose a container port via a ClusterIP Service (and Ingress if configured)."""
+        if not 1 <= port <= 65535:
+            raise ValueError("port must be between 1 and 65535")
+        resp = self._http.post(
+            f"/sandboxes/{self.id}/ports",
+            json={"port": port, "protocol": protocol},
+        )
+        raise_for_status(resp)
+        return ForwardedPort.model_validate(resp.json())
+
+    def remove_port(self, port: int) -> None:
+        """Tear down a previously-forwarded port."""
+        resp = self._http.delete(f"/sandboxes/{self.id}/ports/{port}")
+        raise_for_status(resp)
+
+    # ------- misc --------------------------------------------------------
 
     def __repr__(self) -> str:
         return f"Sandbox(id={self.id!r}, name={self.name!r}, namespace={self.namespace!r})"

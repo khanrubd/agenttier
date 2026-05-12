@@ -1,32 +1,41 @@
 # Copyright 2024 AgentTier Authors.
-#
 # SPDX-License-Identifier: Apache-2.0
 
-"""Smoke tests ensuring the public API imports cleanly."""
+"""Smoke tests: make sure the public API imports cleanly and is well-formed."""
+
+from __future__ import annotations
 
 
-def test_import_client() -> None:
-    from agenttier import AgentTierClient
+def test_import_public_api() -> None:
+    import agenttier
 
-    assert AgentTierClient is not None
-
-
-def test_import_async_client() -> None:
-    from agenttier.async_client import AsyncAgentTierClient
-
-    assert AsyncAgentTierClient is not None
+    assert agenttier.AgentTierClient is not None
+    assert agenttier.AsyncAgentTierClient is not None
+    assert agenttier.Sandbox is not None
+    assert agenttier.AsyncSandbox is not None
 
 
-def test_import_models() -> None:
-    from agenttier.models import CommandResult, FileInfo, SandboxStatus
+def test_version_is_valid_semver() -> None:
+    import re
 
-    assert CommandResult is not None
-    assert FileInfo is not None
-    assert SandboxStatus is not None
-
-
-def test_version_exported() -> None:
     import agenttier
 
     assert isinstance(agenttier.__version__, str)
-    assert agenttier.__version__ != ""
+    assert re.match(r"^\d+\.\d+\.\d+(?:[-+.].+)?$", agenttier.__version__)
+
+
+def test_all_exports_are_defined() -> None:
+    """Every name in ``__all__`` must be importable from the top-level module."""
+    import agenttier
+
+    for name in agenttier.__all__:
+        assert hasattr(agenttier, name), f"agenttier.{name} missing from module"
+
+
+def test_py_typed_marker_installed() -> None:
+    """``py.typed`` must be inside the installed package for mypy consumers."""
+    import importlib.resources
+
+    files = list(importlib.resources.files("agenttier").iterdir())
+    names = {f.name for f in files}
+    assert "py.typed" in names, "py.typed marker is missing; typed consumers won't see type hints"

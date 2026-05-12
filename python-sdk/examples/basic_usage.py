@@ -2,61 +2,38 @@
 # Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Basic usage example for the AgentTier Python SDK."""
+"""Basic usage example for the AgentTier Python SDK.
+
+Before running: set ``AGENTTIER_API_KEY`` or ``AGENTTIER_TOKEN`` (or run the
+Router in dev mode locally) and update ``API_URL`` below.
+"""
+
+from __future__ import annotations
 
 from agenttier import AgentTierClient
 
-# Connect to AgentTier (uses AGENTTIER_API_KEY or AGENTTIER_TOKEN env var)
-client = AgentTierClient(api_url="https://agenttier.internal.company.com")
+API_URL = "http://localhost:8080"  # or https://agenttier.company.com in production
 
-# Create a sandbox from a template
-sandbox = client.create_sandbox(
-    template="general-coding",
-    name="sdk-example",
-    namespace="default",
-)
-print(f"Created sandbox: {sandbox.id}")
 
-# Wait for it to be ready
-sandbox.wait_until_running(timeout=60)
-print("Sandbox is running!")
+def main() -> None:
+    with AgentTierClient(api_url=API_URL) as client:
+        print("Authenticated as:", client.current_user())
 
-# Execute commands
-result = sandbox.commands.run("echo 'Hello from AgentTier!'")
-print(f"stdout: {result.stdout}")
-print(f"exit code: {result.exit_code}")
+        print("Available templates:")
+        for template in client.list_templates():
+            print(f"  - {template.name}: {template.description or '(no description)'}")
 
-# Write a file
-sandbox.files.write("/workspace/hello.py", "print('Hello, world!')\n")
+        sandbox = client.create_sandbox(template="general-coding", name="sdk-demo")
+        print(f"Created sandbox {sandbox.id}; waiting for Running…")
+        sandbox.wait_until_running()
 
-# Read it back
-content = sandbox.files.read("/workspace/hello.py")
-print(f"File content: {content.decode()}")
+        result = sandbox.exec("echo 'Hello from AgentTier!'")
+        print(f"stdout: {result.stdout.strip()}")
+        print(f"exit:   {result.exit_code}")
 
-# Run the file
-result = sandbox.commands.run("python3 /workspace/hello.py")
-print(f"Python output: {result.stdout}")
+        sandbox.terminate()
+        print("Terminated.")
 
-# List workspace
-files = sandbox.files.list("/workspace")
-for f in files:
-    print(f"  {'[DIR]' if f.is_dir else '     '} {f.name} ({f.size} bytes)")
 
-# Stop (preserves files)
-sandbox.stop()
-print("Sandbox stopped (files preserved)")
-
-# Resume
-sandbox.resume()
-sandbox.wait_until_running()
-print("Sandbox resumed!")
-
-# Verify files still exist
-result = sandbox.commands.run("cat /workspace/hello.py")
-print(f"File still exists: {result.stdout}")
-
-# Clean up
-sandbox.terminate()
-print("Sandbox deleted")
-
-client.close()
+if __name__ == "__main__":
+    main()

@@ -1,7 +1,18 @@
 # Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-"""Authentication providers for the AgentTier SDK."""
+"""Authentication providers for the AgentTier SDK.
+
+Three concrete providers are shipped:
+
+* :class:`APIKeyAuth` — sends ``X-API-Key``.
+* :class:`BearerTokenAuth` — sends ``Authorization: Bearer <token>`` (OIDC JWT).
+* :class:`KubeconfigAuth` — uses the in-cluster ServiceAccount token when
+  available; falls back to unauthenticated (the Router's dev mode accepts this).
+
+:func:`auto_detect_auth` picks the best available provider from environment
+variables and file system state.
+"""
 
 from __future__ import annotations
 
@@ -14,71 +25,74 @@ import httpx
 
 
 class AuthProvider(ABC):
-    """Base class for authentication providers."""
+    """Attaches credentials to outgoing HTTP requests."""
 
     @abstractmethod
-    def apply(self, request: httpx.Request) -> httpx.Request:
-        """Apply authentication to an HTTP request."""
-        ...
+    def apply(self, request: httpx.Request) -> None:
+        """Mutate ``request`` in place to carry credentials."""
 
 
 class BearerTokenAuth(AuthProvider):
-    """Authenticate with a static bearer token (OIDC JWT)."""
+    """Static bearer token (typically an OIDC JWT)."""
 
     def __init__(self, token: str) -> None:
+        if not token:
+            raise ValueError("token must be a non-empty string")
         self._token = token
 
-    def apply(self, request: httpx.Request) -> httpx.Request:
+    def apply(self, request: httpx.Request) -> None:
         request.headers["Authorization"] = f"Bearer {self._token}"
-        return request
 
 
 class APIKeyAuth(AuthProvider):
-    """Authenticate with an API key."""
+    """AgentTier API key."""
 
     def __init__(self, api_key: str) -> None:
+        if not api_key:
+            raise ValueError("api_key must be a non-empty string")
         self._api_key = api_key
 
-    def apply(self, request: httpx.Request) -> httpx.Request:
+    def apply(self, request: httpx.Request) -> None:
         request.headers["X-API-Key"] = self._api_key
-        return request
+
+
+# Standard in-cluster ServiceAccount token path (Kubernetes Downward API).
+_IN_CLUSTER_TOKEN_PATH = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
 
 
 class KubeconfigAuth(AuthProvider):
-    """Authenticate using a kubeconfig file (extract ServiceAccount token)."""
+    """In-cluster ServiceAccount token, if one is mounted.
 
-    def __init__(self, kubeconfig_path: Optional[str] = None) -> None:
-        self._token = self._load_token(kubeconfig_path)
+    A proper kubeconfig parser is intentionally out of scope; if you need
+    kubeconfig-driven auth against a remote cluster, extract the token
+    yourself and pass it to :class:`BearerTokenAuth`.
+    """
 
-    def apply(self, request: httpx.Request) -> httpx.Request:
+    def __init__(self, token_path: Optional[str | Path] = None) -> None:
+        path = Path(token_path) if token_path else _IN_CLUSTER_TOKEN_PATH
+        self._token: Optional[str] = None
+        if path.exists():
+            try:
+                self._token = path.read_text().strip() or None
+            except OSError:
+                # Permission problems etc. — fall back to unauthenticated.
+                self._token = None
+
+    def apply(self, request: httpx.Request) -> None:
         if self._token:
             request.headers["Authorization"] = f"Bearer {self._token}"
-        return request
-
-    def _load_token(self, kubeconfig_path: Optional[str]) -> Optional[str]:
-        """Load token from kubeconfig or in-cluster service account."""
-        # Try in-cluster token first
-        sa_token_path = Path("/var/run/secrets/kubernetes.io/serviceaccount/token")
-        if sa_token_path.exists():
-            return sa_token_path.read_text().strip()
-
-        # Try kubeconfig
-        path = kubeconfig_path or os.environ.get("KUBECONFIG", str(Path.home() / ".kube/config"))
-        if Path(path).exists():
-            # Simplified: in production, parse YAML and extract current-context token
-            # For now, return None (user should use BearerTokenAuth or APIKeyAuth)
-            return None
-
-        return None
 
 
 def auto_detect_auth() -> AuthProvider:
-    """Auto-detect the best authentication method from environment.
+    """Return the best available auth provider for the current environment.
 
-    Priority:
-    1. AGENTTIER_API_KEY environment variable
-    2. AGENTTIER_TOKEN environment variable
-    3. Kubeconfig / in-cluster ServiceAccount token
+    Priority order:
+
+    1. ``AGENTTIER_API_KEY``
+    2. ``AGENTTIER_TOKEN`` (bearer / OIDC JWT)
+    3. In-cluster ServiceAccount token at ``/var/run/secrets/...``
+    4. Unauthenticated — the Router accepts this only in dev mode (no OIDC
+       configured); production deployments will return 401.
     """
     api_key = os.environ.get("AGENTTIER_API_KEY")
     if api_key:
