@@ -53,22 +53,24 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 - **Browser terminal** — Full PTY over WebSocket with xterm.js, resize, ANSI colors, and reconnection after transient drops.
 - **Session reconnection** — 30s default grace window lets network blips and laptop sleeps reconnect without losing shell state.
 - **Non-interactive exec API** — `POST /api/v1/sandboxes/{id}/exec` for request-response and fire-and-forget commands.
+- **Port forwarding** — Expose any container port via `POST /api/v1/sandboxes/{id}/ports`; the controller creates a Service (and optional Ingress when a preview domain is configured), the Router provides an authenticated in-cluster reverse proxy at `/api/v1/sandboxes/{id}/preview/{port}/...`, and exposed ports show up both in the Web UI sandbox card and in `Sandbox.status.forwardedPorts`.
 - **File transfer API** — Upload, download, and list files in the sandbox workspace through the REST API.
 
 ### Multi-tenancy and governance
 
 - **OIDC + API keys** — Cognito, Okta, Azure AD, or any OIDC-compliant provider; API keys stored as SHA-256 hashes with LRU caching.
-- **Hierarchical governance policies** — Cluster > namespace > user policy resolution for max sandboxes, resource caps, timeout limits, approved registries, and allowed templates.
+- **Hierarchical governance policies** — Cluster → namespace policy resolution with field-level merge, enforced synchronously at sandbox creation. Limits max sandboxes per user and total, CPU/memory/storage caps, timeout caps, allowed templates, and approved image registries. Violations return a structured `policy_violation` response with machine codes so UIs can pinpoint the failing field.
+- **Admin-gated policy editor** — `Settings → Governance` renders per-scope editors, protected by the `isAdmin` claim in production; dev mode (no OIDC configured) auto-grants admin so the flow is fully exercised locally.
 - **Audit trail** — Lifecycle, terminal, credential, share, clone, and port-forward events recorded to Kubernetes events (and optional SQL backend for long-term retention).
-- **Sharing and collaboration** — User or group sharing with viewer/collaborator roles and expiring share links.
+- **Sharing and collaboration** — User or group sharing with viewer/collaborator roles and expiring share links (in progress).
 
 ### Web UI
 
-- **Dashboard** — Sandbox cards with status, template, age, and one-click Stop / Resume / Delete / Open Terminal.
+- **Dashboard** — Sandbox cards with status, template, age, and one-click Stop / Resume / Delete / Open Terminal. Running cards also show an inline "Port forwards" panel for exposing container ports and opening authenticated previews.
 - **Templates editor** — In-browser YAML editor for creating, editing, and deleting `ClusterSandboxTemplate`s with syntax highlighting.
 - **Activity log** — Time-ordered audit events with filter-by-action, user, and time range.
 - **Metrics and cost estimator** — Live sandbox counts, average startup time, and estimated monthly cost based on current running resources.
-- **Settings** — Warm pool sizing, default template, and operational knobs persisted to the backend.
+- **Settings** — Governance policies (cluster and per-namespace), warm pool sizing and template, and other operational knobs persisted to the backend.
 
 ### Client tooling
 
@@ -132,15 +134,16 @@ This provisions an EKS cluster, builds container images, and deploys AgentTier i
 
 ### Manual Installation
 
-```bash
-# 1. Install CRDs
-kubectl apply -f config/crd/
+Install from the public Helm chart and container images at `ghcr.io/agenttier/*`:
 
-# 2. Deploy via Helm
-helm install agenttier ./helm/agenttier/ \
-  --namespace agenttier --create-namespace \
-  --set controller.image.repository=ghcr.io/agenttier/controller \
-  --set router.image.repository=ghcr.io/agenttier/router
+```bash
+# 1. Add the AgentTier Helm repo and refresh
+helm repo add agenttier https://agenttier.github.io/agenttier
+helm repo update
+
+# 2. Install the chart (CRDs are bundled)
+helm install agenttier agenttier/agenttier \
+  --namespace agenttier --create-namespace
 
 # 3. Create a sandbox
 kubectl apply -f - <<EOF
