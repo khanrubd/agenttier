@@ -21,9 +21,13 @@ theme:
         icon: material/weather-sunny
         name: Switch to light mode
   features:
-    - navigation.tabs
+    # Left-nav only: drop `navigation.tabs` so the whole structure lives in
+    # the sidebar. `navigation.expand` auto-opens every section.
     - navigation.sections
+    - navigation.expand
     - navigation.top
+    - navigation.indexes
+    - toc.follow
     - content.code.copy
     - content.action.edit
     - search.highlight
@@ -31,12 +35,16 @@ theme:
 
 nav:
   - Home: index.md
-  - Quickstart: quickstart.md
-  - Installation: installation.md
-  - User Guide:
+  - Getting started:
+    - Quickstart: quickstart.md
+    - Installation: installation.md
+  - Product:
+    - Features: features.md
+    - Architecture: architecture.md
+  - User guide:
     - Templates: templates.md
     - Governance: governance.md
-    - Port Forwarding: port-forwarding.md
+    - Port forwarding: port-forwarding.md
   - Reference:
     - CLI: cli.md
     - Python SDK: sdk.md
