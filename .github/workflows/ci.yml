@@ -130,22 +130,23 @@ jobs:
       - name: go mod verify
         run: go mod verify
 
-      # Scan Go source for CVEs in imported modules (runs against the
-      # Go vulnerability database at vuln.go.dev).
+      # govulncheck scans Go source for CVEs in imported modules
+      # (vuln.go.dev). Blocking — any unfixed CVE reachable from
+      # imported code should prevent a release. False positives are
+      # rare; when they happen, suppress in code with //nolint:... plus
+      # a comment explaining the risk is accepted.
       - name: govulncheck
         run: |
           go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./...
-        continue-on-error: true
 
       # Static analysis for Go-specific security bugs (unsafe pointers,
       # integer overflow, weak crypto, SQL injection patterns, etc.).
+      # Advisory — findings go to the Security tab but don't block the
+      # build. Promote to blocking once the baseline is clean.
       - name: gosec
         uses: securego/gosec@master
         with:
-          # Skip test files because they have unique patterns (hardcoded
-          # "credentials" for fixtures) that trip the scanner without
-          # reflecting real risk.
           args: "-exclude-dir=test -exclude-generated -fmt=sarif -out=gosec.sarif ./..."
         continue-on-error: true
 
@@ -159,7 +160,19 @@ jobs:
 
       # Trivy filesystem scan: picks up vulnerable dependencies in the
       # repo itself (go.sum, package-lock.json, python-sdk pyproject).
-      - name: Trivy filesystem scan
+      # Fails the build on CRITICAL severity; HIGH is reported as
+      # advisory via SARIF only.
+      - name: Trivy filesystem scan (blocking CRITICAL)
+        uses: aquasecurity/trivy-action@master
+        with:
+          scan-type: "fs"
+          scan-ref: "."
+          format: "table"
+          severity: "CRITICAL"
+          ignore-unfixed: true
+          exit-code: "1"
+
+      - name: Trivy filesystem scan (advisory HIGH, SARIF)
         uses: aquasecurity/trivy-action@master
         with:
           scan-type: "fs"
