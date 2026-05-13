@@ -230,8 +230,13 @@ func (r *SandboxReconciler) reconcileCreating(ctx context.Context, sandbox *agen
 		if err := r.Status().Update(ctx, sandbox); err != nil {
 			return ctrl.Result{}, err
 		}
-		// Requeue to check pod status
-		return ctrl.Result{RequeueAfter: 2 * time.Second}, nil
+		// Requeue to check pod status. The controller also watches owned
+		// Pods via SetupWithManager.Owns(&corev1.Pod{}), so an explicit
+		// requeue is only needed to catch the brief window before the pod
+		// exists in the cache. Keeping this at 1s trims ~2s off a cold start
+		// without hammering the apiserver — almost all follow-up reconciles
+		// come from the Pod watch, not this ticker.
+		return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 	} else if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -266,8 +271,9 @@ func (r *SandboxReconciler) reconcileCreating(ctx context.Context, sandbox *agen
 		return r.transitionToError(ctx, sandbox, fmt.Sprintf("Pod failed: %s", reason))
 	}
 
-	// Still waiting for pod to be ready
-	return ctrl.Result{RequeueAfter: 3 * time.Second}, nil
+	// Still waiting for pod to be ready. Pod watch delivers the real
+	// transition; this 1s poll just backstops any missed watch events.
+	return ctrl.Result{RequeueAfter: 1 * time.Second}, nil
 }
 
 // reconcileRunning checks timeouts and pod health.

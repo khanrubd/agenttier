@@ -134,3 +134,17 @@ class AuditEvent(_Model):
     namespace: Optional[str] = None
     user_email: Optional[str] = Field(default=None, alias="userEmail")
     details: Optional[dict[str, Any]] = None
+
+
+class FileEntry(_Model):
+    """One entry returned by the files list endpoint.
+
+    ``modified_at`` is seconds since epoch from the sandbox ``ls -la --time-style=+%s``
+    output; kept as an int so callers can decide what timezone to render in.
+    """
+
+    name: str
+    size: int = 0
+    is_dir: bool = Field(default=False, alias="isDir")
+    mode: Optional[str] = None
+    modified_at: Optional[int] = Field(default=None, alias="modifiedAt")

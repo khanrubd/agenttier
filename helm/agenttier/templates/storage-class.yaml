@@ -1,0 +1,42 @@
+{{- /*
+Copyright 2024 AgentTier Authors.
+SPDX-License-Identifier: Apache-2.0
+
+Optional StorageClass with `volumeBindingMode: Immediate`. Enabled via
+`optional.storageClass.enabled`.
+
+Why a separate class?
+  * The cluster's default StorageClass usually uses `WaitForFirstConsumer`
+    so volumes are provisioned in the same AZ as the pod, which saves a
+    cross-AZ volume attach but adds 5-10s to cold starts because the Pod
+    must be scheduled first.
+  * When the warm pool is enabled we want the opposite: provision the PVC
+    up front so a claim doesn't wait on EBS. `Immediate` binding does that.
+  * Users can target this class from `defaults.sandbox.storage.storageClass`,
+    or leave the default as-is and just use it for the warm pool.
+
+Provisioner defaults:
+  * On AWS EKS the provisioner is `ebs.csi.aws.com` with `type: gp3`.
+  * Override via `optional.storageClass.provisioner` + `parameters` for
+    non-AWS clusters (GKE: `pd.csi.storage.gke.io`, Azure: `disk.csi.azure.com`).
+*/ -}}
+{{- if .Values.optional.storageClass.enabled }}
+apiVersion: storage.k8s.io/v1
+kind: StorageClass
+metadata:
+  name: {{ .Values.optional.storageClass.name }}
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+provisioner: {{ .Values.optional.storageClass.provisioner }}
+volumeBindingMode: Immediate
+{{- if .Values.optional.storageClass.allowVolumeExpansion }}
+allowVolumeExpansion: true
+{{- end }}
+{{- with .Values.optional.storageClass.parameters }}
+parameters:
+  {{- toYaml . | nindent 2 }}
+{{- end }}
+{{- with .Values.optional.storageClass.reclaimPolicy }}
+reclaimPolicy: {{ . }}
+{{- end }}
+{{- end }}

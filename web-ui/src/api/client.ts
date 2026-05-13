@@ -192,6 +192,48 @@ export function previewProxyUrl(sandboxId: string, port: number): string {
   return `${API_BASE}/sandboxes/${sandboxId}/preview/${port}/`;
 }
 
+// --- Files API ---
+
+export interface FileEntry {
+  name: string;
+  size: number;
+  isDir: boolean;
+  mode: string;
+  modifiedAt: number;
+}
+
+export async function listFiles(sandboxId: string, path = '/workspace'): Promise<{ path: string; entries: FileEntry[] }> {
+  const q = new URLSearchParams({ path });
+  const data = await request<{ path: string; entries: FileEntry[] | null }>(`/sandboxes/${sandboxId}/files/?${q}`);
+  return { path: data.path, entries: data.entries ?? [] };
+}
+
+// uploadFile PUTs a single File to the sandbox under parentPath/<filename>.
+// We bypass the JSON-centric `request` helper because the router's PUT handler
+// reads the raw request body and stores those bytes verbatim — a JSON wrapper
+// would corrupt binary uploads.
+export async function uploadFile(sandboxId: string, parentPath: string, file: File): Promise<void> {
+  const cleaned = parentPath.replace(/\/+$/, '') || '';
+  const target = `${cleaned}/${file.name}`.replace(/^\/+/, '');
+  const res = await fetch(`${API_BASE}/sandboxes/${sandboxId}/files/${target}`, {
+    method: 'PUT',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/octet-stream' },
+    body: file,
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${body}`);
+  }
+}
+
+// downloadFileUrl returns a URL the browser can GET directly. We rely on the
+// Content-Disposition header the router sets so the browser prompts a save.
+export function downloadFileUrl(sandboxId: string, fullPath: string): string {
+  const stripped = fullPath.replace(/^\/+/, '');
+  return `${API_BASE}/sandboxes/${sandboxId}/files/${stripped}`;
+}
+
 export interface GovernancePolicy {
   maxSandboxesPerUser?: number;
   maxSandboxesTotal?: number;

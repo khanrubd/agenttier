@@ -46,19 +46,39 @@ app.kubernetes.io/instance: {{ .Release.Name }}
 {{- printf "%s-%s" .Chart.Name .Chart.Version | replace "+" "_" | trunc 63 | trimSuffix "-" }}
 {{- end }}
 
+{{/* Image tag
+
+`.Chart.AppVersion` is the bare semver (e.g. "0.2.0") because semver itself
+does not include a `v` prefix — but the release workflow tags images as
+`vX.Y.Z`. When the user hasn't overridden the tag, prepend `v` to the
+appVersion so pods pull the right image. Users can still override
+`<component>.image.tag` explicitly (including overrides without a `v`
+prefix) and we pass that through untouched. */}}
+{{- define "agenttier.imageTag" -}}
+{{- $explicit := . -}}
+{{- if $explicit -}}
+{{- $explicit -}}
+{{- else -}}
+v{{ $.Chart.AppVersion }}
+{{- end -}}
+{{- end }}
+
 {{/* Controller image */}}
 {{- define "agenttier.controllerImage" -}}
-{{- printf "%s:%s" .Values.controller.image.repository (default .Chart.AppVersion .Values.controller.image.tag) }}
+{{- $tag := .Values.controller.image.tag | default (printf "v%s" .Chart.AppVersion) }}
+{{- printf "%s:%s" .Values.controller.image.repository $tag }}
 {{- end }}
 
 {{/* Router image */}}
 {{- define "agenttier.routerImage" -}}
-{{- printf "%s:%s" .Values.router.image.repository (default .Chart.AppVersion .Values.router.image.tag) }}
+{{- $tag := .Values.router.image.tag | default (printf "v%s" .Chart.AppVersion) }}
+{{- printf "%s:%s" .Values.router.image.repository $tag }}
 {{- end }}
 
 {{/* Web UI image */}}
 {{- define "agenttier.webuiImage" -}}
-{{- printf "%s:%s" .Values.webui.image.repository (default .Chart.AppVersion .Values.webui.image.tag) }}
+{{- $tag := .Values.webui.image.tag | default (printf "v%s" .Chart.AppVersion) }}
+{{- printf "%s:%s" .Values.webui.image.repository $tag }}
 {{- end }}
 
 {{/* Service account name

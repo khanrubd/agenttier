@@ -83,7 +83,7 @@ defaults:
   sandbox:
     # Defaults to the chart's appVersion when the tag is omitted at render
     # time. Users can override to pin a specific image.
-    image: ghcr.io/agenttier/sandbox-general:v0.2.0
+    image: ghcr.io/agenttier/sandbox-general:v0.2.2
     resources:
       requests:
         cpu: 500m
@@ -98,7 +98,7 @@ defaults:
     timeout: 8h
     idleTimeout: 1h
   claudeCode:
-    image: ghcr.io/agenttier/sandbox-claude-code:v0.2.0
+    image: ghcr.io/agenttier/sandbox-claude-code:v0.2.2
     # IRSA role ARN for Bedrock access (annotated on sandbox ServiceAccount)
     irsaRoleArn: ""
 
@@ -157,6 +157,28 @@ optional:
   pdb:
     enabled: true
     minAvailable: 1
+
+  # Optional StorageClass with Immediate binding mode
+  #
+  # Default cluster StorageClasses usually use `WaitForFirstConsumer`, which
+  # saves a cross-AZ volume attach but adds 5-10s to cold starts because the
+  # PVC can't be provisioned until the Pod is scheduled. Enabling this class
+  # lets us provision PVCs up front — a meaningful win for the warm pool and
+  # for any template that prefers sub-second claim times.
+  #
+  # Provisioner defaults target AWS EBS CSI with gp3. Override for GKE, AKS,
+  # or any other CSI driver. Users target this class via
+  # `defaults.sandbox.storage.storageClass: <name>` or a template override.
+  storageClass:
+    enabled: false
+    name: gp3-immediate
+    provisioner: ebs.csi.aws.com
+    allowVolumeExpansion: true
+    reclaimPolicy: Delete
+    parameters:
+      type: gp3
+      # Encrypted: "true"
+      # kmsKeyId: "arn:aws:kms:…"
   # Ingress for Web UI
   #
   # When enabled the chart creates a single Ingress routing `/`, `/api/`, and

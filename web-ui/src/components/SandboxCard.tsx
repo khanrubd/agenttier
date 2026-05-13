@@ -8,6 +8,48 @@ import { useNavigate } from 'react-router-dom';
 import type { Sandbox } from '../types';
 import StatusBadge from './StatusBadge';
 import PortForwardsPanel from './PortForwardsPanel';
+import FilesPanel from './FilesPanel';
+
+// AdvancedPanel hides Port forwards + Files behind a single click so cards
+// stay compact by default. Only rendered when the sandbox is running — the
+// nested panels themselves no-op otherwise, but the collapsed header is
+// noise when there's nothing useful inside.
+function AdvancedPanel({ running, children }: { running: boolean; children: React.ReactNode }) {
+  const [open, setOpen] = useState(false);
+  if (!running) return null;
+  return (
+    <div data-testid="advanced-panel" style={{ marginTop: '12px' }}>
+      <button
+        data-testid="advanced-toggle"
+        type="button"
+        aria-expanded={open}
+        onClick={() => setOpen(v => !v)}
+        style={{
+          width: '100%',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          padding: '6px 10px',
+          borderRadius: '6px',
+          border: '1px solid #e5e4e7',
+          background: '#fff',
+          color: '#4b4657',
+          fontSize: '12px',
+          fontWeight: 500,
+          cursor: 'pointer',
+        }}
+      >
+        <span>Advanced — ports & files</span>
+        <span style={{ fontSize: '10px', color: '#6b6375' }}>{open ? '▾' : '▸'}</span>
+      </button>
+      {open && (
+        <div data-testid="advanced-body" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
+          {children}
+        </div>
+      )}
+    </div>
+  );
+}
 
 interface SandboxCardProps {
   sandbox: Sandbox;
@@ -101,7 +143,10 @@ export default function SandboxCard({ sandbox, busy = false, onStop, onResume, o
           onClick={() => onDelete(id)} style={btnStyle(canDelete, '#ef4444')}>Delete</button>
       </div>
 
-      <PortForwardsPanel sandboxId={id} running={status === 'running'} />
+      <AdvancedPanel running={status === 'running'}>
+        <PortForwardsPanel sandboxId={id} running={status === 'running'} />
+        <FilesPanel sandboxId={id} running={status === 'running'} />
+      </AdvancedPanel>
     </div>
   );
 }

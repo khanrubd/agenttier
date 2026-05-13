@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING, Optional
 
 from agenttier._http import raise_for_status
 from agenttier.exceptions import SandboxErrorState, SandboxTimeoutError
-from agenttier.models import CommandResult, ForwardedPort, SandboxPhase, SandboxSummary
+from agenttier.models import CommandResult, FileEntry, ForwardedPort, SandboxPhase, SandboxSummary
 
 if TYPE_CHECKING:  # pragma: no cover
     import httpx
@@ -106,5 +106,87 @@ class AsyncSandbox:
         resp = await self._http.delete(f"/sandboxes/{self.id}/ports/{port}")
         raise_for_status(resp)
 
+    @property
+    def files(self) -> "AsyncFilesAPI":
+        """Async mirror of :pyattr:`Sandbox.files`."""
+        return AsyncFilesAPI(self)
+
     def __repr__(self) -> str:
         return f"AsyncSandbox(id={self.id!r}, name={self.name!r}, namespace={self.namespace!r})"
+
+
+class AsyncFilesAPI:
+    """Async wrapper around ``/sandboxes/{id}/files/*`` REST endpoints.
+
+    Protocol and size cap are identical to :class:`agenttier.sandbox.FilesAPI`
+    — the two classes just differ in sync vs async. Read that docstring for the
+    full contract.
+    """
+
+    MAX_BYTES: int = 32 * 1024 * 1024
+
+    def __init__(self, sandbox: "AsyncSandbox") -> None:
+        self._sandbox = sandbox
+        self._http = sandbox._http
+
+    async def list(self, path: str = "/workspace") -> list[FileEntry]:
+        if not path:
+            raise ValueError("path must be a non-empty string")
+        resp = await self._http.get(
+            f"/sandboxes/{self._sandbox.id}/files/",
+            params={"path": path},
+        )
+        raise_for_status(resp)
+        body = resp.json() or {}
+        entries = body.get("entries") or []
+        return [FileEntry.model_validate(e) for e in entries]
+
+    async def read(self, path: str) -> bytes:
+        stripped = path.lstrip("/")
+        if not stripped:
+            raise ValueError("path must include a file name")
+        resp = await self._http.get(f"/sandboxes/{self._sandbox.id}/files/{stripped}")
+        raise_for_status(resp)
+        return resp.content
+
+    async def download(self, path: str, destination: str) -> int:
+        stripped = path.lstrip("/")
+        if not stripped:
+            raise ValueError("path must include a file name")
+        written = 0
+        async with self._http.stream("GET", f"/sandboxes/{self._sandbox.id}/files/{stripped}") as resp:
+            raise_for_status(resp)
+            with open(destination, "wb") as fh:
+                async for chunk in resp.aiter_bytes():
+                    if chunk:
+                        fh.write(chunk)
+                        written += len(chunk)
+        return written
+
+    async def write(self, path: str, data: bytes | str) -> None:
+        if isinstance(data, str):
+            payload = data.encode("utf-8")
+        else:
+            payload = bytes(data)
+        await self._put_bytes(path, payload)
+
+    async def upload(self, path: str, source: str) -> int:
+        with open(source, "rb") as fh:
+            payload = fh.read()
+        if len(payload) > self.MAX_BYTES:
+            raise ValueError(
+                f"{source} is {len(payload)} bytes, max {self.MAX_BYTES} per upload"
+            )
+        await self._put_bytes(path, payload)
+        return len(payload)
+
+    async def _put_bytes(self, path: str, payload: bytes) -> None:
+        stripped = path.lstrip("/")
+        if not stripped:
+            raise ValueError("path must include a file name")
+        resp = await self._http.put(
+            f"/sandboxes/{self._sandbox.id}/files/{stripped}",
+            content=payload,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        raise_for_status(resp)

@@ -1,7 +1,7 @@
 <p align="center">
   <h1 align="center">AgentTier</h1>
   <p align="center">
-    <strong>Enterprise-grade Kubernetes operator for isolated, persistent sandboxes — for humans and AI agents.</strong>
+    <strong>Enterprise-grade Kubernetes-native sandboxes — for humans and AI agents.</strong>
   </p>
   <p align="center">
     <a href="https://github.com/agenttier/agenttier/actions"><img src="https://github.com/agenttier/agenttier/actions/workflows/ci.yml/badge.svg" alt="CI"></a>
@@ -25,6 +25,7 @@
 AgentTier is a Kubernetes-native platform that provides isolated, persistent sandbox environments for running AI agents. Each sandbox is a pod with its own persistent storage, network isolation, and interactive terminal access — managed declaratively through Custom Resource Definitions.
 
 **Key use cases:**
+- **Kubernetes operator for isolated, persistent sandboxes** — declarative CRDs manage the full pod + PVC + NetworkPolicy lifecycle so stopped sandboxes keep their files and resumed sandboxes re-attach the same volume.
 - Run AI coding agents (Claude Code, Cursor, Aider) in secure, isolated environments
 - Provide on-demand development environments for engineering teams
 - Execute untrusted AI-generated code with kernel-level isolation (gVisor)

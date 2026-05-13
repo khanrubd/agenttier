@@ -112,7 +112,7 @@ export default function Dashboard() {
         </div>
       )}
 
-      <div data-testid="sandbox-list" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: '16px' }}>
+      <div data-testid="sandbox-list" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(380px, 1fr))', gap: '16px', alignItems: 'start' }}>
         {sandboxes.map((sb) => (
           <SandboxCard key={sb.id} sandbox={sb} busy={busyIds.has(sb.id)}
             onStop={handleStop} onResume={handleResume} onDelete={handleDelete} />

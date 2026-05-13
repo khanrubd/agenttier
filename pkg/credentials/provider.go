@@ -104,8 +104,14 @@ func (p *WorkloadIdentityProvider) Name() string { return "workload-identity" }
 func (p *WorkloadIdentityProvider) GetSessionCredentials(ctx context.Context, config *CredentialConfig) (map[string]string, error) {
 	// GKE Workload Identity auto-injects credentials into the pod.
 	// For session injection, we reference the service account.
+	//
+	// gosec G101 flags `GOOGLE_APPLICATION_CREDENTIALS` as "hardcoded
+	// credentials" because the variable name matches its pattern. The value
+	// here is the well-known file-system path where GKE Workload Identity
+	// projects short-lived tokens; there is no secret material in this
+	// string literal.
 	return map[string]string{
-		"GOOGLE_APPLICATION_CREDENTIALS": "/var/run/secrets/gcp/key.json",
+		"GOOGLE_APPLICATION_CREDENTIALS": "/var/run/secrets/gcp/key.json", //nolint:gosec // path to token file, not a credential value
 	}, nil
 }
 

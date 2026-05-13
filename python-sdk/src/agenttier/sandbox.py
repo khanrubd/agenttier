@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Optional
 
 from agenttier._http import raise_for_status
 from agenttier.exceptions import SandboxErrorState, SandboxTimeoutError
-from agenttier.models import CommandResult, ForwardedPort, SandboxPhase, SandboxSummary
+from agenttier.models import CommandResult, FileEntry, ForwardedPort, SandboxPhase, SandboxSummary
 
 if TYPE_CHECKING:  # pragma: no cover
     import httpx
@@ -144,7 +144,122 @@ class Sandbox:
         resp = self._http.delete(f"/sandboxes/{self.id}/ports/{port}")
         raise_for_status(resp)
 
+    # ------- files -------------------------------------------------------
+
+    @property
+    def files(self) -> "FilesAPI":
+        """Namespace for the file-transfer REST surface.
+
+        Returns a small facade so users call ``sandbox.files.list("/workspace")``
+        instead of polluting the top-level API. The facade re-uses the parent
+        sandbox's ``_http`` client, so it picks up auth, base URL, and
+        timeouts automatically.
+        """
+        return FilesAPI(self)
+
     # ------- misc --------------------------------------------------------
 
     def __repr__(self) -> str:
         return f"Sandbox(id={self.id!r}, name={self.name!r}, namespace={self.namespace!r})"
+
+
+class FilesAPI:
+    """Sync wrapper around the `/sandboxes/{id}/files/*` REST endpoints.
+
+    The router drives sandbox-side ``ls``/``stat``/``base64`` through the SPDY
+    exec bridge, so there's a 32 MiB per-request ceiling enforced on the server
+    side. Very large files should be moved with git, rsync over exec, or a
+    PVC snapshot instead.
+    """
+
+    #: Mirrors the server-side cap in ``pkg/router/handlers.go``. Uploads
+    #: larger than this are rejected with a 413.
+    MAX_BYTES: int = 32 * 1024 * 1024
+
+    def __init__(self, sandbox: "Sandbox") -> None:
+        self._sandbox = sandbox
+        self._http = sandbox._http
+
+    def list(self, path: str = "/workspace") -> list[FileEntry]:
+        """List a directory inside the sandbox.
+
+        Defaults to ``/workspace`` since that's the template-provided PVC mount.
+        Raises :class:`NotFoundError` when the path doesn't exist.
+        """
+        if not path:
+            raise ValueError("path must be a non-empty string")
+        resp = self._http.get(
+            f"/sandboxes/{self._sandbox.id}/files/",
+            params={"path": path},
+        )
+        raise_for_status(resp)
+        body = resp.json() or {}
+        entries = body.get("entries") or []
+        return [FileEntry.model_validate(e) for e in entries]
+
+    def read(self, path: str) -> bytes:
+        """Download a file and return its bytes.
+
+        Use :meth:`download` when you already have an open path on disk; this
+        method is a convenience for small files that fit in memory.
+        """
+        stripped = path.lstrip("/")
+        if not stripped:
+            raise ValueError("path must include a file name")
+        resp = self._http.get(f"/sandboxes/{self._sandbox.id}/files/{stripped}")
+        raise_for_status(resp)
+        return resp.content
+
+    def download(self, path: str, destination: str) -> int:
+        """Stream a file to ``destination`` (a local filesystem path).
+
+        Returns the number of bytes written. Streaming keeps memory bounded on
+        large-ish files up to the server-side 32 MiB cap.
+        """
+        stripped = path.lstrip("/")
+        if not stripped:
+            raise ValueError("path must include a file name")
+        written = 0
+        with self._http.stream("GET", f"/sandboxes/{self._sandbox.id}/files/{stripped}") as resp:
+            raise_for_status(resp)
+            with open(destination, "wb") as fh:
+                for chunk in resp.iter_bytes():
+                    if chunk:
+                        fh.write(chunk)
+                        written += len(chunk)
+        return written
+
+    def write(self, path: str, data: bytes | str) -> None:
+        """Create or overwrite a file from in-memory bytes or a string."""
+        if isinstance(data, str):
+            payload = data.encode("utf-8")
+        else:
+            payload = bytes(data)
+        self._put_bytes(path, payload)
+
+    def upload(self, path: str, source: str) -> int:
+        """Upload a local file at ``source`` to ``path`` inside the sandbox.
+
+        Returns the number of bytes uploaded. Raises :class:`ValueError` when
+        the local file exceeds :attr:`MAX_BYTES` to avoid a round-trip only to
+        get a 413 back.
+        """
+        with open(source, "rb") as fh:
+            payload = fh.read()
+        if len(payload) > self.MAX_BYTES:
+            raise ValueError(
+                f"{source} is {len(payload)} bytes, max {self.MAX_BYTES} per upload"
+            )
+        self._put_bytes(path, payload)
+        return len(payload)
+
+    def _put_bytes(self, path: str, payload: bytes) -> None:
+        stripped = path.lstrip("/")
+        if not stripped:
+            raise ValueError("path must include a file name")
+        resp = self._http.put(
+            f"/sandboxes/{self._sandbox.id}/files/{stripped}",
+            content=payload,
+            headers={"Content-Type": "application/octet-stream"},
+        )
+        raise_for_status(resp)

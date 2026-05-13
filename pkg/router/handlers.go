@@ -456,7 +456,7 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 
 	// Cleanup
 	s.sessionManager.RemoveSession(session.ID)
-	conn.Close()
+	_ = conn.Close() // best-effort close; if the peer already hung up, ignore
 }
 
 // --- Template Handlers ---
@@ -785,9 +785,35 @@ func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/octet-stream")
 	w.Header().Set("Content-Length", strconv.Itoa(len(data)))
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", path.Base(cleaned)))
+	// Restrict the Content-Disposition filename to a safe subset so user-
+	// supplied path components can't inject header control characters. We
+	// then wrap it in %q which escapes quotes; combined this is safe against
+	// header-splitting and XSS-via-filename tricks. gosec's G705 taint check
+	// also considers this clean because the only character classes that
+	// survive the sanitizer are [A-Za-z0-9._-].
+	safe := sanitizeFilename(path.Base(cleaned))
+	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", safe))
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(data)
+}
+
+// sanitizeFilename strips anything outside [A-Za-z0-9._-] from a filename so
+// the Content-Disposition header cannot carry attacker-controlled control
+// characters. Returns "file" when sanitation would leave an empty string.
+func sanitizeFilename(name string) string {
+	cleaned := make([]byte, 0, len(name))
+	for i := 0; i < len(name); i++ {
+		c := name[i]
+		isAlpha := (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')
+		isDigit := c >= '0' && c <= '9'
+		if isAlpha || isDigit || c == '.' || c == '_' || c == '-' {
+			cleaned = append(cleaned, c)
+		}
+	}
+	if len(cleaned) == 0 {
+		return "file"
+	}
+	return string(cleaned)
 }
 
 func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request) {

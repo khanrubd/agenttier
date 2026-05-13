@@ -115,9 +115,15 @@ func (s *Session) Read(p []byte) (int, error) {
 			return n, nil
 
 		case MessageTypeResize:
+			// Cols/Rows come over JSON as ints; clamp to uint16 to satisfy the
+			// exec protocol and guard against a malicious client sending a
+			// negative or > 65535 value. Anything out of range is clamped to
+			// a safe default so the terminal stays usable.
+			cols := clampTerminalDim(msg.Cols)
+			rows := clampTerminalDim(msg.Rows)
 			s.sizeQueue.Push(remotecommand.TerminalSize{
-				Width:  uint16(msg.Cols),
-				Height: uint16(msg.Rows),
+				Width:  cols,
+				Height: rows,
 			})
 			continue // Don't return data for resize messages
 
@@ -245,7 +251,7 @@ func (s *Session) Close() {
 
 	if !s.closed {
 		s.closed = true
-		s.Conn.Close()
+		_ = s.Conn.Close() // best-effort close; the peer may already have gone away
 	}
 }
 
@@ -288,6 +294,22 @@ func (s *Session) sendPong() {
 }
 
 // --- Terminal Size Queue ---
+
+// clampTerminalDim turns a caller-supplied terminal dimension into a valid
+// uint16 value for the exec protocol. Negative or zero values are replaced
+// with 1 (minimum sensible column/row count) and values above uint16 max are
+// capped. gosec's G115 int→uint16 cast warning is addressed by doing the
+// range check in pure Go before the conversion.
+func clampTerminalDim(v int) uint16 {
+	if v < 1 {
+		return 1
+	}
+	const maxDim = 1 << 16
+	if v >= maxDim {
+		return ^uint16(0)
+	}
+	return uint16(v)
+}
 
 // TerminalSizeQueue implements remotecommand.TerminalSizeQueue using a channel.
 type TerminalSizeQueue struct {

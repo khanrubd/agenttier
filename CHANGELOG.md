@@ -7,6 +7,33 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-05-13
+
+### Added
+
+- Python SDK file transfer wrappers (`Sandbox.files` / `AsyncSandbox.files`) exposing `list`, `read`, `write`, `upload`, `download` with a 32 MiB `MAX_BYTES` cap that mirrors the Router. Typed `FileEntry` model lives in `agenttier.models`. 48 unit tests, mypy strict clean (QL.3).
+- Web UI `FilesPanel` on every running sandbox card: directory listing with click-to-download links and an **Upload file** button. Paired with the existing port-forwards panel inside a single collapsed "Advanced — ports & files" expander so cards stay compact by default.
+- Optional `gp3-immediate` StorageClass template (`optional.storageClass.enabled`). `WaitForFirstConsumer` saves cross-AZ attach cost but adds 5–10s to cold starts; an Immediate-binding class provisions PVCs up front and shaves most of that off for the warm pool and any template that targets it (#9.3).
+
+### Changed
+
+- Controller requeues the Creating state every 1s instead of 2s (after Pod create) / 3s (waiting for Pod Ready). The controller-runtime Pod watch is still the primary trigger; the shorter requeue is a backstop that trims up to 2s off a cold start (#9.4).
+- README opening tagline: "Enterprise-grade Kubernetes-native sandboxes — for humans and AI agents." The older "operator for isolated, persistent sandboxes" framing moves into the What is AgentTier? bullets.
+- Dashboard card grid now uses `align-items: start` so an expanded card no longer stretches its row-mate's border.
+- GitHub Actions bumped to current majors: `docker/login-action@4`, `docker/setup-buildx-action@4`, `actions/setup-go@6`, `actions/setup-node@6`.
+
+### Fixed
+
+- Helm chart image helper now pulls `<repo>:v<appVersion>` by default instead of `<repo>:<appVersion>`. Previously, `helm install agenttier agenttier/agenttier` with no overrides would `ImagePullBackOff` because the release workflow tags images with a `v` prefix but the chart rendered the bare semver. Users who set `<component>.image.tag` explicitly are unaffected.
+
+### Security
+
+- Terminal size-queue resize message (`msg.Cols`, `msg.Rows`) is now clamped to uint16 bounds in `pkg/router/terminal/session.go` before conversion, fixing gosec G115 warnings and protecting against pathological values from a hostile client.
+- File-download `Content-Disposition` filename is restricted to `[A-Za-z0-9._-]` so user-supplied path segments cannot inject response-header control characters, fixing gosec G705 taint analysis.
+- Closed the gosec G104 "unhandled error" warnings in the router WebSocket cleanup path by explicitly discarding with a comment (`_ = conn.Close()`), confirming the close is best-effort.
+- Annotated the false-positive gosec G101 on `GOOGLE_APPLICATION_CREDENTIALS` in `pkg/credentials/provider.go`; the literal is a GKE Workload Identity token-file path, not a credential value.
+- Enabled GitHub Dependabot automated security fixes on the repo so future patch-available CVEs open PRs automatically.
+
 ## [0.2.0] — 2026-05-12
 
 ### Added
