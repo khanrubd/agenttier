@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Phase 10 foundation — `Sandbox.spec.mode` and `SandboxTemplate.spec.mode` accept `code` (default, today's behavior) or `agent`. New `HarnessSpec.Agent` block carries the agent runtime contract: `entrypoint`, `installCommand`, `workingDir`, `env`, `maxConcurrentInvokes`, `defaultInvokeTimeout`. `Sandbox.status.agentConfigure` records the most recent `/configure` result. CRD additions are additive — existing sandboxes and templates continue to default to code mode and run unchanged. Template inheritance correctly merges Mode (child wins) and Agent (deep merge with additive env). Endpoints (`/configure`, `/invoke`) ship in subsequent commits. (10.A.1, 10.A.2)
+
 ## [0.2.2] — 2026-05-13
 
 ### Added

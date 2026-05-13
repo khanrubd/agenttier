@@ -208,3 +208,93 @@ func TestMergeSandboxWithTemplate_DefaultsFillGaps(t *testing.T) {
 		t.Errorf("expected default image, got %s", config.Image)
 	}
 }
+
+func TestMergeTemplateSpecs_ModeAndAgentInherit(t *testing.T) {
+	parent := agenttierv1alpha1.SandboxTemplateSpec{
+		Mode:        agenttierv1alpha1.SandboxModeCode,
+		Description: "parent",
+		Harness: &agenttierv1alpha1.HarnessSpec{
+			Shell: "/bin/bash",
+		},
+	}
+	child := agenttierv1alpha1.SandboxTemplateSpec{
+		Mode: agenttierv1alpha1.SandboxModeAgent,
+		Harness: &agenttierv1alpha1.HarnessSpec{
+			Agent: &agenttierv1alpha1.AgentSpec{
+				Entrypoint:     []string{"python", "/workspace/agent.py"},
+				InstallCommand: []string{"pip", "install", "-r", "requirements.txt"},
+				WorkingDir:     "/workspace",
+			},
+		},
+	}
+
+	merged := mergeTemplateSpecs(parent, child)
+
+	if merged.Mode != agenttierv1alpha1.SandboxModeAgent {
+		t.Errorf("expected child mode 'agent' to win, got %q", merged.Mode)
+	}
+	if merged.Description != "parent" {
+		t.Errorf("expected parent description preserved, got %q", merged.Description)
+	}
+	if merged.Harness == nil || merged.Harness.Shell != "/bin/bash" {
+		t.Error("expected parent harness.shell preserved")
+	}
+	if merged.Harness == nil || merged.Harness.Agent == nil {
+		t.Fatal("expected child agent spec inherited")
+	}
+	if got := merged.Harness.Agent.Entrypoint; len(got) != 2 || got[0] != "python" {
+		t.Errorf("expected entrypoint inherited, got %v", got)
+	}
+}
+
+func TestMergeAgent_ChildOverridesScalars(t *testing.T) {
+	maxParent := int32(2)
+	maxChild := int32(8)
+	parent := &agenttierv1alpha1.AgentSpec{
+		Entrypoint:           []string{"old"},
+		WorkingDir:           "/old",
+		MaxConcurrentInvokes: &maxParent,
+		Env: []corev1.EnvVar{
+			{Name: "PARENT_ONLY", Value: "p"},
+			{Name: "SHARED", Value: "parent"},
+		},
+	}
+	child := &agenttierv1alpha1.AgentSpec{
+		Entrypoint:           []string{"python", "agent.py"},
+		WorkingDir:           "/workspace",
+		MaxConcurrentInvokes: &maxChild,
+		Env: []corev1.EnvVar{
+			{Name: "SHARED", Value: "child"},
+			{Name: "CHILD_ONLY", Value: "c"},
+		},
+	}
+
+	merged := mergeAgent(parent, child)
+
+	if got := merged.Entrypoint; len(got) != 2 || got[1] != "agent.py" {
+		t.Errorf("expected child entrypoint to win, got %v", got)
+	}
+	if merged.WorkingDir != "/workspace" {
+		t.Errorf("expected child workingDir to win, got %q", merged.WorkingDir)
+	}
+	if merged.MaxConcurrentInvokes == nil || *merged.MaxConcurrentInvokes != 8 {
+		t.Errorf("expected child maxConcurrentInvokes=8, got %v", merged.MaxConcurrentInvokes)
+	}
+	envByKey := map[string]string{}
+	for _, e := range merged.Env {
+		envByKey[e.Name] = e.Value
+	}
+	if envByKey["PARENT_ONLY"] != "p" {
+		t.Errorf("expected PARENT_ONLY preserved, got %q", envByKey["PARENT_ONLY"])
+	}
+	if envByKey["SHARED"] != "child" {
+		t.Errorf("expected SHARED=child, got %q", envByKey["SHARED"])
+	}
+	if envByKey["CHILD_ONLY"] != "c" {
+		t.Errorf("expected CHILD_ONLY=c, got %q", envByKey["CHILD_ONLY"])
+	}
+}
+
+// Silence unused-import warnings in the rare case the tests above are the
+// only reference to a particular package.
+var _ = resource.Quantity{}

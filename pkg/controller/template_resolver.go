@@ -220,6 +220,9 @@ func mergeTemplateSpecs(parent, child agenttierv1alpha1.SandboxTemplateSpec) age
 	if child.Description != "" {
 		result.Description = child.Description
 	}
+	if child.Mode != "" {
+		result.Mode = child.Mode
+	}
 
 	// Harness: deep merge
 	if child.Harness != nil {
@@ -268,11 +271,42 @@ func mergeHarness(parent, child *agenttierv1alpha1.HarnessSpec) *agenttierv1alph
 	if child.Constraints != nil {
 		result.Constraints = child.Constraints
 	}
+	if child.Agent != nil {
+		if result.Agent == nil {
+			result.Agent = child.Agent
+		} else {
+			result.Agent = mergeAgent(result.Agent, child.Agent)
+		}
+	}
 
 	// Tools and skills are additive
 	result.Tools = append(result.Tools, child.Tools...)
 	result.Skills = append(result.Skills, child.Skills...)
 
+	return &result
+}
+
+// mergeAgent deep-merges two AgentSpec values. Child fields override parent;
+// Env is additive (mergeEnvVars handles key conflicts the same way as the
+// rest of the template merge logic).
+func mergeAgent(parent, child *agenttierv1alpha1.AgentSpec) *agenttierv1alpha1.AgentSpec {
+	result := *parent
+	if len(child.Entrypoint) > 0 {
+		result.Entrypoint = child.Entrypoint
+	}
+	if len(child.InstallCommand) > 0 {
+		result.InstallCommand = child.InstallCommand
+	}
+	if child.WorkingDir != "" {
+		result.WorkingDir = child.WorkingDir
+	}
+	if child.MaxConcurrentInvokes != nil {
+		result.MaxConcurrentInvokes = child.MaxConcurrentInvokes
+	}
+	if child.DefaultInvokeTimeout != nil {
+		result.DefaultInvokeTimeout = child.DefaultInvokeTimeout
+	}
+	result.Env = mergeEnvVars(result.Env, child.Env)
 	return &result
 }
 

@@ -38,6 +38,23 @@ const (
 	SandboxPhaseDeleting SandboxPhase = "Deleting"
 )
 
+// SandboxMode declares whether a sandbox runs in interactive code mode (the
+// default — humans drive it via terminal, file API, port-forwards, exec) or
+// in agent mode (a configured entrypoint is invoked over SSE via /invoke).
+//
+// Agent mode reuses the same Pod, PVC, NetworkPolicy, governance, and warm
+// pool machinery — only the calling pattern differs. The CRD field defaults
+// to "code" so existing sandboxes and templates keep working without changes.
+// +kubebuilder:validation:Enum=code;agent
+type SandboxMode string
+
+const (
+	// SandboxModeCode is the default, interactive mode used by humans.
+	SandboxModeCode SandboxMode = "code"
+	// SandboxModeAgent runs a configured entrypoint via /configure + /invoke.
+	SandboxModeAgent SandboxMode = "agent"
+)
+
 // +kubebuilder:object:root=true
 // +kubebuilder:subresource:status
 // +kubebuilder:printcolumn:name="Status",type=string,JSONPath=`.status.phase`
@@ -55,6 +72,13 @@ type Sandbox struct {
 
 // SandboxSpec defines the desired state of a Sandbox.
 type SandboxSpec struct {
+	// Mode controls whether this sandbox is interactive ("code", default) or
+	// runs a configured agent entrypoint ("agent"). Agent-mode sandboxes are
+	// driven through POST /configure + POST /invoke instead of the terminal.
+	// +kubebuilder:default=code
+	// +optional
+	Mode SandboxMode `json:"mode,omitempty"`
+
 	// TemplateRef references a SandboxTemplate or ClusterSandboxTemplate from which
 	// this sandbox inherits its configuration.
 	// +optional
@@ -173,6 +197,41 @@ type SandboxStatus struct {
 	// ClonedFrom records the source sandbox ID if this sandbox was cloned.
 	// +optional
 	ClonedFrom string `json:"clonedFrom,omitempty"`
+
+	// AgentConfigure records the most recent /configure result for agent-mode
+	// sandboxes. Set only when Spec.Mode == "agent" and POST /configure has
+	// completed at least once.
+	// +optional
+	AgentConfigure *AgentConfigureStatus `json:"agentConfigure,omitempty"`
+}
+
+// AgentConfigureStatus records the resolved configuration applied via the most
+// recent POST /configure call on an agent-mode sandbox. The Router uses
+// InstallCommandHash to short-circuit re-installs on idempotent re-configures.
+type AgentConfigureStatus struct {
+	// LastConfiguredAt is when /configure last completed successfully.
+	// +optional
+	LastConfiguredAt *metav1.Time `json:"lastConfiguredAt,omitempty"`
+
+	// InstallCommandHash is the SHA256 of the install command + uploaded files.
+	// /configure calls with the same hash are no-ops.
+	// +optional
+	InstallCommandHash string `json:"installCommandHash,omitempty"`
+
+	// Entrypoint is the resolved command POST /invoke executes.
+	// +optional
+	Entrypoint []string `json:"entrypoint,omitempty"`
+
+	// InstallExitCode is the exit code from the most recent install command.
+	// 0 indicates success; non-zero means the install failed and /invoke will
+	// likely fail the same way.
+	// +optional
+	InstallExitCode int `json:"installExitCode,omitempty"`
+
+	// InstallLog holds the trailing 200 lines of the install command output
+	// for surface in the Web UI.
+	// +optional
+	InstallLog string `json:"installLog,omitempty"`
 }
 
 // TemplateReference identifies a SandboxTemplate or ClusterSandboxTemplate.

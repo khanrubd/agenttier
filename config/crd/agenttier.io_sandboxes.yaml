@@ -1663,6 +1663,16 @@ spec:
                   - name
                   type: object
                 type: array
+              mode:
+                default: code
+                description: |-
+                  Mode controls whether this sandbox is interactive ("code", default) or
+                  runs a configured agent entrypoint ("agent"). Agent-mode sandboxes are
+                  driven through POST /configure + POST /invoke instead of the terminal.
+                enum:
+                - code
+                - agent
+                type: string
               network:
                 description: Network declares egress and ingress rules for the sandbox.
                 properties:
@@ -3438,6 +3448,39 @@ spec:
           status:
             description: SandboxStatus defines the observed state of a Sandbox.
             properties:
+              agentConfigure:
+                description: |-
+                  AgentConfigure records the most recent /configure result for agent-mode
+                  sandboxes. Set only when Spec.Mode == "agent" and POST /configure has
+                  completed at least once.
+                properties:
+                  entrypoint:
+                    description: Entrypoint is the resolved command POST /invoke executes.
+                    items:
+                      type: string
+                    type: array
+                  installCommandHash:
+                    description: |-
+                      InstallCommandHash is the SHA256 of the install command + uploaded files.
+                      /configure calls with the same hash are no-ops.
+                    type: string
+                  installExitCode:
+                    description: |-
+                      InstallExitCode is the exit code from the most recent install command.
+                      0 indicates success; non-zero means the install failed and /invoke will
+                      likely fail the same way.
+                    type: integer
+                  installLog:
+                    description: |-
+                      InstallLog holds the trailing 200 lines of the install command output
+                      for surface in the Web UI.
+                    type: string
+                  lastConfiguredAt:
+                    description: LastConfiguredAt is when /configure last completed
+                      successfully.
+                    format: date-time
+                    type: string
+                type: object
               clonedFrom:
                 description: ClonedFrom records the source sandbox ID if this sandbox
                   was cloned.

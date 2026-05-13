@@ -52,6 +52,12 @@ type SandboxTemplateSpec struct {
 	// +optional
 	InheritsFrom *TemplateReference `json:"inheritsFrom,omitempty"`
 
+	// Mode is the default Sandbox.spec.mode for sandboxes created from this
+	// template ("code" or "agent"). Defaults to "code".
+	// +kubebuilder:default=code
+	// +optional
+	Mode SandboxMode `json:"mode,omitempty"`
+
 	// Description provides a human-readable description for UI display.
 	// +optional
 	Description string `json:"description,omitempty"`
@@ -156,6 +162,51 @@ type HarnessSpec struct {
 	// Constraints defines operational boundaries for the agent.
 	// +optional
 	Constraints *ConstraintsSpec `json:"constraints,omitempty"`
+
+	// Agent declares how POST /configure and POST /invoke run code inside this
+	// sandbox. Required when the sandbox is created with mode: "agent" — the
+	// Router uses Entrypoint as the command for /invoke and runs InstallCommand
+	// once at /configure time. Ignored for mode: "code".
+	// +optional
+	Agent *AgentSpec `json:"agent,omitempty"`
+}
+
+// AgentSpec describes how an agent-mode sandbox accepts configuration and
+// services /invoke calls. Tied to HarnessSpec because the agent runtime
+// shares the same shell, working directory, and env conventions as the
+// interactive code-mode harness — only the calling pattern differs.
+type AgentSpec struct {
+	// Entrypoint is the shell command AgentTier runs on every POST /invoke.
+	// Required for mode: "agent". Receives the request body on stdin.
+	// Example: ["python", "/workspace/agent.py"]
+	// +optional
+	Entrypoint []string `json:"entrypoint,omitempty"`
+
+	// InstallCommand runs once during POST /configure to install dependencies.
+	// Idempotent: re-configures with the same files + command short-circuit.
+	// Example: ["pip", "install", "-r", "/workspace/requirements.txt"]
+	// +optional
+	InstallCommand []string `json:"installCommand,omitempty"`
+
+	// WorkingDir is the working directory for the entrypoint and install.
+	// Defaults to /workspace.
+	// +optional
+	WorkingDir string `json:"workingDir,omitempty"`
+
+	// Env are environment variables additive over the template's harness env.
+	// Useful for selecting a model provider or routing memory traffic.
+	// +optional
+	Env []corev1.EnvVar `json:"env,omitempty"`
+
+	// MaxConcurrentInvokes caps parallel /invoke calls per sandbox. The Router
+	// returns HTTP 429 over this. 0 (the default) means unlimited.
+	// +optional
+	MaxConcurrentInvokes *int32 `json:"maxConcurrentInvokes,omitempty"`
+
+	// DefaultInvokeTimeout is the wall-clock timeout per invoke. Defaults to
+	// 30 minutes when unset. Callers can lower (but not raise) this per call.
+	// +optional
+	DefaultInvokeTimeout *metav1.Duration `json:"defaultInvokeTimeout,omitempty"`
 }
 
 // ToolSpec declares a tool to be installed or verified in the sandbox.
