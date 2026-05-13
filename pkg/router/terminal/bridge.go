@@ -18,7 +18,9 @@ package terminal
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 
 	corev1 "k8s.io/api/core/v1"
@@ -26,6 +28,7 @@ import (
 	"k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"k8s.io/client-go/tools/remotecommand"
+	"k8s.io/client-go/util/exec"
 )
 
 // Bridge connects a terminal Session (WebSocket) to a Kubernetes pod exec stream (SPDY).
@@ -135,10 +138,11 @@ func (b *Bridge) ExecCommand(ctx context.Context, namespace, podName, container 
 	}
 
 	if err != nil {
-		// Extract exit code from error if possible
 		result.ExitCode = extractExitCode(err)
-		if result.ExitCode == 0 {
-			result.ExitCode = 1 // Default non-zero for errors
+		// extractExitCode returns -1 for non-CodeExitError failures. Map
+		// those to 1 so callers that just check `ExitCode != 0` keep working.
+		if result.ExitCode == -1 {
+			result.ExitCode = 1
 		}
 	}
 
@@ -150,6 +154,56 @@ type CommandResult struct {
 	Stdout   string `json:"stdout"`
 	Stderr   string `json:"stderr"`
 	ExitCode int    `json:"exitCode"`
+}
+
+// ExecCommandStream runs a non-interactive command in a pod and pipes
+// stdout / stderr live to the supplied writers. Used by the agent /configure
+// (install logs) and /invoke (entrypoint output) endpoints to emit SSE chunks
+// as the command produces them rather than buffering to completion.
+//
+// Closing ctx cancels the exec — the SPDY layer drops the stream, which makes
+// kubelet send SIGTERM (then SIGKILL) to the in-pod process. Callers tie ctx
+// to the request context so a client disconnect terminates the agent.
+//
+// Returns the exit code on clean termination. On context cancel returns
+// ctx.Err() and the exit code is undefined (the caller already knows the
+// stream was aborted).
+func (b *Bridge) ExecCommandStream(ctx context.Context, namespace, podName, container string, command []string, stdout, stderr io.Writer) (int, error) {
+	req := b.clientset.CoreV1().RESTClient().Post().
+		Resource("pods").
+		Name(podName).
+		Namespace(namespace).
+		SubResource("exec").
+		VersionedParams(&corev1.PodExecOptions{
+			Container: container,
+			Command:   command,
+			Stdin:     false,
+			Stdout:    true,
+			Stderr:    true,
+			TTY:       false,
+		}, scheme.ParameterCodec)
+
+	exec, err := remotecommand.NewSPDYExecutor(b.restConfig, "POST", req.URL())
+	if err != nil {
+		return -1, fmt.Errorf("failed to create executor: %w", err)
+	}
+
+	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+		Stdout: stdout,
+		Stderr: stderr,
+	})
+
+	// Treat context cancel as the canonical "client disconnected" signal.
+	// We intentionally don't try to recover the exit code here — the caller
+	// will surface the cancel reason as the SSE exit event.
+	if ctxErr := ctx.Err(); ctxErr != nil {
+		return -1, ctxErr
+	}
+
+	if err != nil {
+		return extractExitCode(err), nil
+	}
+	return 0, nil
 }
 
 // limitedBuffer is a bytes.Buffer with a maximum size to prevent OOM.
@@ -175,15 +229,17 @@ func (b *limitedBuffer) String() string {
 	return string(b.data)
 }
 
-// extractExitCode attempts to extract the exit code from an exec error.
+// extractExitCode pulls the exit code from a remotecommand exec error. The
+// SPDY layer wraps non-zero exits in `exec.CodeExitError`. Anything else
+// (network blip, auth failure, ctx cancel) is treated as exit -1 so callers
+// can distinguish from clean exit 0.
 func extractExitCode(err error) int {
-	// The error message from remotecommand typically contains the exit code
-	// Format: "command terminated with exit code N"
-	// This is a simplified extraction — production code should use
-	// k8s.io/apimachinery/pkg/util/exec.CodeExitError
 	if err == nil {
 		return 0
 	}
-	// Default: return -1 to indicate unknown exit code
+	var codeErr exec.CodeExitError
+	if errors.As(err, &codeErr) {
+		return codeErr.Code
+	}
 	return -1
 }

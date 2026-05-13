@@ -33,8 +33,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/agenttier/agenttier/pkg/governance"
+	"github.com/agenttier/agenttier/pkg/router/agent"
 	"github.com/agenttier/agenttier/pkg/router/portforward"
 	"github.com/agenttier/agenttier/pkg/router/terminal"
+
+	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
 )
 
 // Config holds the Router server configuration.
@@ -172,6 +175,18 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	// WebSocket terminal (auth handled inside handler)
 	r.HandleFunc("/ws/terminal/{sandboxId}", s.handleTerminalWebSocket)
 
+	// Agent-mode endpoints (POST /sandboxes/{id}/configure today; /invoke
+	// in the next milestone). Lives in pkg/router/agent so it can evolve
+	// independently of the interactive code-mode surface.
+	agentHandler := agent.New(agent.Options{
+		K8sClient:    s.k8sClient,
+		Bridge:       s.bridge,
+		Logger:       s.logger,
+		ClaimsLookup: s.agentClaims,
+		SandboxOf:    s.agentSandboxOf,
+	})
+	agentHandler.RegisterRoutes(api)
+
 	s.httpServer = &http.Server{
 		Addr:        config.ListenAddr,
 		Handler:     r,
@@ -216,4 +231,27 @@ func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
 	// TODO: Check K8s API reachability
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "ok")
+}
+
+// agentClaims adapts the Router's request-scoped Claims into the minimal
+// shape the agent subpackage consumes. Returns nil when no claims are set
+// (handler returns 401).
+func (s *Server) agentClaims(r *http.Request) *agent.Claims {
+	c := GetClaims(r.Context())
+	if c == nil {
+		return nil
+	}
+	return &agent.Claims{Sub: c.Sub, Email: c.Email, Name: c.Name, IsAdmin: c.IsAdmin}
+}
+
+// agentSandboxOf reuses the existing ownership-aware sandbox lookup so the
+// agent subpackage doesn't reimplement RBAC. The agent.Claims received here
+// must round-trip through a router.Claims for the helper to apply admin /
+// ownership rules consistently.
+func (s *Server) agentSandboxOf(ctx context.Context, sandboxID string, ac *agent.Claims) (*agenttierv1alpha1.Sandbox, error) {
+	if ac == nil {
+		return nil, fmt.Errorf("authentication required")
+	}
+	rc := &Claims{Sub: ac.Sub, Email: ac.Email, Name: ac.Name, IsAdmin: ac.IsAdmin}
+	return s.getSandboxWithAuthCheck(ctx, sandboxID, rc)
 }

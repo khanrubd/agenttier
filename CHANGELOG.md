@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- `POST /api/v1/sandboxes/{id}/configure` — agent-mode endpoint that uploads files into the sandbox PVC, runs an install command, and records the resolved entrypoint into `Sandbox.status.agentConfigure`. Streams install output as Server-Sent Events so callers (SDK, CLI, Web UI) watch progress live. Idempotent: re-runs with the same files + install command short-circuit. 15-minute soft install timeout. Returns 400 on a code-mode sandbox with a clear explanation. Implementation lives in `pkg/router/agent/` so the agent surface evolves independently of the interactive Router. (10.A.3)
 - Phase 10 foundation — `Sandbox.spec.mode` and `SandboxTemplate.spec.mode` accept `code` (default, today's behavior) or `agent`. New `HarnessSpec.Agent` block carries the agent runtime contract: `entrypoint`, `installCommand`, `workingDir`, `env`, `maxConcurrentInvokes`, `defaultInvokeTimeout`. `Sandbox.status.agentConfigure` records the most recent `/configure` result. CRD additions are additive — existing sandboxes and templates continue to default to code mode and run unchanged. Template inheritance correctly merges Mode (child wins) and Agent (deep merge with additive env). Endpoints (`/configure`, `/invoke`) ship in subsequent commits. (10.A.1, 10.A.2)
 
 ## [0.2.2] — 2026-05-13
