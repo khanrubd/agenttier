@@ -63,7 +63,7 @@ func (b *stubBridge) ExecCommandStream(ctx context.Context, _, _, _ string, comm
 	return b.exit, nil
 }
 
-func buildHandler(t *testing.T, sandbox *agenttierv1alpha1.Sandbox, bridge *stubBridge) (*Handler, client.Client) {
+func buildHandler(t *testing.T, sandbox *agenttierv1alpha1.Sandbox, bridge ExecBridge) (*Handler, client.Client) {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := corev1.AddToScheme(scheme); err != nil {

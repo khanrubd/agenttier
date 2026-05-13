@@ -27,6 +27,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"sync"
 
 	"github.com/gorilla/mux"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -81,7 +82,9 @@ type Options struct {
 // Handler holds dependencies for the agent endpoints and exposes
 // http.HandlerFuncs ready to mount at /api/v1/sandboxes/{id}/...
 type Handler struct {
-	opts Options
+	opts        Options
+	concurrency *concurrencyTracker
+	invokes     sync.Map // map[invokeID]*invokeRegistryEntry
 }
 
 // New returns a Handler ready to serve agent requests.
@@ -89,14 +92,18 @@ func New(opts Options) *Handler {
 	if opts.Logger == nil {
 		opts.Logger = slog.Default()
 	}
-	return &Handler{opts: opts}
+	return &Handler{
+		opts:        opts,
+		concurrency: newConcurrencyTracker(),
+	}
 }
 
 // RegisterRoutes mounts the agent endpoints onto the given mux subrouter.
 // Caller is expected to have applied authentication middleware already.
 func (h *Handler) RegisterRoutes(api *mux.Router) {
 	api.HandleFunc("/sandboxes/{id}/configure", h.handleConfigure).Methods("POST")
-	// /invoke and /invoke/cancel land in the next milestone.
+	api.HandleFunc("/sandboxes/{id}/invoke", h.handleInvoke).Methods("POST")
+	api.HandleFunc("/sandboxes/{id}/invoke/cancel", h.handleInvokeCancel).Methods("POST")
 }
 
 // --- common helpers -----------------------------------------------------
