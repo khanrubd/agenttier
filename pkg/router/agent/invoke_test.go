@@ -241,3 +241,46 @@ func TestShellQuote_Roundtrip(t *testing.T) {
 		}
 	}
 }
+
+func TestInvoke_RespectsConcurrencyCap(t *testing.T) {
+	sb := newConfiguredAgentSandbox()
+	// Only 1 concurrent invoke allowed.
+	sb.Status.AgentConfigure.MaxConcurrentInvokes = 1
+	bridge := newBlockingBridge()
+	h, _ := buildHandler(t, sb, bridge)
+
+	// Kick off the first invoke; it'll block in the bridge.
+	first := make(chan *httptest.ResponseRecorder, 1)
+	go func() { first <- doInvoke(h, "", "") }()
+
+	// Wait for it to register so the second call sees the in-flight count.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		count := 0
+		h.invokes.Range(func(_, _ any) bool { count++; return true })
+		if count == 1 {
+			break
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	// Second invoke should hit the cap.
+	rec := doInvoke(h, "", "")
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("expected 429 on second invoke, got %d: %s", rec.Code, rec.Body.String())
+	}
+	if rec.Header().Get("Retry-After") == "" {
+		t.Errorf("expected Retry-After header on 429")
+	}
+	if !strings.Contains(rec.Body.String(), "concurrency_exceeded") {
+		t.Errorf("expected concurrency_exceeded error code, got %q", rec.Body.String())
+	}
+
+	// Let the first invoke complete.
+	close(bridge.release)
+	select {
+	case <-first:
+	case <-time.After(2 * time.Second):
+		t.Fatal("first invoke never returned")
+	}
+}

@@ -30,11 +30,13 @@ import (
 	"strings"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
+	agentotel "github.com/agenttier/agenttier/pkg/otel"
 )
 
 // installSoftTimeout is how long the install command can run before the
@@ -93,7 +95,7 @@ type ConfigureResponse struct {
 }
 
 func (h *Handler) handleConfigure(w http.ResponseWriter, r *http.Request) {
-	sandbox, _, ok := h.loadSandbox(w, r)
+	sandbox, claims, ok := h.loadSandbox(w, r)
 	if !ok {
 		return
 	}
@@ -113,12 +115,36 @@ func (h *Handler) handleConfigure(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// One OTel span per /configure. Span name follows the steering rule:
+	// "service.operation" → "agenttier.configure". Attributes are bounded
+	// (template, actor sub, hash) so cardinality stays sane.
+	tracer := agentotel.Tracer("agenttier-router/agent")
+	ctx, span := tracer.Start(r.Context(), "agenttier.configure") // nb: WithAttributes accepts a variadic slice; we add some now and
+	// fill in install_command_hash and outcome below.
+
+	span.SetAttributes(
+		attribute.String("sandbox", sandbox.Name),
+		attribute.String("template", sandbox.Status.ResolvedTemplate),
+		attribute.String("actor", claims.Sub),
+	)
+	defer span.End()
+	startedAt := time.Now()
+	tmplLabel := templateLabel(sandbox.Status.ResolvedTemplate)
+	outcome := "ok"
+	defer func() {
+		configureRequestsTotal.WithLabelValues(tmplLabel, outcome).Inc()
+		configureDurationSeconds.WithLabelValues(tmplLabel, outcome).Observe(time.Since(startedAt).Seconds())
+		span.SetAttributes(attribute.String("outcome", outcome))
+	}()
+
 	var req ConfigureRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		outcome = "bad_request"
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
 		return
 	}
 	if err := req.validate(); err != nil {
+		outcome = "bad_request"
 		writeError(w, http.StatusBadRequest, err.Error())
 		return
 	}
@@ -134,19 +160,26 @@ func (h *Handler) handleConfigure(w http.ResponseWriter, r *http.Request) {
 		skipped = true
 	}
 
+	// Resolve the template's agent caps (max concurrent + default invoke
+	// timeout) and persist them on status so /invoke can enforce without
+	// re-resolving the template on every request.
+	maxConcurrent, defaultTimeout := h.resolveAgentCaps(ctx, sandbox)
+
 	sse, ok := newSSEWriter(w)
 	if !ok {
+		outcome = "stream_unsupported"
 		return
 	}
 
 	// 1. Write all files first. We do this before the install so the
 	//    install command can reference uploaded code (e.g., requirements.txt).
 	if !skipped {
-		if err := h.writeFiles(r.Context(), sse, sandbox, req.Files); err != nil {
+		if err := h.writeFiles(ctx, sse, sandbox, req.Files); err != nil {
 			_ = sse.WriteEvent("error", map[string]string{
 				"phase":   "files",
 				"message": err.Error(),
 			})
+			outcome = "files_failed"
 			return
 		}
 	}
@@ -156,12 +189,13 @@ func (h *Handler) handleConfigure(w http.ResponseWriter, r *http.Request) {
 	exitCode := 0
 	var installLogTail string
 	if !skipped && len(req.InstallCommand) > 0 {
-		ec, tail, err := h.runInstall(r.Context(), sse, sandbox, req.InstallCommand)
+		ec, tail, err := h.runInstall(ctx, sse, sandbox, req.InstallCommand)
 		if err != nil {
 			_ = sse.WriteEvent("error", map[string]string{
 				"phase":   "install",
 				"message": err.Error(),
 			})
+			outcome = "install_failed"
 			return
 		}
 		exitCode = ec
@@ -181,11 +215,28 @@ func (h *Handler) handleConfigure(w http.ResponseWriter, r *http.Request) {
 		Skipped:            skipped,
 	}
 	if exitCode == 0 || skipped {
-		if err := h.persistStatus(r.Context(), sandbox, &resp, installLogTail); err != nil {
+		if err := h.persistStatus(ctx, sandbox, &resp, installLogTail, maxConcurrent, defaultTimeout); err != nil {
 			h.opts.Logger.Warn("failed to persist agentConfigure status",
 				"sandbox", sandbox.Name, "error", err)
 		}
+	} else {
+		outcome = "install_nonzero"
 	}
+
+	span.SetAttributes(
+		attribute.String("install_command_hash", hash),
+		attribute.Int("install_exit_code", exitCode),
+		attribute.Bool("skipped", skipped),
+	)
+
+	// Audit event onto the sandbox CR. Visible via `kubectl describe sandbox`
+	// and through the existing /api/v1/audit/events endpoint.
+	auditMsg := fmt.Sprintf("install_exit_code=%d skipped=%t", exitCode, skipped)
+	auditType := corev1.EventTypeNormal
+	if exitCode != 0 {
+		auditType = corev1.EventTypeWarning
+	}
+	h.recordAuditEvent(ctx, sandbox, auditType, "AgentConfigured", auditMsg)
 
 	_ = sse.WriteEvent("result", resp)
 }
@@ -319,7 +370,7 @@ func (h *Handler) runInstall(ctx context.Context, sse *sseWriter, sandbox *agent
 // persistStatus writes the configure result into Sandbox.status.agentConfigure.
 // We use a 3x retry loop to absorb the optimistic-concurrency conflicts that
 // happen when the controller updates status concurrently.
-func (h *Handler) persistStatus(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox, resp *ConfigureResponse, installLog string) error {
+func (h *Handler) persistStatus(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox, resp *ConfigureResponse, installLog string, maxConcurrent int32, defaultTimeout time.Duration) error {
 	var lastErr error
 	for i := 0; i < 3; i++ {
 		// Re-fetch so we always patch the latest resourceVersion.
@@ -329,11 +380,13 @@ func (h *Handler) persistStatus(ctx context.Context, sandbox *agenttierv1alpha1.
 		}
 		now := resp.LastConfiguredAt
 		fresh.Status.AgentConfigure = &agenttierv1alpha1.AgentConfigureStatus{
-			LastConfiguredAt:   &now,
-			InstallCommandHash: resp.InstallCommandHash,
-			Entrypoint:         resp.Entrypoint,
-			InstallExitCode:    resp.InstallExitCode,
-			InstallLog:         installLog,
+			LastConfiguredAt:            &now,
+			InstallCommandHash:          resp.InstallCommandHash,
+			Entrypoint:                  resp.Entrypoint,
+			InstallExitCode:             resp.InstallExitCode,
+			InstallLog:                  installLog,
+			MaxConcurrentInvokes:        maxConcurrent,
+			DefaultInvokeTimeoutSeconds: int32(defaultTimeout.Seconds()),
 		}
 		if err := h.opts.K8sClient.Status().Update(ctx, fresh); err != nil {
 			if errors.IsConflict(err) {
@@ -345,6 +398,61 @@ func (h *Handler) persistStatus(ctx context.Context, sandbox *agenttierv1alpha1.
 		return nil
 	}
 	return lastErr
+}
+
+// resolveAgentCaps fetches the directly referenced template and returns
+// (maxConcurrentInvokes, defaultInvokeTimeout). When no template ref or no
+// agent block is present, returns zeros (= use Router defaults).
+//
+// Deliberately doesn't walk the inheritance chain — the controller already
+// did that at sandbox-create time, but the resolved chain isn't persisted
+// onto the sandbox spec. Documenting "use the directly referenced template's
+// agent caps" as the v0.3.0 contract; full inheritance lands later if any
+// real user hits the limitation.
+func (h *Handler) resolveAgentCaps(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox) (int32, time.Duration) {
+	if sandbox.Spec.TemplateRef == nil {
+		return 0, 0
+	}
+	kind := sandbox.Spec.TemplateRef.Kind
+	if kind == "" {
+		kind = "ClusterSandboxTemplate" // sandbox-template namespacing handled by lookup below
+	}
+
+	var agentSpec *agenttierv1alpha1.AgentSpec
+	switch kind {
+	case "ClusterSandboxTemplate":
+		t := &agenttierv1alpha1.ClusterSandboxTemplate{}
+		if err := h.opts.K8sClient.Get(ctx, ctrlClientKeyClusterTemplate(sandbox.Spec.TemplateRef.Name), t); err == nil {
+			if t.Spec.Harness != nil {
+				agentSpec = t.Spec.Harness.Agent
+			}
+		}
+	case "SandboxTemplate":
+		ns := sandbox.Spec.TemplateRef.Namespace
+		if ns == "" {
+			ns = sandbox.Namespace
+		}
+		t := &agenttierv1alpha1.SandboxTemplate{}
+		if err := h.opts.K8sClient.Get(ctx, ctrlClientKeyNamespacedTemplate(ns, sandbox.Spec.TemplateRef.Name), t); err == nil {
+			if t.Spec.Harness != nil {
+				agentSpec = t.Spec.Harness.Agent
+			}
+		}
+	}
+
+	if agentSpec == nil {
+		return 0, 0
+	}
+
+	var maxConcurrent int32
+	if agentSpec.MaxConcurrentInvokes != nil {
+		maxConcurrent = *agentSpec.MaxConcurrentInvokes
+	}
+	var defaultTimeout time.Duration
+	if agentSpec.DefaultInvokeTimeout != nil {
+		defaultTimeout = agentSpec.DefaultInvokeTimeout.Duration
+	}
+	return maxConcurrent, defaultTimeout
 }
 
 func modeOrDefault(m agenttierv1alpha1.SandboxMode) string {

@@ -30,6 +30,8 @@ import (
 	"sync"
 
 	"github.com/gorilla/mux"
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
@@ -40,6 +42,16 @@ import (
 // controller-runtime client package directly.
 func ctrlClientKey(sandbox *agenttierv1alpha1.Sandbox) client.ObjectKey {
 	return client.ObjectKey{Name: sandbox.Name, Namespace: sandbox.Namespace}
+}
+
+// ctrlClientKeyClusterTemplate returns the key for a cluster-scoped template.
+func ctrlClientKeyClusterTemplate(name string) client.ObjectKey {
+	return client.ObjectKey{Name: name}
+}
+
+// ctrlClientKeyNamespacedTemplate returns the key for a namespace-scoped template.
+func ctrlClientKeyNamespacedTemplate(namespace, name string) client.ObjectKey {
+	return client.ObjectKey{Namespace: namespace, Name: name}
 }
 
 // Claims is the minimal authenticated identity surface the agent handlers
@@ -136,8 +148,47 @@ func writeError(w http.ResponseWriter, status int, message string) {
 	_ = json.NewEncoder(w).Encode(map[string]string{"error": message})
 }
 
-func writeJSON(w http.ResponseWriter, status int, payload any) { //nolint:unused // wired into /invoke in milestone 3
+func writeJSON(w http.ResponseWriter, status int, payload any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(payload)
+}
+
+// recordAuditEvent posts a Kubernetes event onto the sandbox CR. Shows up in
+// `kubectl describe sandbox <name>` and via the existing audit-log endpoint
+// without needing a separate audit store. Reason should be a short
+// CamelCase token; Message is human-readable. Best-effort — failures are
+// logged but never bubble up to the caller (audit lag must never block
+// configure / invoke).
+func (h *Handler) recordAuditEvent(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox, eventType, reason, message string) {
+	if sandbox == nil {
+		return
+	}
+	now := metav1.Now()
+	evt := &corev1.Event{
+		ObjectMeta: metav1.ObjectMeta{
+			GenerateName: sandbox.Name + ".",
+			Namespace:    sandbox.Namespace,
+		},
+		InvolvedObject: corev1.ObjectReference{
+			Kind:       "Sandbox",
+			APIVersion: agenttierv1alpha1.GroupVersion.String(),
+			Namespace:  sandbox.Namespace,
+			Name:       sandbox.Name,
+			UID:        sandbox.UID,
+		},
+		Reason:         reason,
+		Message:        message,
+		Type:           eventType, // Normal | Warning
+		FirstTimestamp: now,
+		LastTimestamp:  now,
+		Count:          1,
+		Source: corev1.EventSource{
+			Component: "agenttier-router/agent",
+		},
+	}
+	if err := h.opts.K8sClient.Create(ctx, evt); err != nil {
+		h.opts.Logger.Warn("failed to write agent audit event",
+			"sandbox", sandbox.Name, "reason", reason, "error", err)
+	}
 }

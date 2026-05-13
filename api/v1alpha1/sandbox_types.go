@@ -232,6 +232,17 @@ type AgentConfigureStatus struct {
 	// for surface in the Web UI.
 	// +optional
 	InstallLog string `json:"installLog,omitempty"`
+
+	// MaxConcurrentInvokes mirrors the resolved template / governance cap
+	// at /configure time so the /invoke handler can enforce it without
+	// re-resolving the template chain on every request.
+	// +optional
+	MaxConcurrentInvokes int32 `json:"maxConcurrentInvokes,omitempty"`
+
+	// DefaultInvokeTimeoutSeconds mirrors the resolved per-invoke timeout
+	// in seconds. Zero means "use the Router default" (30 minutes today).
+	// +optional
+	DefaultInvokeTimeoutSeconds int32 `json:"defaultInvokeTimeoutSeconds,omitempty"`
 }
 
 // TemplateReference identifies a SandboxTemplate or ClusterSandboxTemplate.

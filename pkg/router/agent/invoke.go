@@ -30,7 +30,11 @@ import (
 	"sync"
 	"time"
 
+	"go.opentelemetry.io/otel/attribute"
+	corev1 "k8s.io/api/core/v1"
+
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
+	agentotel "github.com/agenttier/agenttier/pkg/otel"
 )
 
 // defaultInvokeTimeout caps a single /invoke when the template doesn't set
@@ -144,12 +148,38 @@ func (h *Handler) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	}
 	entrypoint := append([]string(nil), sandbox.Status.AgentConfigure.Entrypoint...)
 
-	// Resolve concurrency cap. Today this comes from the template's agent
-	// spec (which is merged into the sandbox at create time). Governance
-	// will pin a cluster-wide ceiling in milestone 5.
+	// One OTel span per invoke. Attributes follow the steering rule (no
+	// per-user IDs in label values; bucket by template instead).
+	tracer := agentotel.Tracer("agenttier-router/agent")
+	ctx, span := tracer.Start(r.Context(), "agenttier.invoke")
+	span.SetAttributes(
+		attribute.String("sandbox", sandbox.Name),
+		attribute.String("template", sandbox.Status.ResolvedTemplate),
+		attribute.String("actor", claims.Sub),
+	)
+	defer span.End()
+	tmplLabel := templateLabel(sandbox.Status.ResolvedTemplate)
+	startedAt := time.Now()
+	outcome := "completed"
+	var bytesStdout, bytesStderr int64
+	defer func() {
+		span.SetAttributes(
+			attribute.String("outcome", outcome),
+			attribute.Int64("bytes_stdout", bytesStdout),
+			attribute.Int64("bytes_stderr", bytesStderr),
+		)
+		invokeRequestsTotal.WithLabelValues(tmplLabel, outcome).Inc()
+		invokeDurationSeconds.WithLabelValues(tmplLabel, outcome).Observe(time.Since(startedAt).Seconds())
+	}()
+
+	// Resolve concurrency cap. /configure persists the resolved template
+	// value onto status.agentConfigure.maxConcurrentInvokes. Governance
+	// will overlay a cluster ceiling in milestone 5.
 	concurrencyLimit := resolveConcurrencyLimit(sandbox)
 	current, ok := h.concurrency.try(sandbox.Name, concurrencyLimit)
 	if !ok {
+		invokeThrottledTotal.Inc()
+		outcome = "throttled"
 		w.Header().Set("Retry-After", "5")
 		writeJSON(w, http.StatusTooManyRequests, map[string]any{
 			"error":    "concurrency_exceeded",
@@ -183,6 +213,7 @@ func (h *Handler) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	bodyReader := io.LimitReader(r.Body, maxBodyBytes+1)
 	body, _ := io.ReadAll(bodyReader)
 	if int64(len(body)) > maxBodyBytes {
+		outcome = "body_too_large"
 		writeError(w, http.StatusRequestEntityTooLarge, fmt.Sprintf(
 			"request body exceeds %d bytes", maxBodyBytes))
 		return
@@ -196,21 +227,23 @@ func (h *Handler) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	// Now we've passed all the cheap rejects — set up SSE and stream.
 	sse, ok := newSSEWriter(w)
 	if !ok {
+		outcome = "stream_unsupported"
 		return
 	}
 
 	invokeID := newInvokeID()
-	startedAt := time.Now()
+	span.SetAttributes(attribute.String("invoke_id", invokeID))
 	_ = sse.WriteEvent("start", InvokeStartEvent{
 		InvokeID:  invokeID,
 		StartedAt: startedAt.UnixMilli(),
 	})
 
 	// invokeCtx is the context the entrypoint runs under. We derive it from
-	// r.Context() so closing the HTTP connection cancels the exec. We also
+	// the spanned ctx so closing the HTTP connection cancels the exec, and
+	// also so the OTel span covers the entire exec lifetime. We also
 	// register a CancelFunc so /invoke/cancel can terminate the process
 	// out-of-band.
-	invokeCtx, cancel := context.WithTimeout(r.Context(), invokeTimeout)
+	invokeCtx, cancel := context.WithTimeout(ctx, invokeTimeout)
 	defer cancel()
 
 	h.invokes.Store(invokeID, &invokeRegistryEntry{
@@ -237,21 +270,21 @@ func (h *Handler) handleInvoke(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// The bridge wants stdout / stderr writers, not stdin. The current
-	// terminal.Bridge.ExecCommandStream signature doesn't accept stdin
-	// because every consumer up to now (file transfer, /configure install)
-	// passed it via shell metacharacters. We work around that with the
-	// same shell-pipe trick: wrap argv in `sh -c` and pipe stdin through
-	// a heredoc-style printf | <argv>. Avoids changing the bridge
-	// signature for one milestone.
+	// Wrap stdout / stderr writers so we count bytes for the OTel span
+	// without buffering the whole stream.
+	stdoutCounter := &countingWriter{inner: sse.withStream("stdout")}
+	stderrCounter := &countingWriter{inner: sse.withStream("stderr")}
+
 	cmd := buildInvokeCommand(argv, stdin)
 
 	exitReason := "completed"
 	exitCode, err := h.opts.Bridge.ExecCommandStream(
 		invokeCtx, sandbox.Namespace, sandbox.Status.PodName, "sandbox",
-		cmd, sse.withStream("stdout"), sse.withStream("stderr"),
+		cmd, stdoutCounter, stderrCounter,
 	)
 	sse.flushPending()
+	bytesStdout = stdoutCounter.n
+	bytesStderr = stderrCounter.n
 
 	// Map context errors into the exit reason so callers can distinguish.
 	if err != nil {
@@ -270,9 +303,8 @@ func (h *Handler) handleInvoke(w http.ResponseWriter, r *http.Request) {
 			exitReason = "error"
 			exitCode = -1
 		}
-	} else if exitCode != 0 {
-		exitReason = "completed" // entrypoint exited non-zero, but that's the user's program; not an AgentTier failure
 	}
+	outcome = exitReason
 
 	_ = sse.WriteEvent("exit", InvokeExitEvent{
 		InvokeID:   invokeID,
@@ -280,6 +312,34 @@ func (h *Handler) handleInvoke(w http.ResponseWriter, r *http.Request) {
 		DurationMs: time.Since(startedAt).Milliseconds(),
 		Reason:     exitReason,
 	})
+
+	// Audit. Reason indicates how the invoke ended; message stays small
+	// (no argv / stdin so we never accidentally record secrets in the
+	// audit trail). The audit toggle from the steering file
+	// (`audit.includeInvokePayloads`) lands when payload recording is
+	// requested by a real consumer.
+	auditType := corev1.EventTypeNormal
+	if exitReason == "timeout" || exitReason == "error" || (exitReason == "completed" && exitCode != 0) {
+		auditType = corev1.EventTypeWarning
+	}
+	h.recordAuditEvent(ctx, sandbox, auditType, "AgentInvoked", fmt.Sprintf(
+		"invokeId=%s exit=%d reason=%s duration_ms=%d",
+		invokeID, exitCode, exitReason, time.Since(startedAt).Milliseconds(),
+	))
+}
+
+// countingWriter wraps an io.Writer and tracks total bytes written. Used so
+// the invoke OTel span carries bytes_stdout / bytes_stderr attributes
+// without buffering the whole stream in memory.
+type countingWriter struct {
+	inner io.Writer
+	n     int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.inner.Write(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // CancelRequest is the body of POST /invoke/cancel.
@@ -347,19 +407,23 @@ func newInvokeID() string {
 }
 
 func resolveConcurrencyLimit(sandbox *agenttierv1alpha1.Sandbox) int {
-	// Today the merged template lives in status, not on the sandbox spec.
-	// We fetch the agent spec out of status.agentConfigure when it's there
-	// (set by /configure), and otherwise fall back to a sensible default.
-	// Governance integration in milestone 5 will overlay a cluster ceiling.
-	//
-	// status doesn't carry agent caps yet; default to unlimited (0). Once
-	// /configure starts persisting the resolved AgentSpec we'll read it
-	// from there.
+	// /configure persists the resolved AgentSpec.MaxConcurrentInvokes onto
+	// status. Governance integration in milestone 5 overlays a cluster
+	// ceiling that clamps the value down further at admission time, so we
+	// only need to honor what's already on status here.
+	if sandbox.Status.AgentConfigure != nil {
+		return int(sandbox.Status.AgentConfigure.MaxConcurrentInvokes)
+	}
 	return 0
 }
 
 func resolveInvokeTimeout(sandbox *agenttierv1alpha1.Sandbox, override string) time.Duration {
 	limit := defaultInvokeTimeout
+	if sandbox.Status.AgentConfigure != nil && sandbox.Status.AgentConfigure.DefaultInvokeTimeoutSeconds > 0 {
+		if d := time.Duration(sandbox.Status.AgentConfigure.DefaultInvokeTimeoutSeconds) * time.Second; d > 0 {
+			limit = d
+		}
+	}
 	if override != "" {
 		if d, err := time.ParseDuration(override); err == nil && d > 0 && d < limit {
 			return d

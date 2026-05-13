@@ -3454,6 +3454,12 @@ spec:
                   sandboxes. Set only when Spec.Mode == "agent" and POST /configure has
                   completed at least once.
                 properties:
+                  defaultInvokeTimeoutSeconds:
+                    description: |-
+                      DefaultInvokeTimeoutSeconds mirrors the resolved per-invoke timeout
+                      in seconds. Zero means "use the Router default" (30 minutes today).
+                    format: int32
+                    type: integer
                   entrypoint:
                     description: Entrypoint is the resolved command POST /invoke executes.
                     items:
@@ -3480,6 +3486,13 @@ spec:
                       successfully.
                     format: date-time
                     type: string
+                  maxConcurrentInvokes:
+                    description: |-
+                      MaxConcurrentInvokes mirrors the resolved template / governance cap
+                      at /configure time so the /invoke handler can enforce it without
+                      re-resolving the template chain on every request.
+                    format: int32
+                    type: integer
                 type: object
               clonedFrom:
                 description: ClonedFrom records the source sandbox ID if this sandbox
