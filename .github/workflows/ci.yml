@@ -140,7 +140,10 @@ jobs:
       # task.
       - name: govulncheck
         run: |
-          go install golang.org/x/vuln/cmd/govulncheck@latest
+          # govulncheck v1.3.0+ requires Go 1.25 to build. We're pinned to
+          # Go 1.22 until the coordinated toolchain bump (todo 8.1), so
+          # install the last release that still supports 1.22: v1.1.4.
+          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4 || true
           govulncheck ./... || true
 
       # Static analysis for Go-specific security bugs (unsafe pointers,
