@@ -7,6 +7,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- New **Tutorials** section in the docs site (`/tutorials/`): a hub page plus four hands-on walkthroughs — Web UI, Python SDK, code mode, and agent mode. Each tutorial assumes AgentTier is already installed and walks end-to-end through real workflows with copy-pasteable commands.
+
+### Changed
+
+- README header links the new Tutorials section.
+
 ## [v0.3.0] — 2026-05-13
 
 ### Added

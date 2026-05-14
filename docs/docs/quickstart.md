@@ -123,6 +123,7 @@ The Web UI exposes the same actions as one-click buttons on the sandbox card.
 
 ## Next
 
+- [Tutorials](tutorials/index.md) — hands-on walkthroughs for the Web UI, Python SDK, code mode, and agent mode.
 - [Installation](installation.md) — production Helm values, OIDC, warm pool, ingress.
 - [Templates](templates.md) — author custom agent blueprints.
 - [Governance](governance.md) — cluster and per-namespace policy limits.

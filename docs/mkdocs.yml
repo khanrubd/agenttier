@@ -38,6 +38,12 @@ nav:
   - Getting started:
     - Quickstart: quickstart.md
     - Installation: installation.md
+  - Tutorials:
+    - Overview: tutorials/index.md
+    - Web UI walkthrough: tutorials/web-ui.md
+    - Python SDK walkthrough: tutorials/python-sdk.md
+    - Code mode in depth: tutorials/code-mode.md
+    - Agent mode in depth: tutorials/agent-mode-tutorial.md
   - Product:
     - Features: features.md
     - Architecture: architecture.md
