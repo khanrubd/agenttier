@@ -15,6 +15,8 @@ from agenttier.models import CommandResult, FileEntry, ForwardedPort, SandboxPha
 if TYPE_CHECKING:  # pragma: no cover
     import httpx
 
+    from agenttier.async_agent import AsyncAgentAPI
+
 _DEFAULT_WAIT_TIMEOUT = 120.0
 _DEFAULT_POLL_INTERVAL = 2.0
 
@@ -110,6 +112,13 @@ class AsyncSandbox:
     def files(self) -> "AsyncFilesAPI":
         """Async mirror of :pyattr:`Sandbox.files`."""
         return AsyncFilesAPI(self)
+
+    @property
+    def agent(self) -> "AsyncAgentAPI":
+        """Async mirror of :pyattr:`Sandbox.agent`."""
+        from agenttier.async_agent import AsyncAgentAPI
+
+        return AsyncAgentAPI(self)
 
     def __repr__(self) -> str:
         return f"AsyncSandbox(id={self.id!r}, name={self.name!r}, namespace={self.namespace!r})"

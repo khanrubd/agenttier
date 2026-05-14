@@ -83,6 +83,55 @@ class CommandResult(_Model):
     exit_code: int = Field(alias="exitCode")
 
 
+class ConfigureResult(_Model):
+    """Final result of ``Sandbox.configure()``.
+
+    Mirrors the ``result`` SSE event the Router emits at the end of a successful
+    configure call. Fields with no value default to ``None`` / ``False``.
+    """
+
+    last_configured_at: Optional[datetime] = Field(default=None, alias="lastConfiguredAt")
+    install_command_hash: Optional[str] = Field(default=None, alias="installCommandHash")
+    entrypoint: list[str] = Field(default_factory=list)
+    install_exit_code: int = Field(default=0, alias="installExitCode")
+    skipped: bool = False
+
+
+class InvokeEvent(_Model):
+    """A single Server-Sent Event from ``Sandbox.invoke_stream()``.
+
+    The Router emits four event types: ``start`` (once at the beginning),
+    ``log`` (zero or more for stdout/stderr lines), ``exit`` (once at the
+    end with exit_code + duration), and ``error`` (when something on the
+    Router side fails). The stream is wrapped into typed Python objects so
+    callers can pattern-match without parsing SSE wire format directly.
+    """
+
+    event: str
+    """Event name: ``"start"``, ``"log"``, ``"exit"``, or ``"error"``."""
+
+    data: dict[str, Any] = Field(default_factory=dict)
+    """Decoded JSON payload from the SSE ``data:`` line."""
+
+
+class InvokeResult(_Model):
+    """Result of ``Sandbox.invoke()`` after consuming the SSE stream.
+
+    The SDK accumulates stdout / stderr from log events and exposes the final
+    exit code + duration from the exit event so the caller doesn't have to
+    iterate the stream themselves.
+    """
+
+    invoke_id: str = Field(alias="invokeId")
+    exit_code: int = Field(alias="exitCode")
+    duration_ms: int = Field(alias="durationMs")
+    reason: str = "completed"
+    """One of ``completed``, ``timeout``, ``canceled``, ``error``."""
+
+    stdout: str = ""
+    stderr: str = ""
+
+
 class Template(_Model):
     """Sandbox template as exposed by the Router templates endpoints."""
 

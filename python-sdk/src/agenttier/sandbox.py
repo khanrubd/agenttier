@@ -19,6 +19,8 @@ from agenttier.models import CommandResult, FileEntry, ForwardedPort, SandboxPha
 if TYPE_CHECKING:  # pragma: no cover
     import httpx
 
+    from agenttier.agent import AgentAPI
+
 _DEFAULT_WAIT_TIMEOUT = 120.0
 _DEFAULT_POLL_INTERVAL = 2.0
 
@@ -156,6 +158,22 @@ class Sandbox:
         timeouts automatically.
         """
         return FilesAPI(self)
+
+    # ------- agent mode --------------------------------------------------
+
+    @property
+    def agent(self) -> "AgentAPI":
+        """Namespace for the agent-mode REST surface.
+
+        Returns a facade for ``/configure``, ``/invoke``, and
+        ``/invoke/cancel``. Only valid when the sandbox was created with
+        ``mode: agent`` — code-mode sandboxes get a 400 from the Router.
+        """
+        # Local import keeps a code-mode-only Sandbox from importing the SSE
+        # parsing machinery on construction.
+        from agenttier.agent import AgentAPI
+
+        return AgentAPI(self)
 
     # ------- misc --------------------------------------------------------
 
