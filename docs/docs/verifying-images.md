@@ -13,7 +13,7 @@ Requires cosign v2+.
 cosign verify \
   --certificate-identity-regexp 'https://github.com/agenttier/agenttier/.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  ghcr.io/agenttier/controller:v0.2.2
+  ghcr.io/agenttier/controller:v0.3.0
 ```
 
 The command prints the certificate chain on success and exits non-zero if the
@@ -24,14 +24,14 @@ workflow.
 
 ```bash
 # Unsigned download (convenient, not tamper-proof):
-cosign download sbom ghcr.io/agenttier/controller:v0.2.2 > controller.spdx.json
+cosign download sbom ghcr.io/agenttier/controller:v0.3.0 > controller.spdx.json
 
 # Signed attestation (recommended):
 cosign verify-attestation \
   --certificate-identity-regexp 'https://github.com/agenttier/agenttier/.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   --type spdx \
-  ghcr.io/agenttier/controller:v0.2.2
+  ghcr.io/agenttier/controller:v0.3.0
 ```
 
 ## Policy engines

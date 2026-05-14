@@ -62,6 +62,14 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 - **Ready-to-use images** — Bundled Dockerfiles for `general-coding`, `claude-code-developer`, `minimal-shell`, `security-scanner`, and `data-analysis` workloads.
 - **Claude Code + Bedrock** — First-class support for running Claude Code against Amazon Bedrock, including IRSA-based IAM credential injection.
 
+### Agent mode (v0.3.0)
+
+- **`mode: agent` sandboxes** — Same Sandbox CRD, same Pod, same PVC, same governance — driven via REST instead of the terminal. Configure once with `POST /configure` (uploads files + runs an install command), then run on demand with `POST /invoke` (Server-Sent Events streaming runner). Closing the SSE connection cancels the in-pod process.
+- **Bring your own framework or harness** — `langgraph-agent` reference template ships in the box; the same shape works for Strands Agents, AutoGen, OpenHands, OpenClaw, or any pip-installable agent library. The framework owns the loop; AgentTier owns lifecycle, auth, transport, audit, and governance.
+- **Concurrency + timeout caps** — Per-sandbox `maxConcurrentInvokes` returns HTTP 429 with `Retry-After` over cap. Default 30-minute per-invoke timeout; callers can lower via `?timeout=`. Cluster ceiling clamps both via governance.
+- **Audit + observability** — OTel spans (`agenttier.invoke`, `agenttier.configure`), Prometheus metrics (`agenttier_invoke_*`, `agenttier_configure_*`), and Kubernetes events on the Sandbox CR for `kubectl describe`-based audit.
+- **Optional `mem0` memory sidecar** — Helm-flagged opt-in that injects a mem0 server next to the agent container. Bring-your-own memory (PVC-local, Pinecone, Postgres + pgvector, AgentCore Memory) is fully supported and documented.
+
 ### Security and isolation
 
 - **Network isolation** — Default deny-all egress with configurable allow rules, always-on DNS, and optional inter-sandbox peering via label selectors.

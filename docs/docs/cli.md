@@ -14,7 +14,7 @@ Pick the binary for your OS/arch and drop it on your `PATH`.
 ### macOS / Linux
 
 ```bash
-VERSION=v0.2.2
+VERSION=v0.3.0
 OS=$(uname -s | tr A-Z a-z)
 ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 curl -L -o agenttier \
@@ -36,7 +36,7 @@ Download `agenttier-vX.Y.Z-windows-amd64.exe` from the release page and place
 it somewhere on your `PATH`. PowerShell one-liner:
 
 ```powershell
-$version = "v0.2.2"
+$version = "v0.3.0"
 Invoke-WebRequest `
   -Uri "https://github.com/agenttier/agenttier/releases/download/$version/agenttier-$version-windows-amd64.exe" `
   -OutFile "$env:USERPROFILE\bin\agenttier.exe"
@@ -73,7 +73,7 @@ agenttier --help
 agenttier --version
 ```
 
-The CLI is still lean in v0.2.2 — the core sandbox and template commands are
+The CLI is still lean in v0.3.0 — the core sandbox and template commands are
 there; port forwarding and governance editing will follow the server-side
 maturity. For features the CLI doesn't cover yet, fall back to `kubectl` on
 CRDs directly (sandboxes, templates) or the Python SDK.
