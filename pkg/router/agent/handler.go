@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
+	"github.com/agenttier/agenttier/pkg/governance"
 )
 
 // ctrlClientKey returns the controller-runtime client.ObjectKey for a sandbox.
@@ -81,6 +82,12 @@ type ExecBridge interface {
 // already enforces for /api/v1/sandboxes/{id}.
 type SandboxLookup func(ctx context.Context, sandboxID string, claims *Claims) (*agenttierv1alpha1.Sandbox, error)
 
+// PolicyResolver returns the effective governance policy for the given
+// namespace. Agent endpoints use this to clamp template-supplied caps
+// (e.g. maxConcurrentInvokes) at /configure time. Returning an empty
+// policy is a valid signal that no limits apply.
+type PolicyResolver func(ctx context.Context, namespace string) (governance.Policy, error)
+
 // Options bundles the dependencies the agent package needs. The Router
 // constructs one of these from its existing state and hands it to New().
 type Options struct {
@@ -89,6 +96,9 @@ type Options struct {
 	Logger       *slog.Logger
 	ClaimsLookup func(r *http.Request) *Claims
 	SandboxOf    SandboxLookup
+	// PolicyOf is optional. When nil, no governance clamping is applied
+	// at /configure time and the template's values pass through.
+	PolicyOf PolicyResolver
 }
 
 // Handler holds dependencies for the agent endpoints and exposes

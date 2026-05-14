@@ -98,6 +98,32 @@ func Check(policy Policy, usage Usage, sandbox *agenttierv1alpha1.Sandbox) Viola
 		})
 	}
 
+	// Agent-mode quota: only relevant when this sandbox is itself agent-mode.
+	if sandbox.Spec.Mode == agenttierv1alpha1.SandboxModeAgent &&
+		policy.MaxAgentSandboxes > 0 &&
+		usage.AgentSandboxes >= policy.MaxAgentSandboxes {
+		out = append(out, Violation{
+			Code:    "agent_sandbox_quota_exceeded",
+			Message: fmt.Sprintf("namespace already has %d agent-mode sandboxes (max %d)", usage.AgentSandboxes, policy.MaxAgentSandboxes),
+		})
+	}
+
+	// Agent image allowlist: a separate, typically tighter list than
+	// ApprovedRegistries because agent code has more freedom inside the
+	// sandbox than an interactive developer environment. Only enforced
+	// when the sandbox is mode: agent AND has an image override (template
+	// images are trusted).
+	if sandbox.Spec.Mode == agenttierv1alpha1.SandboxModeAgent &&
+		len(policy.AllowedAgentImages) > 0 &&
+		sandbox.Spec.Image != nil && sandbox.Spec.Image.Repository != "" {
+		if !hasRegistryPrefix(sandbox.Spec.Image.Repository, policy.AllowedAgentImages) {
+			out = append(out, Violation{
+				Code:    "agent_image_not_approved",
+				Message: fmt.Sprintf("agent image %q is not in the approved-agent-images list (%s)", sandbox.Spec.Image.Repository, strings.Join(policy.AllowedAgentImages, ", ")),
+			})
+		}
+	}
+
 	// Resource caps — only check sandbox overrides. The template's own
 	// resource requests are validated at template-creation time (future).
 	if policy.MaxCPU != "" && sandbox.Spec.Resources != nil {
@@ -190,4 +216,22 @@ func exceedsDuration(got time.Duration, capStr string) bool {
 		return true
 	}
 	return got > cap
+}
+
+// ClampConcurrency returns the effective per-sandbox max concurrent invokes,
+// applying the policy's MaxConcurrentInvokesPerSandbox as a cluster ceiling
+// over the sandbox-or-template-supplied value. Both arguments are 0 = no
+// limit; the result follows the same convention.
+//
+// The policy ceiling wins when the requested value exceeds it. When the
+// policy is unset, the requested value passes through unchanged.
+func ClampConcurrency(policy Policy, requested int32) int32 {
+	if policy.MaxConcurrentInvokesPerSandbox <= 0 {
+		return requested
+	}
+	ceiling := int32(policy.MaxConcurrentInvokesPerSandbox)
+	if requested == 0 || requested > ceiling {
+		return ceiling
+	}
+	return requested
 }

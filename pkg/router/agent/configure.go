@@ -36,6 +36,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
+	"github.com/agenttier/agenttier/pkg/governance"
 	agentotel "github.com/agenttier/agenttier/pkg/otel"
 )
 
@@ -452,6 +453,16 @@ func (h *Handler) resolveAgentCaps(ctx context.Context, sandbox *agenttierv1alph
 	if agentSpec.DefaultInvokeTimeout != nil {
 		defaultTimeout = agentSpec.DefaultInvokeTimeout.Duration
 	}
+
+	// Clamp the template's value against the cluster ceiling if a
+	// PolicyResolver is configured. Empty policy or unset ceiling means
+	// the template wins unchanged.
+	if h.opts.PolicyOf != nil {
+		if policy, err := h.opts.PolicyOf(ctx, sandbox.Namespace); err == nil {
+			maxConcurrent = governance.ClampConcurrency(policy, maxConcurrent)
+		}
+	}
+
 	return maxConcurrent, defaultTimeout
 }
 

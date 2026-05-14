@@ -246,3 +246,113 @@ func TestCountUsage(t *testing.T) {
 		t.Errorf("expected 2 for u1, got %d", got.UserSandboxes)
 	}
 }
+
+func TestCheck_AgentSandboxQuota(t *testing.T) {
+	policy := Policy{MaxAgentSandboxes: 2}
+	usage := Usage{TotalSandboxes: 10, AgentSandboxes: 2}
+	sb := sandboxWith(func(s *agenttierv1alpha1.Sandbox) {
+		s.Spec.Mode = agenttierv1alpha1.SandboxModeAgent
+	})
+
+	violations := Check(policy, usage, sb)
+	if !violations.Violated() {
+		t.Fatal("expected agent_sandbox_quota_exceeded violation")
+	}
+	if violations[0].Code != "agent_sandbox_quota_exceeded" {
+		t.Errorf("expected agent_sandbox_quota_exceeded, got %s", violations[0].Code)
+	}
+}
+
+func TestCheck_AgentSandboxQuotaIgnoresCodeMode(t *testing.T) {
+	policy := Policy{MaxAgentSandboxes: 2}
+	usage := Usage{AgentSandboxes: 2} // already at the cap
+	sb := sandboxWith(func(s *agenttierv1alpha1.Sandbox) {
+		s.Spec.Mode = agenttierv1alpha1.SandboxModeCode
+	})
+
+	if Check(policy, usage, sb).Violated() {
+		t.Error("MaxAgentSandboxes should not block a new code-mode sandbox")
+	}
+}
+
+func TestCheck_AllowedAgentImages(t *testing.T) {
+	policy := Policy{AllowedAgentImages: []string{"ghcr.io/agenttier/sandbox-langgraph"}}
+	sb := sandboxWith(func(s *agenttierv1alpha1.Sandbox) {
+		s.Spec.Mode = agenttierv1alpha1.SandboxModeAgent
+		s.Spec.Image = &agenttierv1alpha1.ImageSpec{Repository: "ghcr.io/random/agent:latest"}
+	})
+
+	violations := Check(policy, Usage{}, sb)
+	if !violations.Violated() {
+		t.Fatal("expected agent_image_not_approved violation")
+	}
+	if violations[0].Code != "agent_image_not_approved" {
+		t.Errorf("expected agent_image_not_approved, got %s", violations[0].Code)
+	}
+}
+
+func TestClampConcurrency(t *testing.T) {
+	cases := []struct {
+		name      string
+		policy    Policy
+		requested int32
+		want      int32
+	}{
+		{"unset policy passes through", Policy{}, 5, 5},
+		{"unset request keeps unlimited", Policy{}, 0, 0},
+		{"under ceiling passes through", Policy{MaxConcurrentInvokesPerSandbox: 8}, 3, 3},
+		{"over ceiling clamps", Policy{MaxConcurrentInvokesPerSandbox: 4}, 10, 4},
+		{"unset request clamped to ceiling", Policy{MaxConcurrentInvokesPerSandbox: 4}, 0, 4},
+		{"equal to ceiling unchanged", Policy{MaxConcurrentInvokesPerSandbox: 4}, 4, 4},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := ClampConcurrency(tc.policy, tc.requested)
+			if got != tc.want {
+				t.Errorf("ClampConcurrency(%+v, %d) = %d, want %d", tc.policy, tc.requested, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestCountUsage_AgentSandboxes(t *testing.T) {
+	list := &agenttierv1alpha1.SandboxList{
+		Items: []agenttierv1alpha1.Sandbox{
+			{
+				Spec:   agenttierv1alpha1.SandboxSpec{Mode: agenttierv1alpha1.SandboxModeAgent, CreatedBy: &agenttierv1alpha1.UserIdentity{Sub: "u1"}},
+				Status: agenttierv1alpha1.SandboxStatus{Phase: agenttierv1alpha1.SandboxPhaseRunning},
+			},
+			{
+				Spec:   agenttierv1alpha1.SandboxSpec{Mode: agenttierv1alpha1.SandboxModeAgent},
+				Status: agenttierv1alpha1.SandboxStatus{Phase: agenttierv1alpha1.SandboxPhaseStopped},
+			},
+			{
+				Spec:   agenttierv1alpha1.SandboxSpec{Mode: agenttierv1alpha1.SandboxModeCode},
+				Status: agenttierv1alpha1.SandboxStatus{Phase: agenttierv1alpha1.SandboxPhaseRunning},
+			},
+			{
+				// Error phase doesn't count.
+				Spec:   agenttierv1alpha1.SandboxSpec{Mode: agenttierv1alpha1.SandboxModeAgent},
+				Status: agenttierv1alpha1.SandboxStatus{Phase: agenttierv1alpha1.SandboxPhaseError},
+			},
+		},
+	}
+	u := CountUsage(list, "u1")
+	if u.AgentSandboxes != 2 {
+		t.Errorf("expected 2 agent sandboxes (Running + Stopped), got %d", u.AgentSandboxes)
+	}
+	if u.TotalSandboxes != 3 {
+		t.Errorf("expected 3 total sandboxes (Error excluded), got %d", u.TotalSandboxes)
+	}
+	if u.UserSandboxes != 1 {
+		t.Errorf("expected 1 user sandbox for u1, got %d", u.UserSandboxes)
+	}
+}
+
+// Silence unused imports when only the new tests reference them.
+var (
+	_ = corev1.PodSpec{}
+	_ = resource.Quantity{}
+	_ = metav1.Time{}
+	_ = time.Now
+)

@@ -184,6 +184,12 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 		Logger:       s.logger,
 		ClaimsLookup: s.agentClaims,
 		SandboxOf:    s.agentSandboxOf,
+		PolicyOf: func(ctx context.Context, namespace string) (governance.Policy, error) {
+			if s.governanceStore == nil {
+				return governance.Policy{}, nil
+			}
+			return governance.Resolve(ctx, s.governanceStore, namespace)
+		},
 	})
 	agentHandler.RegisterRoutes(api)
 

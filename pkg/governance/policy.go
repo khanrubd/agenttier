@@ -86,6 +86,25 @@ type Policy struct {
 	// Nil/empty = any image is allowed.
 	ApprovedRegistries []string `json:"approvedRegistries,omitempty"`
 
+	// MaxAgentSandboxes caps how many `mode: agent` sandboxes can exist in
+	// this scope at once. 0 = no agent-specific cap (the regular
+	// MaxSandboxesTotal still applies). Useful for clusters that want to
+	// allow code-mode sandboxes liberally but ration agent-mode resource
+	// consumption.
+	MaxAgentSandboxes int `json:"maxAgentSandboxes,omitempty"`
+
+	// AllowedAgentImages restricts agent-mode sandbox container images to
+	// these registry prefixes. Distinct from ApprovedRegistries because
+	// platform teams typically want a tighter allowlist for agent code
+	// (which has more freedom inside the sandbox) than for interactive
+	// developer environments. Empty = falls back to ApprovedRegistries.
+	AllowedAgentImages []string `json:"allowedAgentImages,omitempty"`
+
+	// MaxConcurrentInvokesPerSandbox caps the per-sandbox concurrent
+	// /invoke calls. Sandbox spec values exceeding this are clamped at
+	// admission time. 0 = no cluster ceiling; sandbox spec wins.
+	MaxConcurrentInvokesPerSandbox int `json:"maxConcurrentInvokesPerSandbox,omitempty"`
+
 	// Description is a human-readable note shown in the UI.
 	Description string `json:"description,omitempty"`
 }
@@ -100,7 +119,10 @@ func (p Policy) IsEmpty() bool {
 		p.MaxTimeout == "" &&
 		p.MaxIdleTimeout == "" &&
 		len(p.AllowedTemplates) == 0 &&
-		len(p.ApprovedRegistries) == 0
+		len(p.ApprovedRegistries) == 0 &&
+		p.MaxAgentSandboxes == 0 &&
+		len(p.AllowedAgentImages) == 0 &&
+		p.MaxConcurrentInvokesPerSandbox == 0
 }
 
 // ScopedPolicy is a Policy with the scope it applies to. Scope is either
@@ -313,6 +335,10 @@ func mergePolicies(parent, child Policy) Policy {
 type Usage struct {
 	TotalSandboxes int
 	UserSandboxes  int
+	// AgentSandboxes is the count of sandboxes currently in mode: agent.
+	// Used to enforce the MaxAgentSandboxes policy field independently of
+	// the total sandbox count.
+	AgentSandboxes int
 }
 
 // CountUsage computes the current usage across a namespace from the provided
@@ -329,6 +355,9 @@ func CountUsage(list *agenttierv1alpha1.SandboxList, userSub string) Usage {
 		u.TotalSandboxes++
 		if sb.Spec.CreatedBy != nil && sb.Spec.CreatedBy.Sub == userSub {
 			u.UserSandboxes++
+		}
+		if sb.Spec.Mode == agenttierv1alpha1.SandboxModeAgent {
+			u.AgentSandboxes++
 		}
 	}
 	return u
