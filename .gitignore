@@ -81,3 +81,6 @@ testbin/
 
 # OS files
 Thumbs.db
+
+# Local PR tracker for awesome-list submissions
+/pr-tracker.md

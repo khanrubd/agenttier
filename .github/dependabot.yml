@@ -8,6 +8,20 @@ updates:
     labels:
       - "dependencies"
       - "go"
+    # Hold off on Go-toolchain-blocked majors. These all require Go 1.23+
+    # but go.mod is pinned to 1.22 per the project's coordinated Go-toolchain
+    # policy (see .kiro/steering/project.md#dependency-policy). They land in
+    # a single coordinated bump alongside k8s.io/* 0.36, OTel 1.43, and
+    # prometheus 1.23.
+    ignore:
+      - dependency-name: "google.golang.org/grpc"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
+      - dependency-name: "golang.org/x/oauth2"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "golang.org/x/net"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "go.opentelemetry.io/*"
+        update-types: ["version-update:semver-minor"]
     groups:
       # Bundle the Kubernetes client libraries together. These are version-locked
       # in practice — upgrading one without the others causes compile failures.
@@ -32,11 +46,14 @@ updates:
     # Hold off on major upgrades — we'll do a coordinated tooling refresh
     # (React Router, Vite, TypeScript, ESLint) together rather than piecemeal.
     # The peer-dependent packages are ignored alongside their anchors.
+    # `vite` gets a tighter rule because security-driven transitive bumps
+    # (e.g. esbuild) keep dragging vite forward; we want to stay on 5.x
+    # until the coordinated refresh.
     ignore:
       - dependency-name: "react-router-dom"
         update-types: ["version-update:semver-major"]
       - dependency-name: "vite"
-        update-types: ["version-update:semver-major"]
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
       - dependency-name: "@vitejs/plugin-react"
         update-types: ["version-update:semver-major"]
       - dependency-name: "typescript"
@@ -45,6 +62,32 @@ updates:
         update-types: ["version-update:semver-major"]
       - dependency-name: "@eslint/js"
         update-types: ["version-update:semver-major"]
+
+  # The /examples/langgraph-agent/requirements.txt is intentionally pinned
+  # to match the sandbox-langgraph reference image (images/langgraph/
+  # Dockerfile). Letting Dependabot bump the example without bumping the
+  # image would make the example deviate from what users actually run when
+  # they pull the published image. We coordinate both files manually when
+  # we want to refresh the agent harness deps.
+  - package-ecosystem: "pip"
+    directory: "/examples/langgraph-agent"
+    schedule:
+      interval: "monthly"
+    open-pull-requests-limit: 0  # don't auto-open; human-driven coordinated bumps only
+    labels:
+      - "dependencies"
+      - "python"
+
+  # python-sdk lives at /python-sdk; we DO want Dependabot to manage its
+  # own deps independently of the example.
+  - package-ecosystem: "pip"
+    directory: "/python-sdk"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "python"
 
   - package-ecosystem: "docker"
     directory: "/"
