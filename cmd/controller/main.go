@@ -50,13 +50,14 @@ func init() {
 
 func main() {
 	var (
-		metricsAddr        string
-		healthProbeAddr    string
-		leaderElect        bool
-		maxConcurrency     int
-		defaultImage       string
-		defaultStorageSize string
-		defaultMountPath   string
+		metricsAddr             string
+		healthProbeAddr         string
+		leaderElect             bool
+		maxConcurrency          int
+		defaultImage            string
+		defaultStorageSize      string
+		defaultMountPath        string
+		agentMemorySidecarImage string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8081", "The address the metrics endpoint binds to.")
@@ -66,6 +67,10 @@ func main() {
 	flag.StringVar(&defaultImage, "default-image", "ghcr.io/agenttier/sandbox-general:latest", "Default sandbox container image.")
 	flag.StringVar(&defaultStorageSize, "default-storage-size", "10Gi", "Default PVC storage size.")
 	flag.StringVar(&defaultMountPath, "default-mount-path", "/workspace", "Default PVC mount path.")
+	flag.StringVar(&agentMemorySidecarImage, "agent-memory-sidecar-image", "",
+		"When set, every mode: agent sandbox Pod gains a mem0 sidecar at "+
+			"this image and MEM0_BASE_URL=http://localhost:11434 is "+
+			"injected into the sandbox container. Empty = feature off.")
 
 	opts := zap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
@@ -94,13 +99,14 @@ func main() {
 
 	// Register the Sandbox reconciler
 	if err := (&controller.SandboxReconciler{
-		Client:             mgr.GetClient(),
-		Scheme:             mgr.GetScheme(),
-		Recorder:           mgr.GetEventRecorderFor("agenttier-controller"),
-		MaxConcurrency:     maxConcurrency,
-		DefaultImage:       defaultImage,
-		DefaultStorageSize: defaultStorageSize,
-		DefaultMountPath:   defaultMountPath,
+		Client:                  mgr.GetClient(),
+		Scheme:                  mgr.GetScheme(),
+		Recorder:                mgr.GetEventRecorderFor("agenttier-controller"),
+		MaxConcurrency:          maxConcurrency,
+		DefaultImage:            defaultImage,
+		DefaultStorageSize:      defaultStorageSize,
+		DefaultMountPath:        defaultMountPath,
+		AgentMemorySidecarImage: agentMemorySidecarImage,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Sandbox")
 		os.Exit(1)

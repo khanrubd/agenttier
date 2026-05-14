@@ -22,6 +22,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
@@ -474,7 +475,67 @@ func MergeSandboxWithTemplate(sandbox *agenttierv1alpha1.SandboxSpec, template *
 		config.Files = template.Files
 	}
 
+	// mem0 sidecar — opt-in via controller flag, applied only to mode:
+	// agent sandboxes. The sandbox's framework code reads MEM0_BASE_URL
+	// to dial the sidecar at localhost. Sidecar storage lives on the same
+	// PVC at /workspace/.agenttier/memory so it survives stop/resume.
+	if defaults != nil && defaults.AgentMemorySidecarImage != "" && sandbox.Mode == agenttierv1alpha1.SandboxModeAgent {
+		config.Sidecars = append(config.Sidecars, buildMemorySidecar(defaults.AgentMemorySidecarImage, config.MountPath))
+		config.Env = mergeEnvVars(config.Env, []corev1.EnvVar{
+			{Name: "MEM0_BASE_URL", Value: "http://localhost:11434"},
+		})
+	}
+
 	return config
+}
+
+// buildMemorySidecar returns the container spec for the mem0 sidecar that
+// lives next to the sandbox container in mode: agent pods. Listens on
+// 127.0.0.1:11434 inside the pod's network namespace so framework code in
+// the sandbox container reaches it via localhost.
+//
+// Storage path is mountPath + "/.agenttier/memory" so persistence rides on
+// the workspace PVC and survives stop/resume the same way user code does.
+func buildMemorySidecar(image, mountPath string) corev1.Container {
+	dataPath := mountPath + "/.agenttier/memory"
+	return corev1.Container{
+		Name:  "mem0",
+		Image: image,
+		Env: []corev1.EnvVar{
+			// Most mem0 builds honor these. We ship the conservative
+			// localhost-bind config so the sidecar is unreachable from
+			// outside the pod's network namespace.
+			{Name: "MEM0_HOST", Value: "127.0.0.1"},
+			{Name: "MEM0_PORT", Value: "11434"},
+			{Name: "MEM0_DATA_DIR", Value: dataPath},
+		},
+		VolumeMounts: []corev1.VolumeMount{
+			{Name: workspaceVolumeName, MountPath: mountPath},
+		},
+		// Modest defaults — operators can override via template sidecar
+		// overrides if they need more memory.
+		Resources: corev1.ResourceRequirements{
+			Requests: corev1.ResourceList{
+				corev1.ResourceCPU:    parseQuantityOrZero("100m"),
+				corev1.ResourceMemory: parseQuantityOrZero("128Mi"),
+			},
+			Limits: corev1.ResourceList{
+				corev1.ResourceCPU:    parseQuantityOrZero("500m"),
+				corev1.ResourceMemory: parseQuantityOrZero("512Mi"),
+			},
+		},
+	}
+}
+
+// parseQuantityOrZero is a small wrapper that returns the zero quantity if
+// parsing fails. Used at construction time for hardcoded defaults so a typo
+// here surfaces as zero limits at deploy rather than a panic at startup.
+func parseQuantityOrZero(s string) resource.Quantity {
+	q, err := resource.ParseQuantity(s)
+	if err != nil {
+		return resource.Quantity{}
+	}
+	return q
 }
 
 // ControllerDefaults holds the controller-level default configuration.
@@ -483,4 +544,7 @@ type ControllerDefaults struct {
 	Resources *corev1.ResourceRequirements
 	Storage   string
 	MountPath string
+	// AgentMemorySidecarImage routes through to MergeSandboxWithTemplate
+	// for mode: agent sandboxes only. See SandboxReconciler doc-comment.
+	AgentMemorySidecarImage string
 }

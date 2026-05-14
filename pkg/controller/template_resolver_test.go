@@ -298,3 +298,71 @@ func TestMergeAgent_ChildOverridesScalars(t *testing.T) {
 // Silence unused-import warnings in the rare case the tests above are the
 // only reference to a particular package.
 var _ = resource.Quantity{}
+
+func TestMergeSandboxWithTemplate_InjectsMemorySidecarForAgentMode(t *testing.T) {
+	sb := &agenttierv1alpha1.SandboxSpec{
+		Mode: agenttierv1alpha1.SandboxModeAgent,
+	}
+	defaults := &ControllerDefaults{
+		Image:                   "ghcr.io/agenttier/sandbox-langgraph:v0.3.0",
+		MountPath:               "/workspace",
+		AgentMemorySidecarImage: "mem0/mem0:0.1.115",
+	}
+
+	config := MergeSandboxWithTemplate(sb, nil, defaults)
+
+	if len(config.Sidecars) != 1 {
+		t.Fatalf("expected 1 sidecar (mem0), got %d", len(config.Sidecars))
+	}
+	if config.Sidecars[0].Name != "mem0" {
+		t.Errorf("expected sidecar name mem0, got %s", config.Sidecars[0].Name)
+	}
+	if config.Sidecars[0].Image != "mem0/mem0:0.1.115" {
+		t.Errorf("expected mem0 image, got %s", config.Sidecars[0].Image)
+	}
+
+	// MEM0_BASE_URL should be set in the agent container's env.
+	var found bool
+	for _, e := range config.Env {
+		if e.Name == "MEM0_BASE_URL" && e.Value == "http://localhost:11434" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("expected MEM0_BASE_URL in agent env, got %v", config.Env)
+	}
+}
+
+func TestMergeSandboxWithTemplate_NoSidecarForCodeMode(t *testing.T) {
+	sb := &agenttierv1alpha1.SandboxSpec{
+		Mode: agenttierv1alpha1.SandboxModeCode,
+	}
+	defaults := &ControllerDefaults{
+		AgentMemorySidecarImage: "mem0/mem0:0.1.115",
+	}
+
+	config := MergeSandboxWithTemplate(sb, nil, defaults)
+
+	if len(config.Sidecars) != 0 {
+		t.Errorf("expected zero sidecars for code-mode sandbox, got %d", len(config.Sidecars))
+	}
+	for _, e := range config.Env {
+		if e.Name == "MEM0_BASE_URL" {
+			t.Error("MEM0_BASE_URL leaked into a code-mode sandbox")
+		}
+	}
+}
+
+func TestMergeSandboxWithTemplate_NoSidecarWhenFlagOff(t *testing.T) {
+	sb := &agenttierv1alpha1.SandboxSpec{
+		Mode: agenttierv1alpha1.SandboxModeAgent,
+	}
+	defaults := &ControllerDefaults{} // empty AgentMemorySidecarImage = feature off
+
+	config := MergeSandboxWithTemplate(sb, nil, defaults)
+
+	if len(config.Sidecars) != 0 {
+		t.Errorf("expected no sidecar when flag is off, got %d", len(config.Sidecars))
+	}
+}

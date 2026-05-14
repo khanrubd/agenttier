@@ -31,6 +31,9 @@ spec:
             - --max-concurrency={{ .Values.controller.maxConcurrency }}
             - --metrics-bind-address=:8081
             - --health-probe-bind-address=:8082
+            {{- if and .Values.optional.agentMemorySidecar .Values.optional.agentMemorySidecar.enabled }}
+            - --agent-memory-sidecar-image={{ .Values.optional.agentMemorySidecar.image }}
+            {{- end }}
           env:
             {{- if .Values.observability.otlp.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT

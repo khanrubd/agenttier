@@ -179,6 +179,23 @@ optional:
       type: gp3
       # Encrypted: "true"
       # kmsKeyId: "arn:aws:kms:…"
+  # Optional mem0 sidecar for agent-mode sandboxes (Phase 10).
+  #
+  # When enabled, every Sandbox created with `mode: agent` gains a
+  # mem0 sidecar container in its Pod (alongside the user's agent
+  # container). The sandbox container automatically gets
+  # MEM0_BASE_URL=http://localhost:11434 in its env, so framework code
+  # can dial the sidecar at localhost without touching network policy.
+  #
+  # Sidecar storage lives on the same workspace PVC at
+  # /workspace/.agenttier/memory, so memory survives stop/resume the
+  # same way user code does.
+  #
+  # Pin to an exact tag for reproducibility. We default to a known
+  # stable tag; bump as upstream releases.
+  agentMemorySidecar:
+    enabled: false
+    image: "mem0/mem0:0.1.115"
   # Ingress for Web UI
   #
   # When enabled the chart creates a single Ingress routing `/`, `/api/`, and

@@ -52,6 +52,12 @@ type SandboxReconciler struct {
 	DefaultImage       string
 	DefaultStorageSize string
 	DefaultMountPath   string
+	// AgentMemorySidecarImage, when non-empty, instructs the controller to
+	// inject an opt-in mem0 sidecar into every mode: agent Pod and to set
+	// MEM0_BASE_URL on the sandbox container so framework code can dial
+	// the sidecar at localhost. Empty disables the feature entirely. Set
+	// from the Helm flag optional.agentMemorySidecar.enabled+image.
+	AgentMemorySidecarImage string
 }
 
 func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -183,9 +189,10 @@ func (r *SandboxReconciler) reconcileCreating(ctx context.Context, sandbox *agen
 
 	// Step 2: Merge sandbox spec with template and defaults
 	defaults := &ControllerDefaults{
-		Image:     r.DefaultImage,
-		MountPath: r.DefaultMountPath,
-		Storage:   r.DefaultStorageSize,
+		Image:                   r.DefaultImage,
+		MountPath:               r.DefaultMountPath,
+		Storage:                 r.DefaultStorageSize,
+		AgentMemorySidecarImage: r.AgentMemorySidecarImage,
 	}
 	mergedConfig := MergeSandboxWithTemplate(&sandbox.Spec, templateSpec, defaults)
 

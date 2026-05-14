@@ -71,6 +71,9 @@ helm/agenttier/charts/
 dist/
 tmp/
 
+# MkDocs build output (only committed to gh-pages by the release workflow)
+docs/site/
+
 # Test
 testbin/
 
