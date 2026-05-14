@@ -169,6 +169,15 @@ type CommandResult struct {
 // ctx.Err() and the exit code is undefined (the caller already knows the
 // stream was aborted).
 func (b *Bridge) ExecCommandStream(ctx context.Context, namespace, podName, container string, command []string, stdout, stderr io.Writer) (int, error) {
+	return b.ExecCommandStreamWithStdin(ctx, namespace, podName, container, command, nil, stdout, stderr)
+}
+
+// ExecCommandStreamWithStdin is like ExecCommandStream but also pipes the
+// supplied stdin reader into the in-pod process. Pass nil for stdin to
+// behave exactly like ExecCommandStream. Used by /invoke so the request
+// body reaches the entrypoint without going through `printf | base64 -d`
+// (which hits ARG_MAX on payloads above ~128 KB).
+func (b *Bridge) ExecCommandStreamWithStdin(ctx context.Context, namespace, podName, container string, command []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
 	req := b.clientset.CoreV1().RESTClient().Post().
 		Resource("pods").
 		Name(podName).
@@ -177,7 +186,7 @@ func (b *Bridge) ExecCommandStream(ctx context.Context, namespace, podName, cont
 		VersionedParams(&corev1.PodExecOptions{
 			Container: container,
 			Command:   command,
-			Stdin:     false,
+			Stdin:     stdin != nil,
 			Stdout:    true,
 			Stderr:    true,
 			TTY:       false,
@@ -188,10 +197,14 @@ func (b *Bridge) ExecCommandStream(ctx context.Context, namespace, podName, cont
 		return -1, fmt.Errorf("failed to create executor: %w", err)
 	}
 
-	err = exec.StreamWithContext(ctx, remotecommand.StreamOptions{
+	streamOpts := remotecommand.StreamOptions{
 		Stdout: stdout,
 		Stderr: stderr,
-	})
+	}
+	if stdin != nil {
+		streamOpts.Stdin = stdin
+	}
+	err = exec.StreamWithContext(ctx, streamOpts)
 
 	// Treat context cancel as the canonical "client disconnected" signal.
 	// We intentionally don't try to recover the exit code here — the caller

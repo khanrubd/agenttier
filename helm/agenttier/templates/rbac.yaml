@@ -47,7 +47,7 @@ rules:
   # Events
   - apiGroups: [""]
     resources: ["events"]
-    verbs: ["create", "patch"]
+    verbs: ["get", "list", "watch", "create", "patch"]
   # VolumeSnapshots (for cloning and backups)
   - apiGroups: ["snapshot.storage.k8s.io"]
     resources: ["volumesnapshots"]

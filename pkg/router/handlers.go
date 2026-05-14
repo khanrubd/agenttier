@@ -99,6 +99,16 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		},
 	}
 
+	// Inherit mode from the referenced template so the agent endpoints
+	// know which API surface the sandbox accepts. Without this the CRD
+	// default of "code" wins and POST /configure / /invoke return 400 on
+	// agent-template sandboxes. Best-effort: if the template lookup fails
+	// (NotFound, RBAC), the controller's reconciler will still resolve and
+	// the sandbox stays in code mode — which is the conservative default.
+	if mode := s.resolveTemplateMode(r.Context(), req.TemplateRef, namespace); mode != "" {
+		sandbox.Spec.Mode = mode
+	}
+
 	if req.Storage != nil {
 		sandbox.Spec.Storage = req.Storage
 	}
@@ -1448,3 +1458,40 @@ func respondError(w http.ResponseWriter, status int, message string) {
 
 // Ensure terminal package is referenced
 var _ = terminal.MessageTypeInput
+
+// resolveTemplateMode looks up the directly referenced template (cluster-
+// scoped or namespaced) and returns its mode field. Best-effort: returns
+// empty string on any error so the caller can fall back to the CRD default.
+// Inheritance chains are not walked here — child templates that override
+// mode will surface correctly because their direct mode wins; templates
+// that inherit mode from a parent get the parent's value at the next
+// reconcile cycle, which is acceptable since the controller already runs
+// full template resolution.
+func (s *Server) resolveTemplateMode(ctx context.Context, ref *agenttierv1alpha1.TemplateReference, sandboxNamespace string) agenttierv1alpha1.SandboxMode {
+	if ref == nil || ref.Name == "" {
+		return ""
+	}
+	kind := ref.Kind
+	if kind == "" {
+		kind = "ClusterSandboxTemplate"
+	}
+	switch kind {
+	case "ClusterSandboxTemplate":
+		t := &agenttierv1alpha1.ClusterSandboxTemplate{}
+		if err := s.k8sClient.Get(ctx, client.ObjectKey{Name: ref.Name}, t); err != nil {
+			return ""
+		}
+		return t.Spec.Mode
+	case "SandboxTemplate":
+		ns := ref.Namespace
+		if ns == "" {
+			ns = sandboxNamespace
+		}
+		t := &agenttierv1alpha1.SandboxTemplate{}
+		if err := s.k8sClient.Get(ctx, client.ObjectKey{Namespace: ns, Name: ref.Name}, t); err != nil {
+			return ""
+		}
+		return t.Spec.Mode
+	}
+	return ""
+}

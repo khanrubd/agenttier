@@ -201,7 +201,14 @@ optional:
   # stable tag; bump as upstream releases.
   agentMemorySidecar:
     enabled: false
-    image: "mem0/mem0:0.1.115"
+    # Platform note: as of late 2025 mem0 only ships an arm64 image at
+    # docker.io/mem0/mem0-api-server. Running this on amd64 nodes (the
+    # default for most EKS / GKE setups) requires either an arm64 node
+    # group or a custom multi-arch rebuild of the mem0 server. We pin by
+    # digest because mem0 only publishes the `latest` tag — by-digest
+    # references give you a reproducible reference. Update the digest when
+    # you want a newer build. Disabled by default for that reason.
+    image: "mem0/mem0-api-server@sha256:2fcf4bb713cfc584d454bf06993cc7e2fe51540695995bd3aa9c7008b7065c75"
   # Ingress for Web UI
   #
   # When enabled the chart creates a single Ingress routing `/`, `/api/`, and

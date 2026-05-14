@@ -324,7 +324,7 @@ func TestMergeSandboxWithTemplate_InjectsMemorySidecarForAgentMode(t *testing.T)
 	// MEM0_BASE_URL should be set in the agent container's env.
 	var found bool
 	for _, e := range config.Env {
-		if e.Name == "MEM0_BASE_URL" && e.Value == "http://localhost:11434" {
+		if e.Name == "MEM0_BASE_URL" && e.Value == "http://localhost:8000" {
 			found = true
 			break
 		}

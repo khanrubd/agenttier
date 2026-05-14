@@ -10,25 +10,35 @@ FROM public.ecr.aws/docker/library/python:3.11-slim
 
 ARG TARGETARCH
 
-# System packages: git for checkouts, curl + ca-certs for outbound API calls,
-# build-essential because some agent libs ship sdist-only wheels for arm64.
+# System packages: git for checkouts, curl + ca-certs for outbound API calls.
+# build-essential is intentionally NOT installed — every dep we ship has a
+# prebuilt wheel for linux/amd64 + linux/arm64 at the pinned versions, so the
+# 350-MB toolchain is dead weight. Re-add when bumping a dep introduces a new
+# sdist-only package.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
         ca-certificates \
-        build-essential \
     && rm -rf /var/lib/apt/lists/*
 
 # Pin every dep so this image rebuilds reproducibly. Bumping these is a
 # deliberate decision (release notes, smoke test) — not an opportunistic
 # Dependabot PR.
+#
+# Split into multiple `pip install` layers so each individual image layer
+# stays under ~80 MB. Single 200-MB+ layers occasionally hit ECR push
+# timeouts on slower / proxied connections; multiple smaller layers retry
+# more reliably.
 RUN pip install --no-cache-dir \
-        langgraph==0.6.4 \
-        langchain==0.3.27 \
+        pydantic==2.10.4 \
+        httpx==0.28.1
+RUN pip install --no-cache-dir \
         langchain-core==0.3.78 \
-        httpx==0.28.1 \
-        mem0ai==0.1.115 \
-        pydantic==2.10.4
+        langchain==0.3.27
+RUN pip install --no-cache-dir \
+        langgraph==0.6.4
+RUN pip install --no-cache-dir \
+        mem0ai==0.1.115
 
 # Standard sandbox user / workspace conventions. AgentTier's NetworkPolicy +
 # PVC + FSGroup all assume uid 1000 / gid 1000.

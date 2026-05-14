@@ -65,6 +65,16 @@ func (b *blockingBridge) ExecCommandStream(ctx context.Context, _, _, _ string, 
 	}
 }
 
+// ExecCommandStreamWithStdin proxies through after draining stdin so the
+// bridge interface is satisfied. Drain happens before block so the SPDY
+// emulation completes input transfer like a real bridge would.
+func (b *blockingBridge) ExecCommandStreamWithStdin(ctx context.Context, ns, pod, container string, command []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	if stdin != nil {
+		_, _ = io.Copy(io.Discard, stdin)
+	}
+	return b.ExecCommandStream(ctx, ns, pod, container, command, stdout, stderr)
+}
+
 func newConfiguredAgentSandbox() *agenttierv1alpha1.Sandbox {
 	sb := newAgentSandbox()
 	sb.Status.AgentConfigure = &agenttierv1alpha1.AgentConfigureStatus{

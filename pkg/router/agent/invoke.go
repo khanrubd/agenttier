@@ -17,9 +17,9 @@ limitations under the License.
 package agent
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -275,12 +275,16 @@ func (h *Handler) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	stdoutCounter := &countingWriter{inner: sse.withStream("stdout")}
 	stderrCounter := &countingWriter{inner: sse.withStream("stderr")}
 
-	cmd := buildInvokeCommand(argv, stdin)
+	cmd := buildInvokeCommand(argv)
 
 	exitReason := "completed"
-	exitCode, err := h.opts.Bridge.ExecCommandStream(
+	var stdinReader io.Reader
+	if len(stdin) > 0 {
+		stdinReader = bytes.NewReader(stdin)
+	}
+	exitCode, err := h.opts.Bridge.ExecCommandStreamWithStdin(
 		invokeCtx, sandbox.Namespace, sandbox.Status.PodName, "sandbox",
-		cmd, stdoutCounter, stderrCounter,
+		cmd, stdinReader, stdoutCounter, stderrCounter,
 	)
 	sse.flushPending()
 	bytesStdout = stdoutCounter.n
@@ -432,12 +436,10 @@ func resolveInvokeTimeout(sandbox *agenttierv1alpha1.Sandbox, override string) t
 	return limit
 }
 
-// buildInvokeCommand wraps argv in `sh -c` so we can pipe stdin in via
-// printf without changing the bridge signature. The heredoc approach used
-// by /configure file uploads doesn't work here because the user's argv
-// can contain anything; we route through a temp file instead so the user
-// program's stdin is whatever they sent in the request body.
-func buildInvokeCommand(argv []string, stdin []byte) []string {
+// buildInvokeCommand wraps argv in `sh -c` so we can pass a single string
+// to the SPDY exec layer. Stdin is delivered separately via the bridge's
+// stdin channel — no shell encoding required, no ARG_MAX limit.
+func buildInvokeCommand(argv []string) []string {
 	// Quote argv so the user program receives the same args we got. Each
 	// arg goes through a single-quote wrap with embedded single quotes
 	// turned into '"'"'.
@@ -446,19 +448,7 @@ func buildInvokeCommand(argv []string, stdin []byte) []string {
 		quoted = append(quoted, shellQuote(a))
 	}
 	cmdline := strings.Join(quoted, " ")
-
-	if len(stdin) == 0 {
-		return []string{"/bin/sh", "-c", cmdline}
-	}
-
-	// stdin payload: we base64-encode it so binary or newline-rich payloads
-	// don't break shell parsing. The receiving agent process sees the raw
-	// bytes on its stdin via the base64 -d | <cmd> pipe.
-	encoded := base64.StdEncoding.EncodeToString(stdin)
-	return []string{"/bin/sh", "-c", fmt.Sprintf(
-		"printf %%s %s | base64 -d | %s",
-		shellQuote(encoded), cmdline,
-	)}
+	return []string{"/bin/sh", "-c", cmdline}
 }
 
 // shellQuote wraps s in single quotes, escaping any embedded single quotes.

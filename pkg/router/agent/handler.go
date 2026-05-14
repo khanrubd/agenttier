@@ -74,6 +74,13 @@ type ExecBridge interface {
 	// stdout / stderr to the supplied writers. Returns the exit code on
 	// clean termination, or a context error on cancel.
 	ExecCommandStream(ctx context.Context, namespace, podName, container string, command []string, stdout, stderr io.Writer) (int, error)
+
+	// ExecCommandStreamWithStdin behaves like ExecCommandStream but also
+	// pipes the supplied stdin reader into the in-pod process. Used by
+	// /invoke so request bodies above the shell ARG_MAX (~128 KB) reach
+	// the entrypoint via SPDY's stdin channel rather than `printf |
+	// base64 -d` shell tricks. Pass nil stdin to mimic ExecCommandStream.
+	ExecCommandStreamWithStdin(ctx context.Context, namespace, podName, container string, command []string, stdin io.Reader, stdout, stderr io.Writer) (int, error)
 }
 
 // SandboxLookup resolves a sandbox by ID and applies any auth checks the

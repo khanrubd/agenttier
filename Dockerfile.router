@@ -6,6 +6,14 @@ FROM public.ecr.aws/docker/library/golang:1.22-alpine AS builder
 
 RUN apk add --no-cache git ca-certificates
 
+# GOPROXY=direct bypasses proxy.golang.org. Default in Docker network is the
+# proxy URL, but on networks where the proxy is blocked (corporate VPN /
+# captive networks), the build hangs on `go mod download`. Override at build
+# time with --build-arg GOPROXY=https://proxy.golang.org,direct when on a
+# normal network.
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
+
 WORKDIR /workspace
 
 # Cache dependencies

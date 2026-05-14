@@ -63,6 +63,15 @@ func (b *stubBridge) ExecCommandStream(ctx context.Context, _, _, _ string, comm
 	return b.exit, nil
 }
 
+// ExecCommandStreamWithStdin proxies to ExecCommandStream after draining
+// any stdin reader so we can verify input bytes via the recorded call.
+func (b *stubBridge) ExecCommandStreamWithStdin(ctx context.Context, ns, pod, container string, command []string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
+	if stdin != nil {
+		_, _ = io.Copy(io.Discard, stdin)
+	}
+	return b.ExecCommandStream(ctx, ns, pod, container, command, stdout, stderr)
+}
+
 func buildHandler(t *testing.T, sandbox *agenttierv1alpha1.Sandbox, bridge ExecBridge) (*Handler, client.Client) {
 	t.Helper()
 	scheme := runtime.NewScheme()

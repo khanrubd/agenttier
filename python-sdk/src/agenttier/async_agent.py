@@ -59,6 +59,10 @@ class AsyncAgentAPI:
             timeout=timeout,
             headers={"Accept": "text/event-stream"},
         ) as resp:
+            # async client streams need explicit aread() before raise_for_status
+            # can read the body. raise_for_status itself does this on sync only.
+            if not resp.is_success:
+                await resp.aread()
             raise_for_status(resp)
             async for event in _iter_sse_async(resp.aiter_lines()):
                 if event.event == "log":
@@ -154,6 +158,8 @@ class AsyncAgentAPI:
             params=params,
             timeout=http_timeout,
         ) as resp:
+            if not resp.is_success:
+                await resp.aread()
             raise_for_status(resp)
             async for event in _iter_sse_async(resp.aiter_lines()):
                 yield event

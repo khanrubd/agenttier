@@ -290,6 +290,19 @@ func (r *SandboxReconciler) reconcileRunning(ctx context.Context, sandbox *agent
 		return r.transitionToError(ctx, sandbox, "Pod name not set in Running state")
 	}
 
+	// User-requested stop: the Router annotates the sandbox with
+	// `agenttier.io/action: stop` to signal a graceful stop. We honor it
+	// here in the Running-phase reconcile loop. Resume is handled at the
+	// REST layer by transitioning the phase directly (no annotation
+	// needed). Clearing the annotation prevents replay loops.
+	if sandbox.Annotations["agenttier.io/action"] == "stop" {
+		delete(sandbox.Annotations, "agenttier.io/action")
+		if err := r.Update(ctx, sandbox); err != nil {
+			return ctrl.Result{}, err
+		}
+		return r.stopSandbox(ctx, sandbox, "User requested stop")
+	}
+
 	pod := &corev1.Pod{}
 	err := r.Get(ctx, client.ObjectKey{Namespace: sandbox.Namespace, Name: sandbox.Status.PodName}, pod)
 	if err != nil {

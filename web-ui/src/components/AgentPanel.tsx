@@ -174,6 +174,20 @@ export default function AgentPanel({ sandboxId, running }: Props) {
       // AbortError surfaces here when the user clicks Cancel locally.
       if (!(e instanceof Error) || e.name !== 'AbortError') {
         setInvokeError(e instanceof Error ? e.message : 'Invoke failed');
+      } else {
+        // Cancel killed the local stream before we saw the server's exit
+        // event. Synthesize a recent-invoke entry so the UI still surfaces
+        // the canceled run.
+        setRecent(prev => [
+          {
+            id: activeInvokeId ?? `inv-${startedAt}`,
+            startedAt,
+            durationMs: Date.now() - startedAt,
+            exitCode: -1,
+            reason: 'canceled',
+          },
+          ...prev,
+        ].slice(0, 5));
       }
     } finally {
       setInvoking(false);

@@ -482,7 +482,7 @@ func MergeSandboxWithTemplate(sandbox *agenttierv1alpha1.SandboxSpec, template *
 	if defaults != nil && defaults.AgentMemorySidecarImage != "" && sandbox.Mode == agenttierv1alpha1.SandboxModeAgent {
 		config.Sidecars = append(config.Sidecars, buildMemorySidecar(defaults.AgentMemorySidecarImage, config.MountPath))
 		config.Env = mergeEnvVars(config.Env, []corev1.EnvVar{
-			{Name: "MEM0_BASE_URL", Value: "http://localhost:11434"},
+			{Name: "MEM0_BASE_URL", Value: "http://localhost:8000"},
 		})
 	}
 
@@ -491,7 +491,7 @@ func MergeSandboxWithTemplate(sandbox *agenttierv1alpha1.SandboxSpec, template *
 
 // buildMemorySidecar returns the container spec for the mem0 sidecar that
 // lives next to the sandbox container in mode: agent pods. Listens on
-// 127.0.0.1:11434 inside the pod's network namespace so framework code in
+// 127.0.0.1:8000 inside the pod's network namespace so framework code in
 // the sandbox container reaches it via localhost.
 //
 // Storage path is mountPath + "/.agenttier/memory" so persistence rides on
@@ -501,12 +501,14 @@ func buildMemorySidecar(image, mountPath string) corev1.Container {
 	return corev1.Container{
 		Name:  "mem0",
 		Image: image,
+		// The upstream mem0/mem0-api-server image runs uvicorn on port 8000
+		// by default. We override its bind to 127.0.0.1 so the sidecar is
+		// unreachable from outside the Pod's network namespace; the user's
+		// agent code talks to it via MEM0_BASE_URL=http://localhost:8000
+		// which the controller injects on the sandbox container.
 		Env: []corev1.EnvVar{
-			// Most mem0 builds honor these. We ship the conservative
-			// localhost-bind config so the sidecar is unreachable from
-			// outside the pod's network namespace.
 			{Name: "MEM0_HOST", Value: "127.0.0.1"},
-			{Name: "MEM0_PORT", Value: "11434"},
+			{Name: "MEM0_PORT", Value: "8000"},
 			{Name: "MEM0_DATA_DIR", Value: dataPath},
 		},
 		VolumeMounts: []corev1.VolumeMount{

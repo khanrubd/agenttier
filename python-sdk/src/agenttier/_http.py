@@ -38,9 +38,22 @@ def raise_for_status(response: httpx.Response) -> None:
 
     The Router returns structured JSON error bodies (``{"error": ..., ...}``)
     so we can offer crisp exception types without parsing error strings.
+
+    For streaming responses (``client.stream()``), httpx defers reading the
+    body until ``.read()`` / ``.iter_*()`` is called. We explicitly read the
+    body when the response is non-2xx so the body-decode logic below works
+    on either streaming or buffered responses without bifurcating the API.
     """
     if response.is_success:
         return
+
+    # On a streaming response the body hasn't been fetched yet. Pull it in
+    # here so _decode_body can access response.content.
+    if not getattr(response, "_content", None):
+        try:
+            response.read()
+        except Exception:  # pragma: no cover — body already consumed
+            pass
 
     body = _decode_body(response)
     status = response.status_code

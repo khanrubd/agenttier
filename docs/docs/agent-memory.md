@@ -31,15 +31,19 @@ def remember(turn: dict) -> None:
 
 ## 2. mem0 sidecar (opt-in via Helm flag)
 
-When you want a real memory API but don't want to operate one externally, AgentTier can inject a [mem0](https://mem0.ai) sidecar into every `mode: agent` Pod. The sidecar listens on `127.0.0.1:11434` inside the Pod's network namespace; AgentTier sets `MEM0_BASE_URL=http://localhost:11434` in your sandbox container's environment so framework code reaches it without any network policy changes. Storage lives at `/workspace/.agenttier/memory` on the same workspace PVC, so memory survives stop/resume the same way user code does.
+When you want a real memory API but don't want to operate one externally, AgentTier can inject a [mem0](https://mem0.ai) sidecar into every `mode: agent` Pod. The sidecar listens on `127.0.0.1:8000` inside the Pod's network namespace; AgentTier sets `MEM0_BASE_URL=http://localhost:8000` in your sandbox container's environment so framework code reaches it without any network policy changes. Storage lives at `/workspace/.agenttier/memory` on the same workspace PVC, so memory survives stop/resume the same way user code does.
 
-Enable it in your Helm values:
+**Platform requirement.** As of late 2025 mem0 only publishes an arm64 image at `docker.io/mem0/mem0-api-server`. Running the sidecar on amd64 nodes (the default for most EKS / GKE setups) requires either an arm64 node group or a custom multi-arch rebuild of the mem0 server. The flag is opt-in and disabled by default.
+
+Enable it in your Helm values (arm64 nodes only):
 
 ```yaml
 optional:
   agentMemorySidecar:
     enabled: true
-    image: "mem0/mem0:0.1.115"  # pin to an exact tag
+    # mem0 only publishes the `latest` tag — pinning by digest gives you
+    # a reproducible reference. Update the digest when you want a newer build.
+    image: "mem0/mem0-api-server@sha256:2fcf4bb713cfc584d454bf06993cc7e2fe51540695995bd3aa9c7008b7065c75"
 ```
 
 Then in your agent code:
@@ -47,14 +51,21 @@ Then in your agent code:
 ```python
 # /workspace/agent.py
 import os
-from mem0 import Memory
+import httpx
 
-m = Memory(base_url=os.environ["MEM0_BASE_URL"])
-m.add("user prefers concise responses", user_id="alice")
-results = m.search("preferences", user_id="alice")
+MEM0_URL = os.environ["MEM0_BASE_URL"]
+
+def remember(content: str, user_id: str = "default") -> None:
+    httpx.post(f"{MEM0_URL}/memories", json={
+        "messages": [{"role": "user", "content": content}],
+        "user_id": user_id,
+    })
+
+def search(query: str, user_id: str = "default") -> list:
+    return httpx.get(f"{MEM0_URL}/search", params={"query": query, "user_id": user_id}).json()
 ```
 
-The `mem0` Python client is preinstalled in the `sandbox-langgraph` reference image; for custom images, install it via `/configure` (`pip install mem0`) or bake it into your Dockerfile.
+The sidecar exposes mem0's REST API directly. The `mem0ai` Python client is preinstalled in the `sandbox-langgraph` reference image so users can also `from mem0 import MemoryClient` and pass `host=MEM0_BASE_URL`.
 
 **Trade-offs:** Free local memory store with a real API. Memory is per-sandbox — there's no automatic sharing across sandboxes (each Pod has its own sidecar). Good for dev clusters and single-tenant agents that want a quick win.
 
