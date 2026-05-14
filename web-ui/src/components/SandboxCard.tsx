@@ -9,6 +9,7 @@ import type { Sandbox } from '../types';
 import StatusBadge from './StatusBadge';
 import PortForwardsPanel from './PortForwardsPanel';
 import FilesPanel from './FilesPanel';
+import AgentPanel from './AgentPanel';
 
 // AdvancedPanel hides Port forwards + Files behind a single click so cards
 // stay compact by default. Only rendered when the sandbox is running — the
@@ -39,7 +40,7 @@ function AdvancedPanel({ running, children }: { running: boolean; children: Reac
           cursor: 'pointer',
         }}
       >
-        <span>Advanced — ports & files</span>
+        <span>Advanced — ports, files, agent</span>
         <span style={{ fontSize: '10px', color: '#6b6375' }}>{open ? '▾' : '▸'}</span>
       </button>
       {open && (
@@ -146,6 +147,7 @@ export default function SandboxCard({ sandbox, busy = false, onStop, onResume, o
       <AdvancedPanel running={status === 'running'}>
         <PortForwardsPanel sandboxId={id} running={status === 'running'} />
         <FilesPanel sandboxId={id} running={status === 'running'} />
+        <AgentPanel sandboxId={id} running={status === 'running'} />
       </AdvancedPanel>
     </div>
   );

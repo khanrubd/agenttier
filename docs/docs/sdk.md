@@ -79,6 +79,72 @@ asyncio.run(main())
 
 Both clients share the same exception hierarchy and model types.
 
+## Agent mode
+
+`mode: agent` sandboxes are driven through `sandbox.agent.configure(...)` and
+`sandbox.agent.invoke(...)` instead of the terminal. The SDK ships sync and
+async surfaces; both speak the Router's Server-Sent Events wire format
+under the hood and return typed Pydantic models.
+
+```python
+from agenttier import AgentTierClient
+
+with AgentTierClient(api_url="https://agenttier.company.com") as client:
+    sb = client.create_sandbox(template="langgraph-agent", name="my-agent")
+    sb.wait_until_running()
+
+    # 1. Upload code + run install + persist the entrypoint
+    sb.agent.configure(
+        files=[
+            ("/workspace/agent.py", "./agent.py"),  # local path
+            {"path": "/workspace/requirements.txt", "content": "langgraph\nhttpx\n"},
+        ],
+        install_command=["pip", "install", "-r", "/workspace/requirements.txt"],
+        entrypoint=["python", "/workspace/agent.py"],
+        on_log=lambda stream, line: print(f"[install:{stream}] {line}"),
+    )
+
+    # 2. Invoke and aggregate the result
+    result = sb.agent.invoke({"prompt": "summarize this PR"})
+    print(result.stdout)
+    print("exit:", result.exit_code, "duration:", result.duration_ms, "ms")
+
+    # 3. Or stream events live for a richer UI
+    for event in sb.agent.invoke_stream({"prompt": "..."}):
+        if event.event == "log":
+            print(event.data["data"])
+        elif event.event == "exit":
+            print("done:", event.data["exitCode"])
+```
+
+`configure` accepts:
+
+- `files`: list of `(path, source)` tuples or `{"path": ..., "content": ...}` /
+  `{"path": ..., "contentBase64": ...}` dicts. Tuple sources can be local paths
+  (str / Path) or `bytes`. Binary input auto-base64s.
+- `install_command`: argv list run once. Idempotent — re-running with the
+  same files + command is a no-op.
+- `entrypoint`: argv list persisted onto the sandbox so `invoke()` knows what
+  to run.
+- `on_log=callback(stream, line)`: optional live install logs.
+
+`invoke` accepts a `payload` (dict / str / bytes), an optional `prompt`
+(appended as `--prompt=` to argv and fed to stdin when payload is empty),
+and an `invoke_timeout` Go duration string (e.g. `"5m"`) to lower the
+server-side cap below the template's default.
+
+`invoke_cancel(invoke_id)` terminates an in-flight invoke. Pair it with the
+`invoke_id` from the first event of `invoke_stream`. Best-effort: returns
+silently on success, raises `NotFoundError` if the invoke already
+completed.
+
+Async users get the same shapes via `await sandbox.agent.configure(...)`,
+`await sandbox.agent.invoke(...)`, and `async for event in
+sandbox.agent.invoke_stream(...)`.
+
+See [agent-memory.md](agent-memory.md) for the three patterns AgentTier
+supports for agent memory.
+
 ## API reference
 
 ### Clients

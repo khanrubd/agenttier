@@ -70,6 +70,55 @@ order is: sandbox spec → template spec → parent template → controller defa
 Env vars are additive with sandbox values winning on key conflicts. Inheritance
 depth is capped at 10 to prevent loops.
 
+## Agent mode
+
+Templates with `spec.mode: agent` define sandboxes that run a configured entrypoint via [`POST /configure`](agent-mode.md) + [`POST /invoke`](agent-mode.md) instead of the terminal. The agent contract lives under `spec.harness.agent`:
+
+```yaml
+apiVersion: agenttier.io/v1alpha1
+kind: ClusterSandboxTemplate
+metadata:
+  name: my-agent-template
+spec:
+  mode: agent
+  image:
+    repository: ghcr.io/agenttier/sandbox-langgraph:v0.3.0
+  harness:
+    workingDir: /workspace
+    agent:
+      entrypoint: ["python", "/workspace/agent.py"]
+      installCommand: ["pip", "install", "-r", "/workspace/requirements.txt"]
+      defaultInvokeTimeout: 30m
+      maxConcurrentInvokes: 4
+```
+
+| Field | Effect |
+| --- | --- |
+| `entrypoint` | Argv `/invoke` runs on every call. Receives the request body on stdin. |
+| `installCommand` | Argv run once at `/configure` time. Idempotent across re-configures. |
+| `workingDir` | Working directory for both. Defaults to `/workspace`. |
+| `env` | Additional env vars merged on top of the template's harness env. |
+| `defaultInvokeTimeout` | Wall-clock cap per invoke. Callers can lower via `?timeout=` but not raise. Defaults to 30 minutes. |
+| `maxConcurrentInvokes` | Cap on parallel invokes per sandbox. Over-cap requests get HTTP 429. Governance can clamp this lower; see [governance.md](governance.md#agent-mode-policies). |
+
+The mode and the agent block are both optional at the template level — a template without them defaults to code mode and the existing harness fields apply unchanged.
+
+## Credentials
+
+Inject secrets into the sandbox container via `spec.credentials`:
+
+```yaml
+spec:
+  credentials:
+    - secretName: openai-api-key
+      mountAs: env
+      envPrefix: OPENAI_
+```
+
+`mountAs: env` exposes every key in the Secret as an env var (with the optional `envPrefix` prepended). `mountAs: file` mounts the Secret as a read-only volume at `mountPath`. Combine with IRSA on EKS for AWS-native flows like Bedrock — annotate the sandbox ServiceAccount with the role ARN and skip `credentials` for AWS calls entirely.
+
+Agent-mode sandboxes use the same `credentials` block; nothing special is required for `/invoke` to inherit them. See [agent-mode.md](agent-mode.md#memory-model-providers-secrets) for the canonical patterns.
+
 ## Managing templates
 
 - **Web UI** → Templates tab: inline YAML editor with syntax highlighting,

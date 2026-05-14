@@ -234,6 +234,164 @@ export function downloadFileUrl(sandboxId: string, fullPath: string): string {
   return `${API_BASE}/sandboxes/${sandboxId}/files/${stripped}`;
 }
 
+// --- Agent mode (Phase 10) ---
+
+// SSE event payload as the Router emits it. We surface the raw event name +
+// JSON body so consumers can pattern-match without baking schema knowledge
+// into the transport layer.
+export interface AgentSSEEvent {
+  event: string;
+  data: Record<string, unknown>;
+}
+
+export interface AgentConfigureRequest {
+  files?: { path: string; content?: string; contentBase64?: string }[];
+  installCommand?: string[];
+  entrypoint?: string[];
+}
+
+// streamAgentConfigure POSTs to /configure and yields each SSE event as it
+// arrives. The fetch + ReadableStream + TextDecoder pattern is enough for
+// the chunked SSE wire format — we deliberately don't pull in a third-party
+// SSE library here. Closing the iterator cancels the underlying fetch which
+// the Router treats as a client cancel.
+export async function* streamAgentConfigure(
+  sandboxId: string,
+  body: AgentConfigureRequest,
+): AsyncIterable<AgentSSEEvent> {
+  const res = await fetch(`${API_BASE}/sandboxes/${sandboxId}/configure`, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', 'Accept': 'text/event-stream' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${errBody}`);
+  }
+  yield* readSSE(res);
+}
+
+export interface AgentInvokeRequest {
+  // Either a JSON body, a string, or null. The CLI / SDK accept bytes too,
+  // but the Web UI invoke flow is text-first; users with binary payloads
+  // should use the SDK.
+  payload?: Record<string, unknown> | string | null;
+  prompt?: string;
+  // Per-invoke server-side timeout (e.g. "5m"). When unset the Router uses
+  // the template's defaultInvokeTimeout (or 30 minutes when that's also unset).
+  invokeTimeout?: string;
+}
+
+// streamAgentInvoke POSTs to /invoke and yields SSE events live. Returns the
+// AsyncIterable so the Agent panel can render output as it arrives instead
+// of waiting for the exit event.
+export async function* streamAgentInvoke(
+  sandboxId: string,
+  req: AgentInvokeRequest = {},
+): AsyncIterable<AgentSSEEvent> {
+  const params = new URLSearchParams();
+  if (req.prompt !== undefined) params.set('prompt', req.prompt);
+  if (req.invokeTimeout !== undefined) params.set('timeout', req.invokeTimeout);
+  const qs = params.toString();
+  const url = `${API_BASE}/sandboxes/${sandboxId}/invoke${qs ? `?${qs}` : ''}`;
+
+  let body: BodyInit | null = null;
+  let contentType = 'application/octet-stream';
+  if (typeof req.payload === 'string') {
+    body = req.payload;
+    contentType = 'text/plain; charset=utf-8';
+  } else if (req.payload && typeof req.payload === 'object') {
+    body = JSON.stringify(req.payload);
+    contentType = 'application/json';
+  }
+
+  const res = await fetch(url, {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': contentType, 'Accept': 'text/event-stream' },
+    body,
+  });
+  if (!res.ok) {
+    const errBody = await res.text().catch(() => res.statusText);
+    throw new Error(`${res.status}: ${errBody}`);
+  }
+  yield* readSSE(res);
+}
+
+export async function cancelAgentInvoke(sandboxId: string, invokeId: string): Promise<void> {
+  await request(`/sandboxes/${sandboxId}/invoke/cancel`, {
+    method: 'POST',
+    body: JSON.stringify({ invokeId }),
+  });
+}
+
+// readSSE consumes a Response body as Server-Sent Events. Yields one
+// AgentSSEEvent per `\n\n`-delimited record. Comment lines (`:`-prefixed)
+// are skipped so the Router's keepalive pings don't show up as events.
+async function* readSSE(res: Response): AsyncIterable<AgentSSEEvent> {
+  if (!res.body) return;
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder('utf-8');
+  let buf = '';
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buf += decoder.decode(value, { stream: true });
+
+      // Split on the SSE record terminator. We support both `\n\n` and
+      // `\r\n\r\n` so behavior is identical regardless of the proxy.
+      let idx;
+      while ((idx = findRecordEnd(buf)) !== -1) {
+        const record = buf.slice(0, idx);
+        buf = buf.slice(idx + (buf[idx + 1] === '\n' ? 2 : 4));
+        const evt = parseSSERecord(record);
+        if (evt) yield evt;
+      }
+    }
+    if (buf.trim()) {
+      const evt = parseSSERecord(buf);
+      if (evt) yield evt;
+    }
+  } finally {
+    reader.releaseLock();
+  }
+}
+
+function findRecordEnd(s: string): number {
+  // Returns the index of the first character of the terminator, or -1.
+  // Handles both `\n\n` and `\r\n\r\n`.
+  for (let i = 0; i < s.length - 1; i++) {
+    if (s[i] === '\n' && s[i + 1] === '\n') return i;
+    if (i < s.length - 3 && s[i] === '\r' && s[i + 1] === '\n' && s[i + 2] === '\r' && s[i + 3] === '\n') return i;
+  }
+  return -1;
+}
+
+function parseSSERecord(record: string): AgentSSEEvent | null {
+  let event = 'message';
+  const dataLines: string[] = [];
+  for (const raw of record.split(/\r?\n/)) {
+    if (!raw || raw.startsWith(':')) continue;
+    if (raw.startsWith('event:')) {
+      event = raw.slice(6).trim();
+    } else if (raw.startsWith('data:')) {
+      dataLines.push(raw.slice(5).replace(/^ /, ''));
+    }
+  }
+  if (dataLines.length === 0) return null;
+  const joined = dataLines.join('\n');
+  let data: Record<string, unknown>;
+  try {
+    const parsed = JSON.parse(joined);
+    data = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>) : { data: parsed };
+  } catch {
+    data = { data: joined };
+  }
+  return { event, data };
+}
+
 export interface GovernancePolicy {
   maxSandboxesPerUser?: number;
   maxSandboxesTotal?: number;

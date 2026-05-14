@@ -27,6 +27,7 @@ export interface Template {
 
 export interface TemplateSpec {
   description?: string;
+  mode?: 'code' | 'agent';
   image?: { repository: string; pullPolicy?: string; pullSecret?: string };
   resources?: { requests?: Record<string, string>; limits?: Record<string, string> };
   storage?: { size?: string; storageClass?: string; mountPath?: string };

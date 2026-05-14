@@ -93,9 +93,18 @@ export default function CreateSandboxDialog({ open, onClose, onCreated }: Props)
               border: '1px solid #e5e4e7', fontSize: '15px', background: '#fff', color: '#08060d',
               boxSizing: 'border-box', outline: 'none', marginBottom: '4px' }}>
             <option value="">Select a template…</option>
-            {templates.map(t => (
-              <option key={t.name} value={t.name}>{t.name} — {t.description || 'No description'}</option>
-            ))}
+            {templates.map(t => {
+              // Templates with `mode: agent` get a 🤖 marker so users see at
+              // a glance which sandboxes drive code via /configure + /invoke
+              // rather than the terminal. Falls back gracefully when the
+              // Router returns templates without spec, for backwards compat.
+              const isAgent = t.spec && (t.spec as Record<string, unknown>).mode === 'agent';
+              return (
+                <option key={t.name} value={t.name}>
+                  {isAgent ? '🤖 ' : ''}{t.name} — {t.description || 'No description'}
+                </option>
+              );
+            })}
           </select>
           <div style={{ fontSize: '11px', color: '#6b6375', marginBottom: '16px' }}>
             Templates define the image, tools, and configuration for your sandbox. Edit them on the Templates page.

@@ -30,6 +30,17 @@ and restores the cluster default.
 | `maxIdleTimeout` | `"1h"` | Caps `spec.idleTimeout` |
 | `allowedTemplates` | `["general-coding"]` | Only these template names are permitted |
 | `approvedRegistries` | `["ghcr.io/agenttier"]` | Image overrides must start with one of these prefixes |
+| `maxAgentSandboxes` | `10` | Per-namespace cap on `mode: agent` sandboxes; doesn't affect code-mode |
+| `allowedAgentImages` | `["ghcr.io/agenttier/sandbox-langgraph"]` | Tighter image allowlist applied only to agent-mode sandboxes that override the template image |
+| `maxConcurrentInvokesPerSandbox` | `4` | Cluster ceiling clamping the per-template `agent.maxConcurrentInvokes` |
+
+## Agent-mode policies
+
+The last three rows above only apply to `mode: agent` sandboxes. They were added in v0.3.0 as part of [agent mode](agent-mode.md). All three default unset for zero behavior change on existing deployments.
+
+- `maxAgentSandboxes` runs alongside `maxSandboxesTotal`. A namespace with both set rejects new agent sandboxes when either cap is reached. Useful when you want generous code-mode quota but tight agent-mode rationing.
+- `allowedAgentImages` is checked only when an agent-mode sandbox overrides the template image. The template's own image is trusted (it was vetted at template-creation time). Distinct from `approvedRegistries` because agent code typically warrants stricter supply-chain controls than interactive dev environments.
+- `maxConcurrentInvokesPerSandbox` clamps at admission time. A sandbox spec asking for more is silently lowered to the ceiling; the resolved value lands on `status.agentConfigure.maxConcurrentInvokes` so `/invoke` reads the already-clamped number.
 
 ## Violations
 

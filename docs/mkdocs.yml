@@ -45,6 +45,7 @@ nav:
     - Templates: templates.md
     - Governance: governance.md
     - Port forwarding: port-forwarding.md
+    - Agent mode: agent-mode.md
     - Agent memory: agent-memory.md
   - Reference:
     - CLI: cli.md
