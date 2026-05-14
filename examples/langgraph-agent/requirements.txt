@@ -1,0 +1,11 @@
+# Pinned to match the sandbox-langgraph reference image. These are
+# preinstalled in ghcr.io/agenttier/sandbox-langgraph, so configure-time
+# install is a no-op when you target that image. Listed here for users
+# who want to swap to a different base image and pip-install at /configure
+# time, and for anyone running the example locally without AgentTier.
+langgraph==0.6.4
+langchain==0.3.27
+langchain-core==0.3.78
+httpx==0.28.1
+mem0ai==0.1.115
+pydantic==2.10.4
