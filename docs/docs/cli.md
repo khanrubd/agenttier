@@ -78,6 +78,71 @@ there; port forwarding and governance editing will follow the server-side
 maturity. For features the CLI doesn't cover yet, fall back to `kubectl` on
 CRDs directly (sandboxes, templates) or the Python SDK.
 
+## Agent mode (Phase 10)
+
+Two commands drive `mode: agent` sandboxes from the shell:
+
+### `agenttier configure <sandbox-id>`
+
+Uploads files into the sandbox PVC, runs an install command, and records
+the entrypoint. Idempotent: re-running with the same files + install command
+short-circuits.
+
+```bash
+agenttier configure my-agent \
+  --file /workspace/agent.py=./agent.py \
+  --file /workspace/requirements.txt=./requirements.txt \
+  --install "pip install -r /workspace/requirements.txt" \
+  --entrypoint "python /workspace/agent.py"
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--file path=local-path` | Upload a file. Repeatable. Binary files auto-base64. |
+| `--install "..."` | Argv string for the install command. Whitespace-split. |
+| `--entrypoint "..."` | Argv string for the agent entrypoint. Whitespace-split. |
+
+Install logs stream live to stdout / stderr. Exits 0 on success, 1 if the
+install exited non-zero.
+
+### `agenttier invoke <sandbox-id>`
+
+Runs the configured entrypoint and streams its output. The CLI exits with
+the same exit code as the entrypoint, so you can compose it in shell
+pipelines.
+
+```bash
+# Inline prompt
+agenttier invoke my-agent --prompt "what's the weather?"
+
+# JSON body fed to the entrypoint on stdin
+agenttier invoke my-agent --input '{"messages":[{"role":"user","content":"hi"}]}'
+
+# Body from a file
+agenttier invoke my-agent --input @./request.json
+
+# Body from this shell's stdin
+echo "from a pipe" | agenttier invoke my-agent --input -
+
+# Cap the per-invoke timeout (overrides the template's defaultInvokeTimeout)
+agenttier invoke my-agent --prompt "..." --timeout 5m
+
+# Cancel an in-flight invoke (use the invokeId printed at the top of the stream)
+agenttier invoke my-agent --cancel inv-abc123
+```
+
+| Flag | Meaning |
+| --- | --- |
+| `--prompt "..."` | Convenience: appended as `--prompt=<value>` to argv and fed to stdin if `--input` is empty. |
+| `--input STR` | Body forwarded to the entrypoint on stdin. Inline string, `@/path` for a file, `-` for the CLI's own stdin. |
+| `--timeout DURATION` | Server-side per-invoke timeout (Go duration string like `5m`). |
+| `--cancel ID` | Cancel an in-flight invoke instead of starting a new one. |
+
+Stdout from the entrypoint goes to your stdout, stderr to your stderr, and a
+small status line ("`invoke started: inv-...`", "`invoke completed: exit 0`")
+to stderr — so `agenttier invoke ... > out.txt 2>/dev/null` cleanly captures
+just the agent's output.
+
 ## Why use the CLI vs `kubectl` or the SDK?
 
 | Tool | Best for |
