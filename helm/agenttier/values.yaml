@@ -101,6 +101,12 @@ defaults:
     image: ghcr.io/agenttier/sandbox-claude-code:v0.2.2
     # IRSA role ARN for Bedrock access (annotated on sandbox ServiceAccount)
     irsaRoleArn: ""
+  langgraph:
+    # Phase 10 reference image for mode: agent sandboxes. Bundles
+    # LangGraph + LangChain + httpx + the mem0 client. Pair with the
+    # `langgraph-agent` default template (helm/agenttier/templates/
+    # default-templates.yaml) to spin up an agent in one apply.
+    image: ghcr.io/agenttier/sandbox-langgraph:v0.3.0
 
 # --- Networking ---
 networking:

@@ -43,6 +43,9 @@ jobs:
           - name: sandbox-minimal
             context: images/minimal
             dockerfile: images/minimal/Dockerfile
+          - name: sandbox-langgraph
+            context: images/langgraph
+            dockerfile: images/langgraph/Dockerfile
     steps:
       - uses: actions/checkout@v6
       - uses: docker/setup-qemu-action@v3
@@ -371,6 +374,7 @@ jobs:
           ghcr.io/agenttier/sandbox-general:${VERSION}
           ghcr.io/agenttier/sandbox-claude-code:${VERSION}
           ghcr.io/agenttier/sandbox-minimal:${VERSION}
+          ghcr.io/agenttier/sandbox-langgraph:${VERSION}
           \`\`\`
 
           **CLI:**

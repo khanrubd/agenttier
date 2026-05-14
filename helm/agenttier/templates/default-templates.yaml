@@ -78,3 +78,47 @@ spec:
       value: "us-east-1"
   timeout: 24h
   idleTimeout: 2h
+---
+apiVersion: agenttier.io/v1alpha1
+kind: ClusterSandboxTemplate
+metadata:
+  name: langgraph-agent
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+spec:
+  description: "Agent-mode sandbox preloaded with LangGraph, LangChain, httpx, and the mem0 client"
+  mode: agent
+  image:
+    repository: {{ .Values.defaults.langgraph.image | default "ghcr.io/agenttier/sandbox-langgraph:latest" }}
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  storage:
+    size: 10Gi
+    mountPath: /workspace
+  network:
+    # Agent code typically needs outbound access to a model provider
+    # and (optionally) a memory backend. Operators can lock this down by
+    # setting allowedDomains in their own template, or extending this
+    # one with a child template that overrides .spec.network.
+    allowInternet: true
+  harness:
+    shell: /bin/bash
+    workingDir: /workspace
+    agent:
+      # Default entrypoint runs /workspace/agent.py (the bundled example
+      # ships at /opt/agenttier/examples/agent.py — copy it to /workspace
+      # via /configure or replace with your own).
+      entrypoint:
+        - python
+        - /workspace/agent.py
+      workingDir: /workspace
+      # Sensible default for chat-style agents. Operators can lower this
+      # by overriding the template; governance enforces a cluster ceiling.
+      defaultInvokeTimeout: 30m
+  timeout: 24h
+  idleTimeout: 4h
