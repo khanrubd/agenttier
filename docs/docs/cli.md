@@ -1,13 +1,25 @@
 # CLI
 
-The `agenttier` CLI is a single Go binary for managing sandboxes and
-templates from the terminal. Distributed as GitHub Release assets for
-Linux, macOS, and Windows on amd64 and arm64.
+The `agenttier` CLI manages sandboxes and templates from the terminal. Two distributions, identical command surface:
 
-Source: [`cmd/cli/`](https://github.com/agenttier/agenttier/tree/main/cmd/cli).
-Downloads: [releases/latest](https://github.com/agenttier/agenttier/releases/latest).
+- **`pip install agenttier`** — pure-Python CLI installed alongside the SDK. Works on any platform with Python 3.10+. Recommended for Python-first users.
+- **GitHub Releases** — native Go binaries for Linux, macOS, and Windows on amd64 and arm64. No Python runtime required.
+
+Sources: [`cmd/cli/`](https://github.com/agenttier/agenttier/tree/main/cmd/cli) (Go), [`python-sdk/src/agenttier/cli.py`](https://github.com/agenttier/agenttier/tree/main/python-sdk/src/agenttier/cli.py) (Python).
+Full command reference: [CLI command reference](cli-reference.md).
 
 ## Install
+
+### Via `pip`
+
+```bash
+pip install agenttier
+agenttier --version
+```
+
+This installs the SDK and the CLI together. The Python CLI exposes the full SDK surface (lifecycle, exec, files, port forwards, templates, agent-mode configure/invoke).
+
+### Via GitHub Releases (Go binary)
 
 Pick the binary for your OS/arch and drop it on your `PATH`.
 

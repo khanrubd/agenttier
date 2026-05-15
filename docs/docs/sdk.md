@@ -2,6 +2,8 @@
 
 `pip install agenttier` gives you sync and async clients with typed Pydantic
 models, auto-detected auth, streaming HTTP, and a typed exception hierarchy.
+The same install also ships the [`agenttier` CLI](cli-reference.md) on your
+`PATH`.
 
 Source: [`python-sdk/`](https://github.com/agenttier/agenttier/tree/main/python-sdk).
 PyPI: [pypi.org/project/agenttier](https://pypi.org/project/agenttier/).

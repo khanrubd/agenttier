@@ -49,6 +49,9 @@ Repository = "https://github.com/agenttier/agenttier"
 Issues = "https://github.com/agenttier/agenttier/issues"
 Changelog = "https://github.com/agenttier/agenttier/blob/main/CHANGELOG.md"
 
+[project.scripts]
+agenttier = "agenttier.cli:main"
+
 [tool.hatch.build.targets.wheel]
 packages = ["src/agenttier"]
 

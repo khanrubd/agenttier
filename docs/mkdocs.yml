@@ -55,6 +55,7 @@ nav:
     - Agent memory: agent-memory.md
   - Reference:
     - CLI: cli.md
+    - CLI command reference: cli-reference.md
     - Python SDK: sdk.md
   - Operations:
     - Verifying images: verifying-images.md

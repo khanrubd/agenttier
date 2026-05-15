@@ -9,11 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- New **Tutorials** section in the docs site (`/tutorials/`): a hub page plus four hands-on walkthroughs — Web UI, Python SDK, code mode, and agent mode. Each tutorial assumes AgentTier is already installed and walks end-to-end through real workflows with copy-pasteable commands.
+- **`agenttier` CLI shipped via `pip install agenttier`** — Python entry point on top of the SDK. `pip install` now gives users both the SDK and the `agenttier` shell command on `PATH`. Mirrors the Go CLI's surface and adds full lifecycle management: `sandbox list/get/create/stop/resume/delete/exec/wait`, `sandbox files {ls,cat,upload,download,write}`, `sandbox ports {list,forward,remove}`, `template {list,get}`, plus the existing `configure` and `invoke`. Adds `login` for saving endpoint and credentials to `~/.config/agenttier/config.json` and `whoami` for verifying auth. Every command supports `--output text|json` for scriptable use. (Closes [todo 5.7](#).)
+- New **CLI command reference** docs page at `/cli-reference/` with the full command tree, flags, and examples.
 
 ### Changed
 
+- `docs/docs/cli.md` and `docs/docs/sdk.md` now point at `cli-reference.md` and call out that `pip install agenttier` ships the CLI alongside the SDK.
+
+### Tutorials section in the docs
+
+- Hub page plus four hands-on walkthroughs — Web UI, Python SDK, code mode, and agent mode. Each tutorial assumes AgentTier is already installed and walks end-to-end through real workflows with copy-pasteable commands.
+
+### Documentation polish
+
 - README header links the new Tutorials section.
+- Left-nav: bold uppercase section labels in primary purple with indented children, top borders separating sections, dark-mode friendly.
 
 ## [v0.3.0] — 2026-05-13
 
