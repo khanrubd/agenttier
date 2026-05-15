@@ -99,7 +99,8 @@ def _load_config_file() -> dict[str, str]:
     if not CONFIG_PATH.exists():
         return {}
     try:
-        return json.loads(CONFIG_PATH.read_text())
+        data: dict[str, str] = json.loads(CONFIG_PATH.read_text())
+        return data
     except (OSError, json.JSONDecodeError):
         return {}
 
