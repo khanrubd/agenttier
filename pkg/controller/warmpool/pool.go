@@ -76,18 +76,80 @@ const (
 	claimMaxAttempts = 3
 )
 
-// Config is persisted in the ConfigMap.
+// Config is persisted in the ConfigMap. Two shapes are supported on the
+// wire to keep upgrades smooth:
+//
+// New (per-template) shape:
+//
+//	{"pools": [{"template": "general-coding", "desiredCount": 2},
+//	           {"template": "claude-code-bedrock", "desiredCount": 1}]}
+//
+// Old (single-template) shape, retained for one minor release of
+// backwards compatibility:
+//
+//	{"template": "general-coding", "desiredCount": 3}
+//
+// On read, the old shape is automatically promoted to a single-entry
+// Pools slice so callers see one canonical model. On write, we only
+// emit the new shape — existing single-template entries become
+// Pools[0] without operator action.
 type Config struct {
-	DesiredCount int    `json:"desiredCount"`
-	Template     string `json:"template"`
+	// Pools is the canonical per-template configuration. Each entry
+	// targets a specific ClusterSandboxTemplate. When empty and the
+	// legacy DesiredCount/Template fields are non-zero, callers should
+	// promote the legacy fields to a single-entry Pools slice via
+	// ReadConfig — that helper handles the migration in one place.
+	// +optional
+	Pools []PoolConfig `json:"pools,omitempty"`
+
+	// DesiredCount is the legacy single-template count. DEPRECATED:
+	// retained for one minor release so existing ConfigMaps keep
+	// working through a rolling upgrade. New writes ignore this field.
+	// +optional
+	DesiredCount int `json:"desiredCount,omitempty"`
+
+	// Template is the legacy single-template name. DEPRECATED: same
+	// migration story as DesiredCount above.
+	// +optional
+	Template string `json:"template,omitempty"`
 }
 
-// Status reports the current pool state (computed live, not stored).
+// PoolConfig is the per-template warm-pool entry. Each entry produces an
+// independent set of pool Pods + PVCs scaled to its DesiredCount.
+type PoolConfig struct {
+	// Template is the ClusterSandboxTemplate this entry warms.
+	Template string `json:"template"`
+
+	// DesiredCount is how many idle pods to keep ready for this template.
+	// Zero or negative effectively disables the entry without removing it
+	// from the config.
+	DesiredCount int `json:"desiredCount"`
+}
+
+// Status reports the current pool state across every configured template.
+// Pools is populated even when only one entry is configured, so the API
+// shape is stable regardless of how many templates are warmed.
 type Status struct {
+	// Pools is the per-template status. One entry per Config.Pools entry.
+	Pools []PoolStatus `json:"pools,omitempty"`
+
+	// Legacy convenience fields — still emitted so any existing
+	// consumer (Web UI Settings page, manual `kubectl exec curl`)
+	// keeps working through the deprecation window. Populated from
+	// Pools[0] when there's exactly one entry; zeroed otherwise.
+	// DEPRECATED: read Pools instead.
+	DesiredCount int    `json:"desiredCount,omitempty"`
+	ReadyCount   int    `json:"readyCount,omitempty"`
+	PendingCount int    `json:"pendingCount,omitempty"`
+	Template     string `json:"template,omitempty"`
+}
+
+// PoolStatus is the live state of one per-template pool.
+type PoolStatus struct {
+	Template     string `json:"template"`
 	DesiredCount int    `json:"desiredCount"`
 	ReadyCount   int    `json:"readyCount"`
 	PendingCount int    `json:"pendingCount"`
-	Template     string `json:"template"`
 }
 
 // Reconciler is run by the Controller (which has leader election).
@@ -138,38 +200,110 @@ func (r *Reconciler) RunLoop(ctx context.Context) {
 	}
 }
 
-// Reconcile reads config and converges the pool.
+// Reconcile reads config and converges every configured pool independently.
+// Each entry in Config.Pools gets its own scale-up / scale-down decision so
+// adding or removing a template never disturbs the other pools.
 func (r *Reconciler) Reconcile(ctx context.Context) error {
 	cfg, err := r.ReadConfig(ctx)
 	if err != nil {
 		return nil // No config = pool disabled, not an error
 	}
 
-	if cfg.DesiredCount <= 0 || cfg.Template == "" {
-		// Pool disabled — scale down any existing pool pods
-		return r.scaleDown(ctx, cfg.Template, 0)
+	// Build a set of currently-configured templates so we can clean up
+	// pods for templates that were removed from the config (e.g. an
+	// operator deleted a pool entry from the ConfigMap).
+	configured := make(map[string]bool, len(cfg.Pools))
+	for _, p := range cfg.Pools {
+		if p.Template != "" {
+			configured[p.Template] = true
+		}
 	}
 
-	// Count existing pool pods for this template
-	pods, err := r.listPoolPods(ctx, cfg.Template)
-	if err != nil {
-		return err
+	// First pass: converge every configured template independently.
+	for _, p := range cfg.Pools {
+		if p.Template == "" {
+			continue
+		}
+		if err := r.reconcilePool(ctx, p); err != nil {
+			r.logger.Error("pool reconcile error", "template", p.Template, "error", err)
+			// Don't bail — keep going for other pools so one broken
+			// template doesn't starve the rest.
+		}
 	}
 
-	currentCount := len(pods)
-
-	if currentCount < cfg.DesiredCount {
-		// Scale up — create one pod per reconcile cycle (avoids bursts)
-		return r.createPoolPod(ctx, cfg.Template)
-	} else if currentCount > cfg.DesiredCount {
-		// Scale down
-		return r.scaleDown(ctx, cfg.Template, cfg.DesiredCount)
+	// Second pass: scale down any orphaned pods (templates that no
+	// longer appear in the config). One List of all pool pods, group
+	// by template, delete entries whose template is no longer
+	// configured. This is what lets an operator "remove" a pool by
+	// deleting the entry rather than having to set DesiredCount=0
+	// and wait for the next cycle.
+	if err := r.cleanupOrphanedPools(ctx, configured); err != nil {
+		r.logger.Error("orphan cleanup error", "error", err)
 	}
 
 	return nil
 }
 
-// ReadConfig reads the warm pool config from the ConfigMap.
+// reconcilePool converges a single per-template entry: scales up by one
+// per cycle when below the desired count, scales down all the way when
+// above. Splitting one entry per cycle smooths apiserver load and avoids
+// thundering-herd PVC creation when DesiredCount > 1.
+func (r *Reconciler) reconcilePool(ctx context.Context, pool PoolConfig) error {
+	pods, err := r.listPoolPods(ctx, pool.Template)
+	if err != nil {
+		return err
+	}
+
+	currentCount := len(pods)
+	if pool.DesiredCount <= 0 {
+		// Entry exists but is disabled — drain the pool.
+		return r.scaleDown(ctx, pool.Template, 0)
+	}
+	if currentCount < pool.DesiredCount {
+		return r.createPoolPod(ctx, pool.Template)
+	}
+	if currentCount > pool.DesiredCount {
+		return r.scaleDown(ctx, pool.Template, pool.DesiredCount)
+	}
+	return nil
+}
+
+// cleanupOrphanedPools removes pool pods whose template is no longer in the
+// configured set. Keeps the apiserver clean when an operator drops a
+// template from the warm-pool config.
+func (r *Reconciler) cleanupOrphanedPools(ctx context.Context, configured map[string]bool) error {
+	allPods := &corev1.PodList{}
+	if err := r.client.List(ctx, allPods,
+		client.InNamespace(r.namespace),
+		client.MatchingLabels{LabelPooled: "true"},
+	); err != nil {
+		return err
+	}
+	for i := range allPods.Items {
+		pod := &allPods.Items[i]
+		template := pod.Labels[LabelTemplate]
+		if template == "" {
+			continue // Stray pod with no template label — leave for human inspection
+		}
+		if configured[template] {
+			continue
+		}
+		// Template no longer configured. Drain.
+		if err := r.deletePodAndPVC(ctx, pod); err != nil {
+			r.logger.Error("failed to delete orphaned pool pod",
+				"pod", pod.Name, "template", template, "error", err)
+			continue
+		}
+		r.logger.Info("removed orphaned pool pod",
+			"pod", pod.Name, "template", template)
+	}
+	return nil
+}
+
+// ReadConfig reads the warm pool config from the ConfigMap and returns
+// it normalized into the new per-template shape. Old single-template
+// configs (DesiredCount + Template top-level) are promoted to a one-entry
+// Pools slice transparently so callers don't have to handle two shapes.
 func (r *Reconciler) ReadConfig(ctx context.Context) (*Config, error) {
 	cm := &corev1.ConfigMap{}
 	err := r.client.Get(ctx, client.ObjectKey{
@@ -189,63 +323,124 @@ func (r *Reconciler) ReadConfig(ctx context.Context) (*Config, error) {
 	if err := json.Unmarshal([]byte(data), &cfg); err != nil {
 		return nil, fmt.Errorf("invalid warmpool config: %w", err)
 	}
+	cfg.Normalize()
 	return &cfg, nil
 }
 
-// GetStatus computes the current pool status. Called by the Router API and
-// must be passed the namespace where AgentTier is installed.
+// Normalize promotes the legacy single-template shape into the canonical
+// Pools slice. After this call every reader can treat Pools as the source
+// of truth and ignore the deprecated top-level fields. Exported so the
+// Router handler can call it before validating user input.
+func (c *Config) Normalize() {
+	// Already in new shape — nothing to migrate.
+	if len(c.Pools) > 0 {
+		// Even when Pools is set, an old entry might also have populated
+		// the top-level fields by accident. Zero them so a re-Marshal
+		// doesn't double-count.
+		c.DesiredCount = 0
+		c.Template = ""
+		return
+	}
+	if c.Template == "" || c.DesiredCount <= 0 {
+		return
+	}
+	c.Pools = []PoolConfig{{Template: c.Template, DesiredCount: c.DesiredCount}}
+	c.DesiredCount = 0
+	c.Template = ""
+}
+
+// GetStatus computes the per-template pool status across every configured
+// template. Returns the canonical Pools slice plus legacy top-level fields
+// (DesiredCount/ReadyCount/PendingCount/Template) populated from Pools[0]
+// when there's exactly one entry — keeping the old API shape valid for
+// existing consumers during the deprecation window.
 func GetStatus(ctx context.Context, k8sClient client.Client, namespace string) (*Status, error) {
 	if namespace == "" {
 		namespace = DefaultNamespace
 	}
 	// Read config
 	cm := &corev1.ConfigMap{}
-	err := k8sClient.Get(ctx, client.ObjectKey{
+	cfg := &Config{}
+	if err := k8sClient.Get(ctx, client.ObjectKey{
 		Name:      ConfigMapName,
 		Namespace: namespace,
-	}, cm)
-
-	cfg := &Config{DesiredCount: 0, Template: ""}
-	if err == nil {
+	}, cm); err == nil {
 		if data, ok := cm.Data["config"]; ok {
 			_ = json.Unmarshal([]byte(data), cfg)
 		}
 	}
+	cfg.Normalize()
 
-	// Count pods
-	podList := &corev1.PodList{}
-	labels := client.MatchingLabels{LabelPooled: "true"}
-	if cfg.Template != "" {
-		labels[LabelTemplate] = cfg.Template
-	}
-	if err := k8sClient.List(ctx, podList, client.InNamespace(namespace), labels); err != nil {
-		return &Status{DesiredCount: cfg.DesiredCount, Template: cfg.Template}, nil
+	// One List for everything labeled as pool. Group by template.
+	allPods := &corev1.PodList{}
+	if err := k8sClient.List(ctx, allPods,
+		client.InNamespace(namespace),
+		client.MatchingLabels{LabelPooled: "true"},
+	); err != nil {
+		// Best-effort: still return the configured shape so the UI can
+		// render even when the apiserver list call hiccups.
+		return statusFromConfig(cfg, nil), nil
 	}
 
-	ready := 0
-	pending := 0
-	for _, pod := range podList.Items {
-		if isPodReady(&pod) {
-			ready++
-		} else {
-			pending++
+	// Bucket counts by template label.
+	counts := make(map[string]struct{ ready, pending int })
+	for i := range allPods.Items {
+		pod := &allPods.Items[i]
+		template := pod.Labels[LabelTemplate]
+		if template == "" {
+			continue
 		}
+		c := counts[template]
+		if isPodReady(pod) {
+			c.ready++
+		} else {
+			c.pending++
+		}
+		counts[template] = c
 	}
 
-	return &Status{
-		DesiredCount: cfg.DesiredCount,
-		ReadyCount:   ready,
-		PendingCount: pending,
-		Template:     cfg.Template,
-	}, nil
+	return statusFromConfig(cfg, counts), nil
 }
 
-// SetConfig writes the warm pool config to the ConfigMap. Called by the
-// Router API and must be passed the namespace where AgentTier is installed.
+// statusFromConfig assembles a Status from the parsed config and observed
+// pod counts. Pulled out so GetStatus stays small and the legacy-fields
+// fallback logic lives in one place.
+func statusFromConfig(cfg *Config, counts map[string]struct{ ready, pending int }) *Status {
+	s := &Status{Pools: make([]PoolStatus, 0, len(cfg.Pools))}
+	for _, p := range cfg.Pools {
+		c := counts[p.Template]
+		s.Pools = append(s.Pools, PoolStatus{
+			Template:     p.Template,
+			DesiredCount: p.DesiredCount,
+			ReadyCount:   c.ready,
+			PendingCount: c.pending,
+		})
+	}
+	// Populate legacy fields from Pools[0] when there's exactly one.
+	// Keeps the existing Web UI Settings card working unchanged through
+	// the deprecation window.
+	if len(s.Pools) == 1 {
+		s.Template = s.Pools[0].Template
+		s.DesiredCount = s.Pools[0].DesiredCount
+		s.ReadyCount = s.Pools[0].ReadyCount
+		s.PendingCount = s.Pools[0].PendingCount
+	}
+	return s
+}
+
+// SetConfig writes the warm pool config to the ConfigMap. Always writes
+// the new per-template shape — callers in the legacy single-template form
+// pass DesiredCount/Template fields, which we promote to a one-entry
+// Pools slice before persisting. New shape is what lands in etcd.
 func SetConfig(ctx context.Context, k8sClient client.Client, namespace string, cfg Config) error {
 	if namespace == "" {
 		namespace = DefaultNamespace
 	}
+	// Promote legacy callers to the canonical shape so we never write
+	// the old shape to etcd. Keeps the on-disk format clean even when
+	// older clients keep using legacy fields for one deprecation window.
+	cfg.Normalize()
+
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		return err

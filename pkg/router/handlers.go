@@ -1361,29 +1361,43 @@ func (s *Server) handleGetWarmPoolStatus(w http.ResponseWriter, r *http.Request)
 }
 
 func (s *Server) handleSetWarmPoolConfig(w http.ResponseWriter, r *http.Request) {
+	// Accept either the new per-template shape (pools array) or the
+	// legacy single-template shape (top-level desiredCount + template).
+	// Both produce the same canonical Pools slice on the way out — see
+	// warmpool.Config.normalize().
 	var req struct {
-		DesiredCount int    `json:"desiredCount"`
-		Template     string `json:"template"`
+		Pools        []warmpool.PoolConfig `json:"pools,omitempty"`
+		DesiredCount int                   `json:"desiredCount,omitempty"`
+		Template     string                `json:"template,omitempty"`
 	}
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		respondError(w, http.StatusBadRequest, "invalid request body")
 		return
 	}
-	if req.DesiredCount < 0 || req.DesiredCount > 10 {
-		respondError(w, http.StatusBadRequest, "desiredCount must be 0-10")
-		return
-	}
-	if req.Template == "" {
-		req.Template = "general-coding"
+
+	cfg := warmpool.Config{Pools: req.Pools, DesiredCount: req.DesiredCount, Template: req.Template}
+	// normalize() promotes legacy fields into Pools[0] and zeros the
+	// legacy fields, so validation below works on the canonical shape
+	// regardless of which version of the request body the caller sent.
+	cfg.Normalize()
+
+	for i, p := range cfg.Pools {
+		if p.Template == "" {
+			respondError(w, http.StatusBadRequest, fmt.Sprintf("pools[%d].template is required", i))
+			return
+		}
+		if p.DesiredCount < 0 || p.DesiredCount > 10 {
+			respondError(w, http.StatusBadRequest, fmt.Sprintf("pools[%d].desiredCount must be 0-10", i))
+			return
+		}
 	}
 
-	cfg := warmpool.Config{DesiredCount: req.DesiredCount, Template: req.Template}
 	if err := warmpool.SetConfig(r.Context(), s.k8sClient, s.config.InstallNamespace, cfg); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
 		return
 	}
 
-	respondJSON(w, http.StatusOK, map[string]interface{}{"status": "updated", "desiredCount": req.DesiredCount, "template": req.Template})
+	respondJSON(w, http.StatusOK, map[string]interface{}{"status": "updated", "pools": cfg.Pools})
 }
 
 // --- Helpers ---

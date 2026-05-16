@@ -19,6 +19,8 @@ package warmpool
 import (
 	"context"
 	"fmt"
+	"io"
+	"log/slog"
 	"sync"
 	"testing"
 
@@ -271,4 +273,203 @@ func (c *conflictingClient) Update(ctx context.Context, obj client.Object, opts 
 	c.claimedPod[pod.Name] = true
 	c.mu.Unlock()
 	return c.Client.Update(ctx, obj, opts...)
+}
+
+
+// TestConfig_NormalizePromotesLegacyShape verifies that ConfigMaps written
+// in the old single-template shape (top-level DesiredCount + Template) are
+// transparently promoted to the new Pools slice on read. Without this
+// migration, a rolling controller upgrade would see "no pools configured"
+// and silently drain a working warm pool.
+func TestConfig_NormalizePromotesLegacyShape(t *testing.T) {
+	cases := []struct {
+		name               string
+		in                 Config
+		want               []PoolConfig
+		wantLegacyTemplate string
+	}{
+		{
+			name: "legacy single-template shape promotes to one Pools entry",
+			in:   Config{DesiredCount: 3, Template: "general-coding"},
+			want: []PoolConfig{{Template: "general-coding", DesiredCount: 3}},
+		},
+		{
+			name: "new shape passes through unchanged",
+			in: Config{Pools: []PoolConfig{
+				{Template: "general-coding", DesiredCount: 2},
+				{Template: "claude-code-bedrock", DesiredCount: 1},
+			}},
+			want: []PoolConfig{
+				{Template: "general-coding", DesiredCount: 2},
+				{Template: "claude-code-bedrock", DesiredCount: 1},
+			},
+		},
+		{
+			name: "empty config stays empty",
+			in:   Config{},
+			want: nil,
+		},
+		{
+			name: "legacy fields with zero count don't migrate (no-op)",
+			in:   Config{DesiredCount: 0, Template: "ignored"},
+			want: nil,
+			// DesiredCount==0 means there's nothing to promote. We
+			// leave the (admittedly stale) Template string in place
+			// since this is a transitional state — the operator will
+			// either set DesiredCount > 0 (triggering migration) or
+			// re-write the config in the new shape, both of which
+			// clear the legacy fields. Re-writing zeroes during a no-op
+			// would be wasted churn.
+			wantLegacyTemplate: "ignored",
+		},
+		{
+			name: "both shapes set — Pools wins, legacy fields cleared",
+			in: Config{
+				DesiredCount: 99,
+				Template:     "stale",
+				Pools:        []PoolConfig{{Template: "real", DesiredCount: 2}},
+			},
+			want: []PoolConfig{{Template: "real", DesiredCount: 2}},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := tc.in
+			cfg.Normalize()
+			if !poolsEqual(cfg.Pools, tc.want) {
+				t.Errorf("Pools = %+v, want %+v", cfg.Pools, tc.want)
+			}
+			if cfg.DesiredCount != 0 {
+				t.Errorf("DesiredCount not cleared: %d", cfg.DesiredCount)
+			}
+			if cfg.Template != tc.wantLegacyTemplate {
+				t.Errorf("Template = %q, want %q", cfg.Template, tc.wantLegacyTemplate)
+			}
+		})
+	}
+}
+
+// TestReconcile_PerTemplatePoolsConvergeIndependently verifies that a config
+// with multiple template entries produces independent pool pods, one per
+// template. Regression coverage for the single-template bug — the old
+// reconciler ignored every entry past the first.
+func TestReconcile_PerTemplatePoolsConvergeIndependently(t *testing.T) {
+	scheme := newScheme(t)
+	const ns = "agenttier"
+
+	// Two templates configured, both with DesiredCount=1.
+	tmplA := &agenttierv1alpha1.ClusterSandboxTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "general-coding"},
+		Spec: agenttierv1alpha1.SandboxTemplateSpec{
+			Image: &agenttierv1alpha1.ImageSpec{Repository: "ghcr.io/agenttier/sandbox-general:test"},
+		},
+	}
+	tmplB := &agenttierv1alpha1.ClusterSandboxTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "claude-code"},
+		Spec: agenttierv1alpha1.SandboxTemplateSpec{
+			Image: &agenttierv1alpha1.ImageSpec{Repository: "ghcr.io/agenttier/sandbox-claude-code:test"},
+		},
+	}
+
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(tmplA, tmplB).
+		Build()
+
+	// Persist a per-template config.
+	if err := SetConfig(context.Background(), c, ns, Config{Pools: []PoolConfig{
+		{Template: "general-coding", DesiredCount: 1},
+		{Template: "claude-code", DesiredCount: 1},
+	}}); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+
+	r := NewReconciler(c, slogDiscard(), ns)
+
+	// Run two reconcile cycles — the controller creates one pool pod
+	// per template per cycle so two cycles get both pools to size.
+	for i := 0; i < 2; i++ {
+		if err := r.Reconcile(context.Background()); err != nil {
+			t.Fatalf("Reconcile cycle %d: %v", i, err)
+		}
+	}
+
+	// Verify exactly one pod per template.
+	for _, template := range []string{"general-coding", "claude-code"} {
+		pods, err := r.listPoolPods(context.Background(), template)
+		if err != nil {
+			t.Fatalf("listPoolPods(%s): %v", template, err)
+		}
+		if got := len(pods); got != 1 {
+			t.Errorf("template %s: got %d pods, want 1", template, got)
+		}
+	}
+}
+
+// TestReconcile_DroppingTemplateCleansUpOrphans verifies that removing a
+// template entry from the config drains its pool pods on the next reconcile.
+// Without orphan cleanup, deleting a pool entry would leak pods forever.
+func TestReconcile_DroppingTemplateCleansUpOrphans(t *testing.T) {
+	scheme := newScheme(t)
+	const ns = "agenttier"
+
+	tmplA := &agenttierv1alpha1.ClusterSandboxTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "tmpl-a"},
+		Spec:       agenttierv1alpha1.SandboxTemplateSpec{Image: &agenttierv1alpha1.ImageSpec{Repository: "x"}},
+	}
+	// An existing pool pod for a template that's about to be removed.
+	orphan := &corev1.Pod{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      "pool-tmpl-orphan-1",
+			Namespace: ns,
+			Labels: map[string]string{
+				LabelPooled:   "true",
+				LabelTemplate: "tmpl-orphan",
+			},
+		},
+		Spec: corev1.PodSpec{
+			Containers: []corev1.Container{{Name: "sandbox", Image: "x"}},
+		},
+	}
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(tmplA, orphan).
+		Build()
+
+	// Config only references tmpl-a; tmpl-orphan is no longer present.
+	if err := SetConfig(context.Background(), c, ns, Config{Pools: []PoolConfig{
+		{Template: "tmpl-a", DesiredCount: 1},
+	}}); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+
+	r := NewReconciler(c, slogDiscard(), ns)
+	if err := r.Reconcile(context.Background()); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	// The orphan must be gone.
+	orphans, err := r.listPoolPods(context.Background(), "tmpl-orphan")
+	if err != nil {
+		t.Fatalf("listPoolPods orphan: %v", err)
+	}
+	if len(orphans) != 0 {
+		t.Errorf("expected orphan pool pods to be drained, found %d", len(orphans))
+	}
+}
+
+func poolsEqual(a, b []PoolConfig) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
+}
+
+func slogDiscard() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
