@@ -458,7 +458,13 @@ func (r *SandboxReconciler) stopSandbox(ctx context.Context, sandbox *agenttierv
 func (r *SandboxReconciler) handleInfrastructureFailure(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox, reason string) (ctrl.Result, error) {
 	sandbox.Status.RestartCount++
 
-	if sandbox.Status.RestartCount > MaxRestartCount {
+	// Use the same comparison as reconcileError so both paths agree on
+	// MaxRestartCount as the inclusive upper bound. Previously this used
+	// `>` (allowing 6 restarts when the limit was 5) while reconcileError
+	// used `>=`; the off-by-one let infrastructure failures squeeze in
+	// one extra restart attempt past what the Error-phase enforcer
+	// thought was the limit.
+	if sandbox.Status.RestartCount >= MaxRestartCount {
 		return r.transitionToError(ctx, sandbox, fmt.Sprintf("Restart limit exceeded (%d attempts): %s", MaxRestartCount, reason))
 	}
 

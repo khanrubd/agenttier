@@ -198,10 +198,25 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	agentHandler.RegisterRoutes(api)
 
 	s.httpServer = &http.Server{
-		Addr:        config.ListenAddr,
-		Handler:     r,
-		ReadTimeout: 0, // Disabled for WebSocket support
-		IdleTimeout: 120 * time.Second,
+		Addr:    config.ListenAddr,
+		Handler: r,
+		// ReadTimeout: 0 is required so WebSocket upgrades can hold a
+		// connection open beyond any HTTP read deadline. But a global
+		// zero ReadTimeout exposes every endpoint (REST, SSE, file
+		// PUT/GET) to slowloris — a client can dribble bytes out
+		// indefinitely and pin a goroutine + fd.
+		//
+		// ReadHeaderTimeout bounds the request-line + headers phase
+		// only and is allowed alongside ReadTimeout: 0. Five seconds
+		// is enough for any legitimate client (curl over a slow
+		// network finishes headers in well under a second) and short
+		// enough that slowloris can't hold a connection waiting for
+		// header data. WebSocket upgrades complete their handshake
+		// within this window, then escape into the long-lived
+		// hijacked path.
+		ReadTimeout:       0,
+		ReadHeaderTimeout: 5 * time.Second,
+		IdleTimeout:       120 * time.Second,
 	}
 
 	return s
@@ -238,7 +253,25 @@ func (s *Server) handleHealthz(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleReadyz(w http.ResponseWriter, r *http.Request) {
-	// TODO: Check K8s API reachability
+	// Try a cheap, unprivileged read against the API server cache. If the
+	// Router has lost its connection to the K8s API (network partition,
+	// service-account token rotation glitch, kubelet churn) every real
+	// endpoint will return 5xx; reporting healthy here would keep the
+	// Service routing traffic to a broken pod.
+	//
+	// Limit=1 keeps the round-trip tiny. We use a short context timeout
+	// so a hung apiserver can't pin this handler — Kubernetes fails the
+	// probe and reroutes traffic.
+	ctx, cancel := context.WithTimeout(r.Context(), 3*time.Second)
+	defer cancel()
+
+	list := &agenttierv1alpha1.SandboxList{}
+	if err := s.k8sClient.List(ctx, list, client.Limit(1)); err != nil {
+		s.logger.Warn("readyz: K8s API unreachable", "error", err)
+		w.WriteHeader(http.StatusServiceUnavailable)
+		fmt.Fprintf(w, "not ready: %v", err)
+		return
+	}
 	w.WriteHeader(http.StatusOK)
 	fmt.Fprint(w, "ok")
 }
