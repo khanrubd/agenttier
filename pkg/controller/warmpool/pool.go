@@ -18,10 +18,16 @@ limitations under the License.
 // that can be instantly claimed when a user creates a new sandbox.
 //
 // Architecture:
-//   - Config is stored in a ConfigMap (agenttier-warmpool-config in agenttier namespace)
+//   - Config is stored in a ConfigMap (agenttier-warmpool-config in the
+//     install namespace, configurable via Reconciler.Namespace).
 //   - The Controller reconciles the pool (has leader election, single writer)
 //   - The Router API reads/writes the ConfigMap (stateless)
 //   - Uses gp3-immediate StorageClass for pre-provisioned EBS volumes
+//
+// Namespace is plumbed through every operation. The pool ConfigMap, the pool
+// Pods, and the pool PVCs all live in the same namespace as the AgentTier
+// install. Sandboxes from any namespace can claim from the pool — the
+// controller relabels the claimed Pod to belong to the requesting Sandbox.
 package warmpool
 
 import (
@@ -45,9 +51,15 @@ const (
 	LabelPooled   = "agenttier.io/pooled"
 	LabelTemplate = "agenttier.io/pool-template"
 
-	// ConfigMap that stores the warm pool configuration
-	ConfigMapName      = "agenttier-warmpool-config"
-	ConfigMapNamespace = "agenttier"
+	// ConfigMapName is the well-known ConfigMap that stores the warm pool
+	// configuration. The namespace is configurable per install via
+	// Reconciler.Namespace / Options.Namespace.
+	ConfigMapName = "agenttier-warmpool-config"
+
+	// DefaultNamespace is used as a last-resort fallback when no install
+	// namespace is provided. New installs should always pass a namespace
+	// explicitly via the controller's POD_NAMESPACE env var.
+	DefaultNamespace = "agenttier"
 
 	// StorageClass for warm pool PVCs (Immediate binding)
 	PoolStorageClass = "gp3-immediate"
@@ -75,19 +87,33 @@ type Status struct {
 type Reconciler struct {
 	client client.Client
 	logger *slog.Logger
+	// Namespace is where the warm pool lives — pool ConfigMap, pool Pods,
+	// pool PVCs. Set from POD_NAMESPACE in the controller deployment.
+	namespace string
 }
 
-// NewReconciler creates a warm pool reconciler.
-func NewReconciler(k8sClient client.Client, logger *slog.Logger) *Reconciler {
+// NewReconciler creates a warm pool reconciler. Namespace defaults to
+// DefaultNamespace ("agenttier") when empty, but production installs should
+// always pass the install namespace explicitly via POD_NAMESPACE.
+func NewReconciler(k8sClient client.Client, logger *slog.Logger, namespace string) *Reconciler {
+	if namespace == "" {
+		namespace = DefaultNamespace
+	}
 	return &Reconciler{
-		client: k8sClient,
-		logger: logger,
+		client:    k8sClient,
+		logger:    logger,
+		namespace: namespace,
 	}
 }
 
+// Namespace returns the namespace the reconciler operates in. Useful for
+// callers (router handlers) that need to read/write the pool ConfigMap from
+// the same namespace.
+func (r *Reconciler) Namespace() string { return r.namespace }
+
 // RunLoop starts the reconcile loop. Call this from the controller's main goroutine.
 func (r *Reconciler) RunLoop(ctx context.Context) {
-	r.logger.Info("warm pool reconciler started")
+	r.logger.Info("warm pool reconciler started", "namespace", r.namespace)
 	ticker := time.NewTicker(ReconcileInterval)
 	defer ticker.Stop()
 
@@ -140,7 +166,7 @@ func (r *Reconciler) ReadConfig(ctx context.Context) (*Config, error) {
 	cm := &corev1.ConfigMap{}
 	err := r.client.Get(ctx, client.ObjectKey{
 		Name:      ConfigMapName,
-		Namespace: ConfigMapNamespace,
+		Namespace: r.namespace,
 	}, cm)
 	if err != nil {
 		return nil, err
@@ -158,13 +184,17 @@ func (r *Reconciler) ReadConfig(ctx context.Context) (*Config, error) {
 	return &cfg, nil
 }
 
-// GetStatus computes the current pool status (called by the Router API).
-func GetStatus(ctx context.Context, k8sClient client.Client) (*Status, error) {
+// GetStatus computes the current pool status. Called by the Router API and
+// must be passed the namespace where AgentTier is installed.
+func GetStatus(ctx context.Context, k8sClient client.Client, namespace string) (*Status, error) {
+	if namespace == "" {
+		namespace = DefaultNamespace
+	}
 	// Read config
 	cm := &corev1.ConfigMap{}
 	err := k8sClient.Get(ctx, client.ObjectKey{
 		Name:      ConfigMapName,
-		Namespace: ConfigMapNamespace,
+		Namespace: namespace,
 	}, cm)
 
 	cfg := &Config{DesiredCount: 0, Template: ""}
@@ -180,7 +210,7 @@ func GetStatus(ctx context.Context, k8sClient client.Client) (*Status, error) {
 	if cfg.Template != "" {
 		labels[LabelTemplate] = cfg.Template
 	}
-	if err := k8sClient.List(ctx, podList, client.InNamespace("default"), labels); err != nil {
+	if err := k8sClient.List(ctx, podList, client.InNamespace(namespace), labels); err != nil {
 		return &Status{DesiredCount: cfg.DesiredCount, Template: cfg.Template}, nil
 	}
 
@@ -202,8 +232,12 @@ func GetStatus(ctx context.Context, k8sClient client.Client) (*Status, error) {
 	}, nil
 }
 
-// SetConfig writes the warm pool config to the ConfigMap (called by the Router API).
-func SetConfig(ctx context.Context, k8sClient client.Client, cfg Config) error {
+// SetConfig writes the warm pool config to the ConfigMap. Called by the
+// Router API and must be passed the namespace where AgentTier is installed.
+func SetConfig(ctx context.Context, k8sClient client.Client, namespace string, cfg Config) error {
+	if namespace == "" {
+		namespace = DefaultNamespace
+	}
 	data, err := json.Marshal(cfg)
 	if err != nil {
 		return err
@@ -212,7 +246,7 @@ func SetConfig(ctx context.Context, k8sClient client.Client, cfg Config) error {
 	cm := &corev1.ConfigMap{}
 	err = k8sClient.Get(ctx, client.ObjectKey{
 		Name:      ConfigMapName,
-		Namespace: ConfigMapNamespace,
+		Namespace: namespace,
 	}, cm)
 
 	if errors.IsNotFound(err) {
@@ -220,7 +254,7 @@ func SetConfig(ctx context.Context, k8sClient client.Client, cfg Config) error {
 		cm = &corev1.ConfigMap{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      ConfigMapName,
-				Namespace: ConfigMapNamespace,
+				Namespace: namespace,
 			},
 			Data: map[string]string{"config": string(data)},
 		}
@@ -239,10 +273,17 @@ func SetConfig(ctx context.Context, k8sClient client.Client, cfg Config) error {
 
 // Claim finds a ready pool pod and removes it from the pool (marks it as claimed).
 // Returns pod name and PVC name, or empty strings if no pod available.
-func Claim(ctx context.Context, k8sClient client.Client, template string) (podName, pvcName string, err error) {
+//
+// The pool itself lives in `namespace` (where AgentTier is installed). After
+// claiming, the controller relabels the Pod to belong to the requesting
+// Sandbox — which can live in any namespace.
+func Claim(ctx context.Context, k8sClient client.Client, namespace, template string) (podName, pvcName string, err error) {
+	if namespace == "" {
+		namespace = DefaultNamespace
+	}
 	podList := &corev1.PodList{}
 	if err := k8sClient.List(ctx, podList,
-		client.InNamespace("default"),
+		client.InNamespace(namespace),
 		client.MatchingLabels{LabelPooled: "true", LabelTemplate: template},
 	); err != nil {
 		return "", "", err
@@ -302,7 +343,7 @@ func (r *Reconciler) createPoolPod(ctx context.Context, templateName string) err
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pvcName,
-			Namespace: "default",
+			Namespace: r.namespace,
 			Labels: map[string]string{
 				LabelPooled:   "true",
 				LabelTemplate: templateName,
@@ -332,7 +373,7 @@ func (r *Reconciler) createPoolPod(ctx context.Context, templateName string) err
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
-			Namespace: "default",
+			Namespace: r.namespace,
 			Labels: map[string]string{
 				LabelPooled:            "true",
 				LabelTemplate:          templateName,
@@ -376,7 +417,7 @@ func (r *Reconciler) createPoolPod(ctx context.Context, templateName string) err
 		return fmt.Errorf("failed to create pool pod: %w", err)
 	}
 
-	r.logger.Info("created warm pool pod", "pod", podName, "pvc", pvcName, "template", templateName)
+	r.logger.Info("created warm pool pod", "pod", podName, "pvc", pvcName, "template", templateName, "namespace", r.namespace)
 	return nil
 }
 
@@ -434,7 +475,7 @@ func (r *Reconciler) listPoolPods(ctx context.Context, template string) ([]corev
 	if template != "" {
 		labels[LabelTemplate] = template
 	}
-	if err := r.client.List(ctx, podList, client.InNamespace("default"), labels); err != nil {
+	if err := r.client.List(ctx, podList, client.InNamespace(r.namespace), labels); err != nil {
 		return nil, err
 	}
 	return podList.Items, nil

@@ -35,6 +35,10 @@ spec:
             - --preview-domain={{ .Values.networking.previewDomain }}
             - --ingress-class-name={{ .Values.networking.portForwardIngressClass }}
           env:
+            - name: POD_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
             {{- if .Values.observability.otlp.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
               value: {{ .Values.observability.otlp.endpoint }}

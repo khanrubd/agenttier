@@ -58,6 +58,11 @@ type SandboxReconciler struct {
 	// the sidecar at localhost. Empty disables the feature entirely. Set
 	// from the Helm flag optional.agentMemorySidecar.enabled+image.
 	AgentMemorySidecarImage string
+	// InstallNamespace is where AgentTier itself runs (and therefore where
+	// the warm pool ConfigMap, pool Pods, and pool PVCs live). Set from
+	// POD_NAMESPACE in the controller deployment. Empty falls back to the
+	// warm pool's DefaultNamespace constant.
+	InstallNamespace string
 }
 
 func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -138,9 +143,19 @@ func (r *SandboxReconciler) reconcileCreating(ctx context.Context, sandbox *agen
 		}
 	}
 
-	// Step 1.5: Try to claim a warm pool pod (instant startup path)
-	if sandbox.Status.PodName == "" && templateName != "" {
-		claimedPod, claimedPVC, claimErr := warmpool.Claim(ctx, r.Client, templateName)
+	// Step 1.5: Try to claim a warm pool pod (instant startup path).
+	//
+	// The pool lives in r.InstallNamespace. Pool Pods stay there even after
+	// the relabel; the sandbox controller looks them up in the sandbox's
+	// own namespace, so today we only claim when the Sandbox lives in the
+	// install namespace. Sandboxes in other namespaces fall through to a
+	// cold start. Cross-namespace pool claims are tracked as a follow-up
+	// (see "Warm pool config holds only one template" in the project).
+	canClaim := sandbox.Status.PodName == "" &&
+		templateName != "" &&
+		(r.InstallNamespace == "" || sandbox.Namespace == r.InstallNamespace)
+	if canClaim {
+		claimedPod, claimedPVC, claimErr := warmpool.Claim(ctx, r.Client, r.InstallNamespace, templateName)
 		if claimErr == nil && claimedPod != "" {
 			logger.Info("claimed warm pool pod", "sandbox", sandbox.Name, "pod", claimedPod, "pvc", claimedPVC)
 

@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"encoding/base64"
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
@@ -303,16 +304,28 @@ func (b *PodBuilder) buildInitContainers(config *MergedPodConfig) []corev1.Conta
 }
 
 // buildFileDeployerInit creates an init container that writes template files to the workspace.
+//
+// Files are delivered via base64-encoded `printf '%s' '<base64>' | base64 -d`,
+// the same pattern used by /configure's writeFiles in pkg/router/agent/configure.go.
+// We intentionally avoid heredocs: a heredoc terminator is a fixed string and
+// any user content containing that string on its own line silently truncates
+// the file. base64 has no marker collisions and is binary-safe.
 func (b *PodBuilder) buildFileDeployerInit(config *MergedPodConfig) corev1.Container {
-	// Build a shell script that writes all files
 	script := "#!/bin/sh\nset -e\n"
 	for _, f := range config.Files {
-		if f.Content != "" {
-			// Escape content for shell
-			script += fmt.Sprintf("mkdir -p $(dirname '%s') && cat > '%s' << 'AGENTLOFT_EOF'\n%s\nAGENTLOFT_EOF\n", f.Path, f.Path, f.Content)
-			if f.Mode != nil {
-				script += fmt.Sprintf("chmod %o '%s'\n", *f.Mode, f.Path)
-			}
+		if f.Content == "" {
+			continue
+		}
+		// %q-quote the encoded payload so shell metachars are neutralized.
+		// printf '%s' is portable across busybox/dash/bash; the doubled %%s
+		// keeps the literal %s through the Go format string.
+		encoded := base64.StdEncoding.EncodeToString([]byte(f.Content))
+		script += fmt.Sprintf(
+			"mkdir -p $(dirname '%s') && printf '%%s' %q | base64 -d > '%s'\n",
+			f.Path, encoded, f.Path,
+		)
+		if f.Mode != nil {
+			script += fmt.Sprintf("chmod %o '%s'\n", *f.Mode, f.Path)
 		}
 	}
 

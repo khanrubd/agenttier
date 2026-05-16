@@ -52,6 +52,10 @@ type Config struct {
 	GatewayName      string
 	IngressClassName string
 	KubeConfig       string
+	// InstallNamespace is where AgentTier itself runs (and therefore where
+	// the warm pool ConfigMap, pool Pods, and pool PVCs live). Set from
+	// POD_NAMESPACE in the router deployment.
+	InstallNamespace string
 }
 
 // Server is the main Router HTTP server.

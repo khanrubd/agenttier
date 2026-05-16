@@ -53,6 +53,7 @@ func main() {
 		groupClaim       string
 		previewDomain    string
 		ingressClassName string
+		namespace        string
 		showVersion      bool
 	)
 
@@ -63,6 +64,12 @@ func main() {
 	flag.StringVar(&groupClaim, "group-claim", "groups", "JWT claim for groups")
 	flag.StringVar(&previewDomain, "preview-domain", "", "Domain for port forwarding preview URLs")
 	flag.StringVar(&ingressClassName, "ingress-class-name", "", "Ingress class to use for port-forward Ingresses (empty = cluster default)")
+	// Install namespace — drives where the warm pool ConfigMap lives so the
+	// Router reads/writes the same ConfigMap the controller reconciles.
+	// Defaults to POD_NAMESPACE env var (set via downward API in the Helm
+	// chart). Empty falls back to the warm pool's DefaultNamespace.
+	flag.StringVar(&namespace, "namespace", os.Getenv("POD_NAMESPACE"),
+		"Namespace where AgentTier is installed. Defaults to POD_NAMESPACE env var.")
 	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
 	flag.Parse()
 
@@ -104,6 +111,7 @@ func main() {
 		GroupClaim:       groupClaim,
 		PreviewDomain:    previewDomain,
 		IngressClassName: ingressClassName,
+		InstallNamespace: namespace,
 	}
 
 	server := router.NewServer(config, k8sClient, bridge)

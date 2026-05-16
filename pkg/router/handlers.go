@@ -1352,7 +1352,7 @@ func (s *Server) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 // --- Warm Pool Handlers ---
 
 func (s *Server) handleGetWarmPoolStatus(w http.ResponseWriter, r *http.Request) {
-	status, err := warmpool.GetStatus(r.Context(), s.k8sClient)
+	status, err := warmpool.GetStatus(r.Context(), s.k8sClient, s.config.InstallNamespace)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to get pool status: "+err.Error())
 		return
@@ -1378,7 +1378,7 @@ func (s *Server) handleSetWarmPoolConfig(w http.ResponseWriter, r *http.Request)
 	}
 
 	cfg := warmpool.Config{DesiredCount: req.DesiredCount, Template: req.Template}
-	if err := warmpool.SetConfig(r.Context(), s.k8sClient, cfg); err != nil {
+	if err := warmpool.SetConfig(r.Context(), s.k8sClient, s.config.InstallNamespace, cfg); err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to save config: "+err.Error())
 		return
 	}

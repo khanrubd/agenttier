@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"encoding/base64"
+	"strings"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -331,4 +333,118 @@ func TestPodBuilder_RestartPolicyNever(t *testing.T) {
 	if pod.Spec.RestartPolicy != corev1.RestartPolicyNever {
 		t.Errorf("expected RestartPolicy=Never, got %s", pod.Spec.RestartPolicy)
 	}
+}
+
+
+// TestPodBuilder_FileDeployerHandlesEOFMarker verifies that file content
+// containing the literal string "AGENTLOFT_EOF" on its own line round-trips
+// through the file deployer init container without truncation. The previous
+// implementation used a heredoc terminator with that exact string and would
+// silently truncate. The new implementation pipes through `base64 -d`, which
+// has no marker collision risk.
+func TestPodBuilder_FileDeployerHandlesEOFMarker(t *testing.T) {
+	builder := &PodBuilder{DefaultImage: "default:latest"}
+	sandbox := &agenttierv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "default"},
+	}
+	mode := int32(0644)
+	// Content that would have terminated the old heredoc on the second line.
+	dangerous := "first line\nAGENTLOFT_EOF\nthird line should survive\n"
+	config := &MergedPodConfig{
+		Image:     "test:latest",
+		MountPath: "/workspace",
+		PVCName:   "test-pvc",
+		Files: []agenttierv1alpha1.FileSpec{
+			{Path: "/workspace/danger.txt", Content: dangerous, Mode: &mode},
+		},
+	}
+
+	pod := builder.Build(sandbox, config)
+
+	// Find the file-deployer init container.
+	var script string
+	for _, ic := range pod.Spec.InitContainers {
+		if ic.Name == "file-deployer" {
+			if len(ic.Command) < 3 {
+				t.Fatalf("file-deployer Command malformed: %v", ic.Command)
+			}
+			script = ic.Command[2]
+			break
+		}
+	}
+	if script == "" {
+		t.Fatal("file-deployer init container not found")
+	}
+
+	// The new script must NOT contain a heredoc — that's the source of
+	// the bug. base64 + printf is the right pattern.
+	if containsAny(script, "<<", "AGENTLOFT_EOF") {
+		t.Errorf("script still uses heredoc/marker pattern: %q", script)
+	}
+	// Must use base64 -d to decode the payload.
+	if !containsAll(script, "base64 -d", "/workspace/danger.txt") {
+		t.Errorf("script doesn't use base64 -d: %q", script)
+	}
+
+	// Decoding the base64 payload from the script should round-trip the
+	// original content exactly. We extract the base64 token (it sits
+	// between the printf format and the pipe) and decode it.
+	encoded := extractBase64Token(t, script)
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("script's embedded payload is not valid base64: %v", err)
+	}
+	if string(decoded) != dangerous {
+		t.Errorf("payload round-trip mismatch:\n  want: %q\n  got:  %q", dangerous, string(decoded))
+	}
+}
+
+// containsAll returns true if all substrings appear in s.
+func containsAll(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if !strings.Contains(s, sub) {
+			return false
+		}
+	}
+	return true
+}
+
+// containsAny returns true if any substring appears in s.
+func containsAny(s string, subs ...string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
+}
+
+// extractBase64Token pulls the base64 payload out of the printf | base64 -d
+// pipeline that the file deployer emits. The script line for one file is:
+//
+//	mkdir -p $(dirname '/workspace/x.txt') && printf '%s' "<base64>" | base64 -d > '/workspace/x.txt'
+//
+// We split on `printf '%s' ` and then on ` | base64 -d`, then strip the
+// surrounding %q quoting (Go's %q wraps in double quotes and escapes inner
+// chars; for the standard base64 alphabet the result is just `"<token>"`).
+func extractBase64Token(t *testing.T, script string) string {
+	t.Helper()
+	const startMarker = "printf '%s' "
+	const endMarker = " | base64 -d"
+	startIdx := strings.Index(script, startMarker)
+	if startIdx < 0 {
+		t.Fatalf("script missing printf marker: %q", script)
+	}
+	rest := script[startIdx+len(startMarker):]
+	endIdx := strings.Index(rest, endMarker)
+	if endIdx < 0 {
+		t.Fatalf("script missing base64 marker: %q", script)
+	}
+	quoted := rest[:endIdx]
+	// Go's %q wraps in double quotes; strip them. Base64 alphabet is
+	// [A-Za-z0-9+/=] so no escapes are needed inside the quotes.
+	if len(quoted) >= 2 && quoted[0] == '"' && quoted[len(quoted)-1] == '"' {
+		return quoted[1 : len(quoted)-1]
+	}
+	return quoted
 }

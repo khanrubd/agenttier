@@ -58,6 +58,7 @@ func main() {
 		defaultStorageSize      string
 		defaultMountPath        string
 		agentMemorySidecarImage string
+		namespace               string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8081", "The address the metrics endpoint binds to.")
@@ -71,6 +72,13 @@ func main() {
 		"When set, every mode: agent sandbox Pod gains a mem0 sidecar at "+
 			"this image and MEM0_BASE_URL=http://localhost:11434 is "+
 			"injected into the sandbox container. Empty = feature off.")
+	// Install namespace — drives where the warm pool ConfigMap, pool Pods,
+	// and pool PVCs live. Defaults to the POD_NAMESPACE env var (set via
+	// the downward API in the Helm chart). Falls back to "agenttier" if
+	// neither flag nor env are set, matching the chart's default install
+	// namespace.
+	flag.StringVar(&namespace, "namespace", os.Getenv("POD_NAMESPACE"),
+		"Namespace where AgentTier is installed. Defaults to POD_NAMESPACE env var.")
 
 	opts := zap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
@@ -107,6 +115,7 @@ func main() {
 		DefaultStorageSize:      defaultStorageSize,
 		DefaultMountPath:        defaultMountPath,
 		AgentMemorySidecarImage: agentMemorySidecarImage,
+		InstallNamespace:        namespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Sandbox")
 		os.Exit(1)
@@ -124,7 +133,7 @@ func main() {
 
 	// Start warm pool reconciler (runs only on the leader, respects leader election)
 	wpLogger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	wpReconciler := warmpool.NewReconciler(mgr.GetClient(), wpLogger)
+	wpReconciler := warmpool.NewReconciler(mgr.GetClient(), wpLogger, namespace)
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		wpReconciler.RunLoop(ctx)
 		return nil
