@@ -279,6 +279,13 @@ func mergeHarness(parent, child *agenttierv1alpha1.HarnessSpec) *agenttierv1alph
 			result.Agent = mergeAgent(result.Agent, child.Agent)
 		}
 	}
+	// UseHTTPExec is a *bool so we can distinguish "explicitly disabled
+	// in the child" from "not set in the child, inherit from parent".
+	// Child wins when set; nil = inherit. Same pattern as MaxConcurrent-
+	// Invokes on AgentSpec.
+	if child.UseHTTPExec != nil {
+		result.UseHTTPExec = child.UseHTTPExec
+	}
 
 	// Tools and skills are additive
 	result.Tools = append(result.Tools, child.Tools...)
@@ -441,6 +448,15 @@ func MergeSandboxWithTemplate(sandbox *agenttierv1alpha1.SandboxSpec, template *
 		}
 		if h.Shell != "" {
 			config.Shell = h.Shell
+		}
+		// HTTP-exec opt-in. Defaults to false when not set; explicit
+		// true on the resolved chain enables the new path. The
+		// per-sandbox Secret name is filled in by the controller in a
+		// later step (after it generates and stores the random
+		// token), so MergedPodConfig.RuntimeTokenSecret stays empty
+		// here.
+		if h.UseHTTPExec != nil {
+			config.UseHTTPExec = *h.UseHTTPExec
 		}
 	}
 

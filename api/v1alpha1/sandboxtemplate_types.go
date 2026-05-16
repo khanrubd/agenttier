@@ -169,6 +169,21 @@ type HarnessSpec struct {
 	// once at /configure time. Ignored for mode: "code".
 	// +optional
 	Agent *AgentSpec `json:"agent,omitempty"`
+
+	// UseHTTPExec, when true, instructs the Router to proxy /exec, /files,
+	// and /invoke calls to the in-pod sandbox-runtime HTTP server (port
+	// 9000) instead of going through the legacy SPDY exec path. The
+	// sandbox image must ship the runtime binary (today: only
+	// sandbox-general from v0.3.6+); enabling this on an image that
+	// doesn't ship the runtime will produce a 502 from the Router on
+	// every request. Defaults to false (= today's SPDY behavior).
+	//
+	// When true, the controller also injects an AGENTTIER_RUNTIME_TOKEN
+	// env var sourced from a per-sandbox Secret and adds an ingress rule
+	// to the NetworkPolicy permitting the Router pod to reach :9000 on
+	// the sandbox.
+	// +optional
+	UseHTTPExec *bool `json:"useHTTPExec,omitempty"`
 }
 
 // AgentSpec describes how an agent-mode sandbox accepts configuration and

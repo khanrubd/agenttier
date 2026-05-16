@@ -58,6 +58,17 @@ type MergedPodConfig struct {
 	Privileged      bool
 	MountPath       string
 	PVCName         string
+	// UseHTTPExec mirrors HarnessSpec.UseHTTPExec after template inheritance
+	// has been resolved. When true, the controller injects the in-pod
+	// runtime token env var on the sandbox container and adds an ingress
+	// rule to the NetworkPolicy permitting the Router→sandbox:9000 hop.
+	// Default false (today's SPDY behavior).
+	UseHTTPExec bool
+	// RuntimeTokenSecret is the name of the per-sandbox Secret holding the
+	// AGENTTIER_RUNTIME_TOKEN value. Empty when UseHTTPExec is false. The
+	// controller creates this Secret with a 32-byte random token; the
+	// Sandbox owns it via owner reference so it's GC'd on delete.
+	RuntimeTokenSecret string
 	Sidecars        []corev1.Container
 	InitContainers  []corev1.Container
 	InitScripts     []string
@@ -201,6 +212,26 @@ func (b *PodBuilder) buildMainContainer(config *MergedPodConfig) corev1.Containe
 				ReadOnly:  true,
 			})
 		}
+	}
+
+	// In-pod runtime token (HTTP-exec opt-in path). Sourced from a
+	// per-sandbox Secret the controller created alongside the Pod —
+	// keeps the value stable across pod restarts and lets RBAC restrict
+	// who can read it. The runtime binary inside the container reads
+	// AGENTTIER_RUNTIME_TOKEN from env at startup; the Router sends the
+	// same token as a Bearer header on every dial.
+	if config.UseHTTPExec && config.RuntimeTokenSecret != "" {
+		container.Env = append(container.Env, corev1.EnvVar{
+			Name: "AGENTTIER_RUNTIME_TOKEN",
+			ValueFrom: &corev1.EnvVarSource{
+				SecretKeyRef: &corev1.SecretKeySelector{
+					LocalObjectReference: corev1.LocalObjectReference{
+						Name: config.RuntimeTokenSecret,
+					},
+					Key: "token",
+				},
+			},
+		})
 	}
 
 	return container

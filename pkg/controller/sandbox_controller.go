@@ -192,7 +192,17 @@ func (r *SandboxReconciler) reconcileCreating(ctx context.Context, sandbox *agen
 					if networkSpec == nil && templateSpec != nil {
 						networkSpec = templateSpec.Network
 					}
-					if err := r.ensureNetworkPolicy(ctx, sandbox, networkSpec); err != nil {
+					// Warm-pool path: HTTP-exec opt-in flows through
+					// the resolved template's Harness. The pool pod's
+					// runtime token Secret is created here on first
+					// claim — the pool itself doesn't pre-create them.
+					npOpts := NetworkPolicyOptions{RouterNamespace: r.InstallNamespace}
+					if templateSpec != nil && templateSpec.Harness != nil &&
+						templateSpec.Harness.UseHTTPExec != nil &&
+						*templateSpec.Harness.UseHTTPExec {
+						npOpts.AllowRouterIngressOn9000 = true
+					}
+					if err := r.ensureNetworkPolicy(ctx, sandbox, networkSpec, npOpts); err != nil {
 						logger.Error(err, "failed to ensure network policy for warm-pool sandbox", "sandbox", sandbox.Name)
 					}
 
@@ -221,6 +231,19 @@ func (r *SandboxReconciler) reconcileCreating(ctx context.Context, sandbox *agen
 		sandbox.Status.ResolvedAgentSpec = templateSpec.Harness.Agent.DeepCopy()
 	}
 
+	// HTTP-exec opt-in: when the resolved harness asks for it, materialize
+	// the per-sandbox runtime-token Secret and plumb its name into the
+	// merged config so the Pod spec mounts AGENTTIER_RUNTIME_TOKEN. Done
+	// before PVC + NetworkPolicy so a token-Secret failure short-circuits
+	// the create flow cleanly.
+	if mergedConfig.UseHTTPExec {
+		secretName, err := r.ensureRuntimeTokenSecret(ctx, sandbox)
+		if err != nil {
+			return r.transitionToError(ctx, sandbox, fmt.Sprintf("Runtime-token secret failed: %v", err))
+		}
+		mergedConfig.RuntimeTokenSecret = secretName
+	}
+
 	// Step 3: Create PVC (if not already exists)
 	storageSpec := sandbox.Spec.Storage
 	if storageSpec == nil && templateSpec != nil {
@@ -238,7 +261,10 @@ func (r *SandboxReconciler) reconcileCreating(ctx context.Context, sandbox *agen
 	if networkSpec == nil && templateSpec != nil {
 		networkSpec = templateSpec.Network
 	}
-	if err := r.ensureNetworkPolicy(ctx, sandbox, networkSpec); err != nil {
+	if err := r.ensureNetworkPolicy(ctx, sandbox, networkSpec, NetworkPolicyOptions{
+		AllowRouterIngressOn9000: mergedConfig.UseHTTPExec,
+		RouterNamespace:          r.InstallNamespace,
+	}); err != nil {
 		return r.transitionToError(ctx, sandbox, fmt.Sprintf("NetworkPolicy creation failed: %v", err))
 	}
 

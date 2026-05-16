@@ -447,3 +447,69 @@ func extractBase64Token(t *testing.T, script string) string {
 	}
 	return quoted
 }
+
+
+// TestPodBuilder_HTTPExecInjectsTokenEnvVar verifies that when
+// MergedPodConfig has UseHTTPExec=true and a RuntimeTokenSecret name,
+// the main container picks up an AGENTTIER_RUNTIME_TOKEN env var sourced
+// from that Secret. Without this, the in-pod runtime would refuse Router
+// requests with 401.
+func TestPodBuilder_HTTPExecInjectsTokenEnvVar(t *testing.T) {
+	builder := &PodBuilder{DefaultImage: "default:latest"}
+	sandbox := &agenttierv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "sbx-1", Namespace: "agenttier"},
+	}
+	cfg := &MergedPodConfig{
+		Image:              "test:latest",
+		MountPath:          "/workspace",
+		PVCName:            "sbx-1-pvc",
+		UseHTTPExec:        true,
+		RuntimeTokenSecret: "sbx-1-runtime-token",
+	}
+	pod := builder.Build(sandbox, cfg)
+	main := pod.Spec.Containers[0]
+
+	var found *corev1.EnvVar
+	for i := range main.Env {
+		if main.Env[i].Name == "AGENTTIER_RUNTIME_TOKEN" {
+			found = &main.Env[i]
+			break
+		}
+	}
+	if found == nil {
+		t.Fatalf("AGENTTIER_RUNTIME_TOKEN env var not present (got env %+v)", main.Env)
+	}
+	if found.ValueFrom == nil || found.ValueFrom.SecretKeyRef == nil {
+		t.Fatalf("env var not sourced from a Secret: %+v", found)
+	}
+	if got := found.ValueFrom.SecretKeyRef.Name; got != "sbx-1-runtime-token" {
+		t.Errorf("secret name = %q, want sbx-1-runtime-token", got)
+	}
+	if got := found.ValueFrom.SecretKeyRef.Key; got != "token" {
+		t.Errorf("secret key = %q, want token", got)
+	}
+}
+
+// TestPodBuilder_HTTPExecOffSkipsTokenEnvVar — symmetric: opt-out path
+// must NOT inject the env var even if a (stale) secret name is present.
+func TestPodBuilder_HTTPExecOffSkipsTokenEnvVar(t *testing.T) {
+	builder := &PodBuilder{DefaultImage: "default:latest"}
+	sandbox := &agenttierv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "sbx-1", Namespace: "agenttier"},
+	}
+	cfg := &MergedPodConfig{
+		Image:              "test:latest",
+		MountPath:          "/workspace",
+		PVCName:            "sbx-1-pvc",
+		UseHTTPExec:        false, // opt-out
+		RuntimeTokenSecret: "sbx-1-runtime-token",
+	}
+	pod := builder.Build(sandbox, cfg)
+	main := pod.Spec.Containers[0]
+
+	for _, e := range main.Env {
+		if e.Name == "AGENTTIER_RUNTIME_TOKEN" {
+			t.Errorf("AGENTTIER_RUNTIME_TOKEN injected despite UseHTTPExec=false")
+		}
+	}
+}

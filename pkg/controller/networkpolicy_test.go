@@ -38,7 +38,7 @@ func TestNetworkPolicyBuilder_DefaultDenyAll(t *testing.T) {
 	builder := &NetworkPolicyBuilder{}
 	sandbox := newTestSandbox("test-sandbox")
 
-	np := builder.Build(sandbox, nil)
+	np := builder.Build(sandbox, nil, NetworkPolicyOptions{})
 
 	// Should have exactly 1 egress rule (DNS only)
 	if len(np.Spec.Egress) != 1 {
@@ -85,7 +85,7 @@ func TestNetworkPolicyBuilder_DNSAlwaysAllowed(t *testing.T) {
 		},
 	}
 
-	np := builder.Build(sandbox, networkSpec)
+	np := builder.Build(sandbox, networkSpec, NetworkPolicyOptions{})
 
 	// First rule should always be DNS
 	if len(np.Spec.Egress) < 1 {
@@ -106,7 +106,7 @@ func TestNetworkPolicyBuilder_AllowInternet(t *testing.T) {
 		AllowInternet: true,
 	}
 
-	np := builder.Build(sandbox, networkSpec)
+	np := builder.Build(sandbox, networkSpec, NetworkPolicyOptions{})
 
 	// Should have DNS rule + allow-all rule
 	if len(np.Spec.Egress) != 2 {
@@ -135,7 +135,7 @@ func TestNetworkPolicyBuilder_CIDRRule(t *testing.T) {
 		},
 	}
 
-	np := builder.Build(sandbox, networkSpec)
+	np := builder.Build(sandbox, networkSpec, NetworkPolicyOptions{})
 
 	// DNS + CIDR rule
 	if len(np.Spec.Egress) != 2 {
@@ -162,7 +162,7 @@ func TestNetworkPolicyBuilder_PeerSandboxes(t *testing.T) {
 		AllowPeerSandboxes: true,
 	}
 
-	np := builder.Build(sandbox, networkSpec)
+	np := builder.Build(sandbox, networkSpec, NetworkPolicyOptions{})
 
 	// DNS + peer egress
 	if len(np.Spec.Egress) != 2 {
@@ -189,7 +189,7 @@ func TestNetworkPolicyBuilder_PodSelector(t *testing.T) {
 	builder := &NetworkPolicyBuilder{}
 	sandbox := newTestSandbox("my-sandbox")
 
-	np := builder.Build(sandbox, nil)
+	np := builder.Build(sandbox, nil, NetworkPolicyOptions{})
 
 	// Verify pod selector targets this specific sandbox
 	labels := np.Spec.PodSelector.MatchLabels
@@ -213,7 +213,7 @@ func TestNetworkPolicyBuilder_IngressRules(t *testing.T) {
 		},
 	}
 
-	np := builder.Build(sandbox, networkSpec)
+	np := builder.Build(sandbox, networkSpec, NetworkPolicyOptions{})
 
 	if len(np.Spec.Ingress) != 1 {
 		t.Fatalf("expected 1 ingress rule, got %d", len(np.Spec.Ingress))
@@ -222,5 +222,81 @@ func TestNetworkPolicyBuilder_IngressRules(t *testing.T) {
 	ingressRule := np.Spec.Ingress[0]
 	if len(ingressRule.From) != 1 || ingressRule.From[0].IPBlock.CIDR != "192.168.1.0/24" {
 		t.Error("expected CIDR 192.168.1.0/24 in ingress")
+	}
+}
+
+
+// TestNetworkPolicyBuilder_HTTPExecIngressRule verifies that when
+// NetworkPolicyOptions.AllowRouterIngressOn9000 is true, the resulting
+// policy includes an ingress rule scoped to:
+//   - the Router namespace via kubernetes.io/metadata.name
+//   - the Router pod via app.kubernetes.io/component=router
+//   - TCP port 9000 only
+//
+// This is what gates the in-pod runtime — without it, NetworkPolicy
+// blocks the Router from reaching :9000 and HTTP-exec dies with a
+// connection-refused before the Bearer token even matters.
+func TestNetworkPolicyBuilder_HTTPExecIngressRule(t *testing.T) {
+	builder := &NetworkPolicyBuilder{}
+	sandbox := newTestSandbox("sbx-1")
+
+	np := builder.Build(sandbox, nil, NetworkPolicyOptions{
+		AllowRouterIngressOn9000: true,
+		RouterNamespace:          "agenttier",
+	})
+
+	if len(np.Spec.Ingress) != 1 {
+		t.Fatalf("expected 1 ingress rule, got %d (rules=%+v)", len(np.Spec.Ingress), np.Spec.Ingress)
+	}
+	rule := np.Spec.Ingress[0]
+	if len(rule.From) != 1 {
+		t.Fatalf("expected 1 From peer, got %d", len(rule.From))
+	}
+	from := rule.From[0]
+	if from.NamespaceSelector == nil || from.NamespaceSelector.MatchLabels["kubernetes.io/metadata.name"] != "agenttier" {
+		t.Errorf("namespace selector wrong: %+v", from.NamespaceSelector)
+	}
+	if from.PodSelector == nil || from.PodSelector.MatchLabels["app.kubernetes.io/component"] != "router" {
+		t.Errorf("pod selector wrong: %+v", from.PodSelector)
+	}
+	if len(rule.Ports) != 1 || rule.Ports[0].Port == nil || rule.Ports[0].Port.IntValue() != 9000 {
+		t.Errorf("expected port 9000, got %+v", rule.Ports)
+	}
+}
+
+// TestNetworkPolicyBuilder_HTTPExecOptOutNoIngress — symmetric: when the
+// flag is false, the ingress rule must NOT be present even on a sandbox
+// with no other ingress rules.
+func TestNetworkPolicyBuilder_HTTPExecOptOutNoIngress(t *testing.T) {
+	builder := &NetworkPolicyBuilder{}
+	sandbox := newTestSandbox("sbx-1")
+
+	np := builder.Build(sandbox, nil, NetworkPolicyOptions{
+		AllowRouterIngressOn9000: false, // explicit opt-out
+	})
+
+	if len(np.Spec.Ingress) != 0 {
+		t.Errorf("expected 0 ingress rules, got %d", len(np.Spec.Ingress))
+	}
+}
+
+// TestNetworkPolicyBuilder_HTTPExecAppliesEvenWithAllowInternet covers a
+// subtle bug class: the AllowInternet branch used to early-return before
+// any HTTP-exec overlay could be appended. The fix uses a finalize()
+// closure so the rule is added on every code path — verify that here.
+func TestNetworkPolicyBuilder_HTTPExecAppliesEvenWithAllowInternet(t *testing.T) {
+	builder := &NetworkPolicyBuilder{}
+	sandbox := newTestSandbox("sbx-1")
+
+	np := builder.Build(sandbox,
+		&agenttierv1alpha1.NetworkSpec{AllowInternet: true},
+		NetworkPolicyOptions{
+			AllowRouterIngressOn9000: true,
+			RouterNamespace:          "agenttier",
+		},
+	)
+
+	if len(np.Spec.Ingress) != 1 {
+		t.Errorf("HTTP-exec ingress rule lost on the AllowInternet branch (got %d ingress rules)", len(np.Spec.Ingress))
 	}
 }

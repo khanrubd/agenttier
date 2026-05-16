@@ -1,0 +1,181 @@
+/*
+Copyright 2024 AgentTier Authors.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+*/
+
+package sandboxhttp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"testing"
+	"time"
+)
+
+func TestClient_HealthzHappyPath(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/healthz" {
+			t.Errorf("expected /healthz, got %s", r.URL.Path)
+		}
+		_, _ = w.Write([]byte(`{"status":"ok"}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	if err := c.Healthz(context.Background()); err != nil {
+		t.Errorf("Healthz returned %v, want nil", err)
+	}
+}
+
+func TestClient_Healthz503(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_, _ = w.Write([]byte("not ready: K8s API unreachable"))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	err := c.Healthz(context.Background())
+	if err == nil {
+		t.Fatal("Healthz should error on 503")
+	}
+	if !strings.Contains(err.Error(), "503") {
+		t.Errorf("error didn't mention 503: %v", err)
+	}
+}
+
+func TestClient_ExecAttachesBearerToken(t *testing.T) {
+	gotAuth := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_ = json.NewEncoder(w).Encode(ExecResponse{ExitCode: 0, Stdout: "ok\n"})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "secret-runtime-token")
+	_, err := c.Exec(context.Background(), ExecRequest{Command: []string{"echo", "ok"}})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if want := "Bearer secret-runtime-token"; gotAuth != want {
+		t.Errorf("Authorization header = %q, want %q", gotAuth, want)
+	}
+}
+
+func TestClient_ExecReturnsResponse(t *testing.T) {
+	want := ExecResponse{
+		ExitCode:   42,
+		Stdout:     "hello\n",
+		Stderr:     "warn\n",
+		DurationMs: 123,
+		Truncated:  true,
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Validate request
+		var req ExecRequest
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		if len(req.Command) == 0 || req.Command[0] != "echo" {
+			t.Errorf("server didn't get expected command: %+v", req)
+		}
+		_ = json.NewEncoder(w).Encode(want)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "t")
+	got, err := c.Exec(context.Background(), ExecRequest{
+		Command: []string{"echo", "hello"},
+		Stdin:   "world",
+	})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if got.ExitCode != want.ExitCode || got.Stdout != want.Stdout ||
+		got.Stderr != want.Stderr || got.DurationMs != want.DurationMs ||
+		got.Truncated != want.Truncated {
+		t.Errorf("ExecResponse mismatch:\n got %+v\n want %+v", got, want)
+	}
+}
+
+func TestClient_ExecPropagatesContextCancellation(t *testing.T) {
+	// If the caller cancels their context the client should abort the
+	// in-flight request rather than waiting for the runtime's full
+	// timeout. Verifies http.NewRequestWithContext is wired correctly.
+	blocker := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-blocker // never fires — client cancellation should kill the request
+	}))
+	defer func() {
+		close(blocker)
+		srv.Close()
+	}()
+
+	c := New(srv.URL, "t")
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	_, err := c.Exec(ctx, ExecRequest{Command: []string{"sleep", "100"}})
+	if err == nil {
+		t.Fatal("expected error when context cancelled, got nil")
+	}
+	if !errors.Is(err, context.DeadlineExceeded) && !strings.Contains(err.Error(), "deadline") {
+		// httptest sometimes wraps the context error — accept either spelling.
+		t.Errorf("expected deadline-related error, got %v", err)
+	}
+}
+
+func TestClient_ExecHandlesNon200(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte(`{"error":"runtime crashed"}`))
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "t")
+	_, err := c.Exec(context.Background(), ExecRequest{Command: []string{"true"}})
+	if err == nil {
+		t.Fatal("expected error on 500 response")
+	}
+	if !strings.Contains(err.Error(), "500") {
+		t.Errorf("error didn't mention 500: %v", err)
+	}
+}
+
+func TestClient_RejectsEmptyBaseURL(t *testing.T) {
+	c := &Client{} // zero value — BaseURL deliberately unset
+
+	if err := c.Healthz(context.Background()); err == nil {
+		t.Error("Healthz with empty BaseURL should error")
+	}
+	if _, err := c.Exec(context.Background(), ExecRequest{Command: []string{"true"}}); err == nil {
+		t.Error("Exec with empty BaseURL should error")
+	}
+}
+
+func TestClient_NoTokenWhenEmpty(t *testing.T) {
+	gotAuth := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAuth = r.Header.Get("Authorization")
+		_, _ = io.Copy(io.Discard, r.Body)
+		_ = json.NewEncoder(w).Encode(ExecResponse{ExitCode: 0})
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	_, err := c.Exec(context.Background(), ExecRequest{Command: []string{"true"}})
+	if err != nil {
+		t.Fatalf("Exec: %v", err)
+	}
+	if gotAuth != "" {
+		t.Errorf("Authorization sent despite empty token: %q", gotAuth)
+	}
+}
