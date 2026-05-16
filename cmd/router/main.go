@@ -54,6 +54,8 @@ func main() {
 		previewDomain    string
 		ingressClassName string
 		namespace        string
+		rateLimitPerIP   float64
+		rateLimitPerUser float64
 		showVersion      bool
 	)
 
@@ -70,6 +72,15 @@ func main() {
 	// chart). Empty falls back to the warm pool's DefaultNamespace.
 	flag.StringVar(&namespace, "namespace", os.Getenv("POD_NAMESPACE"),
 		"Namespace where AgentTier is installed. Defaults to POD_NAMESPACE env var.")
+	// Rate limiting — zero disables. Defaults match the Helm values that
+	// chart authors most likely want when they enable it (60 req/min/IP,
+	// 600 req/min/user). Values are set explicitly via flags rather than
+	// inferred at runtime so an operator can verify the running config
+	// from `kubectl describe pod`.
+	flag.Float64Var(&rateLimitPerIP, "ratelimit-per-ip-rate", 0,
+		"Steady-state per-client-IP request rate (req/sec). 0 disables IP-level rate limiting.")
+	flag.Float64Var(&rateLimitPerUser, "ratelimit-per-user-rate", 0,
+		"Steady-state per-authenticated-user request rate (req/sec). 0 disables user-level rate limiting.")
 	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
 	flag.Parse()
 
@@ -103,6 +114,12 @@ func main() {
 	bridge := terminal.NewBridge(clientset, restConfig, logger)
 
 	// Create and start server
+	rateLimitCfg := router.RateLimitConfig{
+		PerIPRate:    rateLimitPerIP,
+		PerUserRate:  rateLimitPerUser,
+		PerIPBurst:   30,  // burst sized for typical web-UI traffic
+		PerUserBurst: 100, // generous so an interactive admin doesn't trip
+	}
 	config := &router.Config{
 		ListenAddr:       listenAddr,
 		OIDCIssuerURL:    oidcIssuer,
@@ -112,6 +129,7 @@ func main() {
 		PreviewDomain:    previewDomain,
 		IngressClassName: ingressClassName,
 		InstallNamespace: namespace,
+		RateLimit:        rateLimitCfg,
 	}
 
 	server := router.NewServer(config, k8sClient, bridge)

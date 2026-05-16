@@ -35,6 +35,19 @@ router:
   service:
     type: ClusterIP
     port: 8080
+  # Rate limiting throttles abusive callers before they reach handlers.
+  # Both layers default to off (zero rate). Enabling either applies a
+  # token-bucket counter:
+  #   perIPPerSecond: throttles by client IP (X-Forwarded-For aware).
+  #     Applies to authenticated AND anonymous traffic. 1.0 = 60/min.
+  #   perUserPerSecond: throttles by Sub claim. Authenticated users
+  #     usually need a higher ceiling than per-IP because they're
+  #     identifiable. 10.0 = 600/min.
+  # /healthz, /readyz, /metrics, and /ws/* are always exempt — kubelet
+  # probes and WebSocket terminals must not be 429'd.
+  rateLimit:
+    perIPPerSecond: 0
+    perUserPerSecond: 0
 
 # --- Web UI ---
 webui:

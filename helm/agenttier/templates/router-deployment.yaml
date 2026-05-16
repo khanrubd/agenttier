@@ -34,6 +34,14 @@ spec:
             - --group-claim={{ .Values.auth.oidc.groupClaim }}
             - --preview-domain={{ .Values.networking.previewDomain }}
             - --ingress-class-name={{ .Values.networking.portForwardIngressClass }}
+            {{- with .Values.router.rateLimit }}
+            {{- if .perIPPerSecond }}
+            - --ratelimit-per-ip-rate={{ .perIPPerSecond }}
+            {{- end }}
+            {{- if .perUserPerSecond }}
+            - --ratelimit-per-user-rate={{ .perUserPerSecond }}
+            {{- end }}
+            {{- end }}
           env:
             - name: POD_NAMESPACE
               valueFrom:

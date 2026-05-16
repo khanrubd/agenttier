@@ -56,6 +56,11 @@ type Config struct {
 	// the warm pool ConfigMap, pool Pods, and pool PVCs live). Set from
 	// POD_NAMESPACE in the router deployment.
 	InstallNamespace string
+	// RateLimit configures per-IP and per-user request throttling. The
+	// zero value disables rate limiting entirely (today's behavior); set
+	// to DefaultRateLimitConfig() or a customized variant to enforce
+	// limits.
+	RateLimit RateLimitConfig
 }
 
 // Server is the main Router HTTP server.
@@ -69,6 +74,7 @@ type Server struct {
 	sessionManager  *terminal.Manager
 	governanceStore governance.Store
 	portForward     *portforward.Manager
+	rateLimiter     *rateLimiter
 }
 
 // NewServer creates a new Router server with all routes registered.
@@ -91,11 +97,20 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 			IngressClassName: config.IngressClassName,
 		}),
 	}
+	// Rate limiter: zero-config = disabled (today's behavior). Operators
+	// opt in by setting Helm values that populate config.RateLimit, which
+	// the cmd/router main flag parser threads through.
+	if config.RateLimit.PerIPRate > 0 || config.RateLimit.PerUserRate > 0 {
+		s.rateLimiter = newRateLimiter(config.RateLimit)
+	}
 
 	// Register middleware
 	r.Use(s.requestIDMiddleware)
 	r.Use(s.corsMiddleware)
 	r.Use(s.loggingMiddleware)
+	// Per-IP rate limiting runs before auth so anonymous abuse gets
+	// throttled even without a valid token. No-op when rateLimiter is nil.
+	r.Use(s.rateLimitMiddleware)
 
 	// Health and metrics (no auth required)
 	r.HandleFunc("/healthz", s.handleHealthz).Methods("GET")
@@ -105,6 +120,9 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	// API routes (auth required)
 	api := r.PathPrefix("/api/v1").Subrouter()
 	api.Use(s.authMiddleware)
+	// Per-user rate limit overlays the per-IP cap for authenticated
+	// callers. Mounted after authMiddleware so claims are available.
+	api.Use(s.rateLimitAuthenticatedMiddleware)
 
 	// Sandbox CRUD
 	api.HandleFunc("/sandboxes", s.handleListSandboxes).Methods("GET")
