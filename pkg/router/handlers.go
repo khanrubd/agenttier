@@ -691,7 +691,7 @@ func (s *Server) handleListFiles(w http.ResponseWriter, r *http.Request) {
 		"cd '%s' 2>/dev/null && ls -la --time-style=+%%s | tail -n +2",
 		cleaned,
 	)}
-	result, err := s.bridge.ExecCommand(r.Context(), sandbox.Namespace, sandbox.Status.PodName, "sandbox", cmd, 10)
+	result, err := s.dispatchExec(r.Context(), sandbox, cmd, 10)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "list failed: "+err.Error())
 		return
@@ -766,7 +766,7 @@ func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
 	statCmd := []string{"/bin/sh", "-c", fmt.Sprintf(
 		"stat -c %%s '%s' 2>/dev/null || wc -c < '%s'", cleaned, cleaned,
 	)}
-	statResult, err := s.bridge.ExecCommand(r.Context(), sandbox.Namespace, sandbox.Status.PodName, "sandbox", statCmd, 5)
+	statResult, err := s.dispatchExec(r.Context(), sandbox, statCmd, 5)
 	if err != nil || statResult.ExitCode != 0 {
 		respondError(w, http.StatusNotFound, "file not found: "+cleaned)
 		return
@@ -780,7 +780,7 @@ func (s *Server) handleGetFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	readCmd := []string{"/bin/sh", "-c", fmt.Sprintf("base64 -w0 '%s' 2>/dev/null || base64 '%s'", cleaned, cleaned)}
-	result, err := s.bridge.ExecCommand(r.Context(), sandbox.Namespace, sandbox.Status.PodName, "sandbox", readCmd, 30)
+	result, err := s.dispatchExec(r.Context(), sandbox, readCmd, 30)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "read failed: "+err.Error())
 		return
@@ -878,7 +878,7 @@ func (s *Server) handlePutFile(w http.ResponseWriter, r *http.Request) {
 		"mkdir -p '%s' && printf '%%s' %q | base64 -d > '%s'",
 		dir, encoded, cleaned,
 	)}
-	result, err := s.bridge.ExecCommand(r.Context(), sandbox.Namespace, sandbox.Status.PodName, "sandbox", writeCmd, 60)
+	result, err := s.dispatchExec(r.Context(), sandbox, writeCmd, 60)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "write failed: "+err.Error())
 		return
