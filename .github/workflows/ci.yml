@@ -206,6 +206,14 @@ jobs:
       # don't rebuild on every PR (it's slow and the build job already
       # validates the images); the result is still written to the
       # Security tab for baseline visibility.
+      #
+      # Sandbox images get their own SARIF categories so an operator can
+      # see CVE drift per image. The sandbox images are the user-facing
+      # surface — their base layers (Alpine, Python, Node) churn faster
+      # than the controller image, and a CVE there lands in user
+      # workloads via `helm upgrade`. Scanning them in CI is the early
+      # warning channel that closes the supply-chain gap separately
+      # tracked as "CVE scanning for sandbox base images in CI."
       - name: Build controller image for scanning
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: docker build -t agenttier-controller:scan -f Dockerfile.controller .
@@ -227,4 +235,99 @@ jobs:
         with:
           sarif_file: trivy-controller.sarif
           category: trivy-controller
+        continue-on-error: true
+
+      # Sandbox base images — every one we ship to ghcr.io. Each gets its
+      # own SARIF category so a CVE on, say, the Claude Code image
+      # doesn't get aggregated with general-coding's findings.
+      - name: Build sandbox-general image for scanning
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker build -t agenttier-sandbox-general:scan -f images/general-coding/Dockerfile images/general-coding
+
+      - name: Trivy image scan (sandbox-general)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "agenttier-sandbox-general:scan"
+          format: "sarif"
+          output: "trivy-sandbox-general.sarif"
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+        continue-on-error: true
+
+      - name: Upload Trivy sandbox-general SARIF
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-sandbox-general.sarif
+          category: trivy-sandbox-general
+        continue-on-error: true
+
+      - name: Build sandbox-claude-code image for scanning
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker build -t agenttier-sandbox-claude-code:scan -f images/claude-code/Dockerfile images/claude-code
+
+      - name: Trivy image scan (sandbox-claude-code)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "agenttier-sandbox-claude-code:scan"
+          format: "sarif"
+          output: "trivy-sandbox-claude-code.sarif"
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+        continue-on-error: true
+
+      - name: Upload Trivy sandbox-claude-code SARIF
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-sandbox-claude-code.sarif
+          category: trivy-sandbox-claude-code
+        continue-on-error: true
+
+      - name: Build sandbox-minimal image for scanning
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker build -t agenttier-sandbox-minimal:scan -f images/minimal/Dockerfile images/minimal
+
+      - name: Trivy image scan (sandbox-minimal)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "agenttier-sandbox-minimal:scan"
+          format: "sarif"
+          output: "trivy-sandbox-minimal.sarif"
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+        continue-on-error: true
+
+      - name: Upload Trivy sandbox-minimal SARIF
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-sandbox-minimal.sarif
+          category: trivy-sandbox-minimal
+        continue-on-error: true
+
+      - name: Build sandbox-langgraph image for scanning
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker build -t agenttier-sandbox-langgraph:scan -f images/langgraph/Dockerfile images/langgraph
+
+      - name: Trivy image scan (sandbox-langgraph)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "agenttier-sandbox-langgraph:scan"
+          format: "sarif"
+          output: "trivy-sandbox-langgraph.sarif"
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+        continue-on-error: true
+
+      - name: Upload Trivy sandbox-langgraph SARIF
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-sandbox-langgraph.sarif
+          category: trivy-sandbox-langgraph
         continue-on-error: true
