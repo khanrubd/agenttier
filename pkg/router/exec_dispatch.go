@@ -25,6 +25,7 @@ import (
 
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
 	"github.com/agenttier/agenttier/pkg/controller"
+	"github.com/agenttier/agenttier/pkg/router/agent"
 	"github.com/agenttier/agenttier/pkg/router/sandboxhttp"
 	"github.com/agenttier/agenttier/pkg/router/terminal"
 )
@@ -185,4 +186,55 @@ func (s *Server) lookupPodIP(ctx context.Context, sandbox *agenttierv1alpha1.San
 		return ""
 	}
 	return pod.Status.PodIP
+}
+
+
+// agentHTTPExec implements the agent package's HTTPExecResolver. Returns
+// (dispatcher, true) when the sandbox is opted into HTTP-exec and the
+// in-pod runtime is reachable; (nil, false) otherwise. Reuses the same
+// decision tree pickExecutor uses for /exec — token Secret + PodIP +
+// healthy /healthz — so the two surfaces stay consistent.
+func (s *Server) agentHTTPExec(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox) (agent.HTTPExecDispatcher, bool) {
+	if s.k8sClient == nil {
+		return nil, false
+	}
+	token, err := controller.ReadRuntimeToken(ctx, s.k8sClient, sandbox.Name, sandbox.Namespace)
+	if err != nil || token == "" {
+		return nil, false
+	}
+	podIP := s.lookupPodIP(ctx, sandbox)
+	if podIP == "" {
+		return nil, false
+	}
+	client := sandboxhttp.New("http://"+podIP+":"+runtimePortForTest, token)
+	probeCtx, cancel := context.WithTimeout(ctx, runtimeHealthzTimeout)
+	defer cancel()
+	if err := client.Healthz(probeCtx); err != nil {
+		return nil, false
+	}
+	return &agentHTTPDispatcher{client: client}, true
+}
+
+// agentHTTPDispatcher adapts a sandboxhttp.Client to the agent package's
+// HTTPExecDispatcher interface. The two methods just translate request
+// shapes between the two packages — neither owns the streaming logic.
+type agentHTTPDispatcher struct {
+	client *sandboxhttp.Client
+}
+
+func (d *agentHTTPDispatcher) InvokeStream(ctx context.Context, req agent.HTTPInvokeRequest, onEvent func(eventType string, data []byte) error) error {
+	return d.client.InvokeStream(ctx, sandboxhttp.InvokeRequest{
+		Command:        req.Command,
+		Stdin:          req.Stdin,
+		TimeoutSeconds: req.TimeoutSeconds,
+		WorkingDir:     req.WorkingDir,
+		Env:            req.Env,
+		InvokeID:       req.InvokeID,
+	}, func(ev sandboxhttp.InvokeEvent) error {
+		return onEvent(ev.EventType, ev.Data)
+	})
+}
+
+func (d *agentHTTPDispatcher) InvokeCancel(ctx context.Context, invokeID string) error {
+	return d.client.InvokeCancel(ctx, invokeID)
 }

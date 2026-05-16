@@ -81,10 +81,11 @@ type Config struct {
 
 // Server is the in-pod HTTP server.
 type Server struct {
-	cfg        Config
-	httpServer *http.Server
-	executor   commandExecutor
-	logger     *slog.Logger
+	cfg            Config
+	httpServer     *http.Server
+	executor       commandExecutor
+	logger         *slog.Logger
+	invokeRegistry *invokeRegistry
 }
 
 // commandExecutor is the abstraction the /exec handler uses to run user
@@ -109,9 +110,10 @@ func New(cfg Config) *Server {
 	}
 
 	s := &Server{
-		cfg:      cfg,
-		executor: defaultExecutor{},
-		logger:   logger,
+		cfg:            cfg,
+		executor:       defaultExecutor{},
+		logger:         logger,
+		invokeRegistry: newInvokeRegistry(),
 	}
 
 	mux := http.NewServeMux()
@@ -121,6 +123,11 @@ func New(cfg Config) *Server {
 	mux.HandleFunc("/healthz", s.handleHealthz)
 	// /exec runs user commands; auth is mandatory.
 	mux.HandleFunc("/exec", s.requireAuth(s.handleExec))
+	// /invoke streams output as SSE; auth mandatory.
+	mux.HandleFunc("/invoke", s.requireAuth(s.handleInvoke))
+	// /invoke/cancel/<invokeID> terminates an in-flight invoke; auth mandatory.
+	// Trailing-slash mux pattern lets the path carry the ID directly.
+	mux.HandleFunc("/invoke/cancel/", s.requireAuth(s.handleInvokeCancel))
 
 	s.httpServer = &http.Server{
 		Addr:    cfg.ListenAddr,

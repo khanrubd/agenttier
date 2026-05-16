@@ -282,10 +282,29 @@ func (h *Handler) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	if len(stdin) > 0 {
 		stdinReader = bytes.NewReader(stdin)
 	}
-	exitCode, err := h.opts.Bridge.ExecCommandStreamWithStdin(
-		invokeCtx, sandbox.Namespace, sandbox.Status.PodName, "sandbox",
-		cmd, stdinReader, stdoutCounter, stderrCounter,
+
+	// HTTP-exec opt-in: stream through the in-pod runtime when the
+	// sandbox is opted in and the runtime is reachable. Falls back to
+	// SPDY transparently otherwise — same semantics as the /exec
+	// dispatcher in pkg/router/exec_dispatch.go. The cross-replica
+	// cancel bug goes away on the HTTP path because the cancel address
+	// is the in-pod runtime, not a sync.Map in this Router pod.
+	var (
+		exitCode int
+		err      error
 	)
+	if dispatcher, ok := h.resolveHTTPExec(invokeCtx, sandbox); ok {
+		exitCode, exitReason = h.streamInvokeViaHTTP(invokeCtx, dispatcher, invokeID, cmd, string(stdin), int(invokeTimeout.Seconds()), stdoutCounter, stderrCounter)
+		err = nil
+		if exitCode < 0 && exitReason == "error" {
+			err = fmt.Errorf("http-exec invoke failed")
+		}
+	} else {
+		exitCode, err = h.opts.Bridge.ExecCommandStreamWithStdin(
+			invokeCtx, sandbox.Namespace, sandbox.Status.PodName, "sandbox",
+			cmd, stdinReader, stdoutCounter, stderrCounter,
+		)
+	}
 	sse.flushPending()
 	bytesStdout = stdoutCounter.n
 	bytesStderr = stderrCounter.n
@@ -354,6 +373,20 @@ type CancelRequest struct {
 // handleInvokeCancel terminates an in-flight invoke. Best-effort: if the
 // invoke completed between the client deciding to cancel and the request
 // landing, we return 404.
+//
+// Cancel resolution order:
+//
+//  1. Local sync.Map registry — covers SPDY invokes started on THIS
+//     Router pod. Today's path; preserved for backward compat with
+//     SPDY-only sandboxes.
+//
+//  2. In-pod runtime via HTTPExecOf — covers HTTP-exec invokes from
+//     ANY Router pod. This is the cross-replica fix: any Router pod
+//     can address any in-flight invoke because the registry lives on
+//     the sandbox itself, not the Router that started the invoke.
+//
+// 404 means we tried both paths and neither knows about the invoke
+// (either it completed, or the invokeId is bogus).
 func (h *Handler) handleInvokeCancel(w http.ResponseWriter, r *http.Request) {
 	sandbox, claims, ok := h.loadSandbox(w, r)
 	if !ok {
@@ -370,32 +403,51 @@ func (h *Handler) handleInvokeCancel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	raw, ok := h.invokes.Load(req.InvokeID)
-	if !ok {
+	// Local registry first. Catches SPDY invokes started on this
+	// Router pod and lets us enforce the same auth rules today's
+	// production deployments rely on (admin OR original caller).
+	if raw, ok := h.invokes.Load(req.InvokeID); ok {
+		entry, _ := raw.(*invokeRegistryEntry)
+		if entry != nil {
+			if entry.sandboxID != sandbox.Name {
+				writeError(w, http.StatusNotFound, "invoke does not belong to this sandbox")
+				return
+			}
+			if !claims.IsAdmin && entry.actor != claims.Sub {
+				writeError(w, http.StatusForbidden, "you do not own this invoke")
+				return
+			}
+			entry.cancel()
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+	}
+
+	// HTTP-exec path: the invoke might be running on a different Router
+	// pod's stream (or even on this pod when started via HTTP). Try the
+	// in-pod runtime — its registry knows about every HTTP-exec invoke
+	// regardless of which Router pod started it. This is what fixes the
+	// cross-replica cancel bug.
+	//
+	// Auth posture: a non-admin user could in theory ask the in-pod
+	// runtime to cancel a peer's invoke since the runtime has no
+	// knowledge of the original caller. We mitigate by gating the
+	// HTTP-exec path on admin claims for now — this is conservative
+	// but correct. A future phase can plumb actor identity to the
+	// runtime so it enforces the same per-actor check.
+	if !claims.IsAdmin {
 		writeError(w, http.StatusNotFound, fmt.Sprintf("invoke %s not in flight", req.InvokeID))
 		return
 	}
-	entry, ok := raw.(*invokeRegistryEntry)
-	if !ok || entry == nil {
-		writeError(w, http.StatusNotFound, "invoke not found")
-		return
+	if dispatcher, opted := h.resolveHTTPExec(r.Context(), sandbox); opted {
+		if err := dispatcher.InvokeCancel(r.Context(), req.InvokeID); err == nil {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		// fall through to 404 — runtime returned an error (likely
+		// "no in-flight invoke with that id")
 	}
-
-	// Belt-and-braces: cancel only matches when the invoke is on this
-	// sandbox AND (caller is admin OR caller started it). Prevents one
-	// user from canceling another user's job that happens to share an
-	// invokeId guess.
-	if entry.sandboxID != sandbox.Name {
-		writeError(w, http.StatusNotFound, "invoke does not belong to this sandbox")
-		return
-	}
-	if !claims.IsAdmin && entry.actor != claims.Sub {
-		writeError(w, http.StatusForbidden, "you do not own this invoke")
-		return
-	}
-
-	entry.cancel()
-	w.WriteHeader(http.StatusNoContent)
+	writeError(w, http.StatusNotFound, fmt.Sprintf("invoke %s not in flight", req.InvokeID))
 }
 
 // --- helpers --------------------------------------------------------------
@@ -468,3 +520,96 @@ func shellQuote(s string) string {
 //
 //nolint:unused // reserved for future error-response shaping
 func itoa(n int) string { return strconv.Itoa(n) }
+
+
+// resolveHTTPExec asks the host Router whether this sandbox is opted into
+// HTTP-exec and, if so, returns a dispatcher pointed at the in-pod
+// runtime. Returns (nil, false) on every fallback condition — no token
+// Secret, pod IP not yet assigned, /healthz fails. The /exec dispatch
+// path uses identical logic; see pkg/router/exec_dispatch.go.
+func (h *Handler) resolveHTTPExec(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox) (HTTPExecDispatcher, bool) {
+	if h.opts.HTTPExecOf == nil {
+		return nil, false
+	}
+	return h.opts.HTTPExecOf(ctx, sandbox)
+}
+
+// streamInvokeViaHTTP runs the entrypoint over the runtime's /invoke SSE
+// endpoint and translates each event into the writers/event channel
+// the rest of handleInvoke consumes. Returns (exitCode, exitReason)
+// matching the SPDY path's contract so the surrounding code stays
+// identical.
+//
+// The runtime emits its own "start" / "log" / "exit" events. We forward
+// "log" payloads to stdoutCounter / stderrCounter (so OTel byte counts
+// stay accurate) and capture the exit event's exitCode + reason for the
+// return values. The Router's outer SSE writer emits its own start +
+// exit events, so we don't double-emit those — the runtime's are
+// internal to the proxy hop.
+func (h *Handler) streamInvokeViaHTTP(
+	ctx context.Context,
+	dispatcher HTTPExecDispatcher,
+	invokeID string,
+	cmd []string,
+	stdin string,
+	timeoutSeconds int,
+	stdout io.Writer,
+	stderr io.Writer,
+) (int, string) {
+	var capturedExit struct {
+		code   int
+		reason string
+		seen   bool
+	}
+
+	err := dispatcher.InvokeStream(ctx, HTTPInvokeRequest{
+		Command:        cmd,
+		Stdin:          stdin,
+		TimeoutSeconds: timeoutSeconds,
+		InvokeID:       invokeID,
+	}, func(eventType string, data []byte) error {
+		switch eventType {
+		case "log":
+			var ev struct {
+				Stream string `json:"stream"`
+				Data   string `json:"data"`
+			}
+			if err := json.Unmarshal(data, &ev); err != nil {
+				return nil // best-effort — bad event shouldn't kill the stream
+			}
+			switch ev.Stream {
+			case "stderr":
+				_, _ = stderr.Write([]byte(ev.Data))
+			default:
+				_, _ = stdout.Write([]byte(ev.Data))
+			}
+		case "exit":
+			var ev struct {
+				ExitCode int    `json:"exitCode"`
+				Reason   string `json:"reason"`
+			}
+			if err := json.Unmarshal(data, &ev); err == nil {
+				capturedExit.code = ev.ExitCode
+				capturedExit.reason = ev.Reason
+				capturedExit.seen = true
+			}
+		}
+		return nil
+	})
+
+	if err != nil {
+		// Map the most common failure modes onto the same reasons the
+		// SPDY path produces so audit / OTel labels stay stable.
+		switch ctx.Err() {
+		case context.DeadlineExceeded:
+			return -1, "timeout"
+		case context.Canceled:
+			return -1, "canceled"
+		}
+		return -1, "error"
+	}
+	if !capturedExit.seen {
+		return -1, "error"
+	}
+	return capturedExit.code, capturedExit.reason
+}

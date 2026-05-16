@@ -179,3 +179,68 @@ func TestClient_NoTokenWhenEmpty(t *testing.T) {
 		t.Errorf("Authorization sent despite empty token: %q", gotAuth)
 	}
 }
+
+
+func TestClient_InvokeStreamForwardsEvents(t *testing.T) {
+	// Simulate the in-pod runtime emitting start + log + exit. Verify
+	// the client's parser dispatches each event to the callback in
+	// order with correct EventType + Data.
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		flusher := w.(http.Flusher)
+		w.WriteHeader(http.StatusOK)
+		// Three events back-to-back with the keepalive comment shape.
+		_, _ = w.Write([]byte("event: start\ndata: {\"invokeId\":\"x\"}\n\n"))
+		flusher.Flush()
+		_, _ = w.Write([]byte(": keepalive\n\n"))
+		flusher.Flush()
+		_, _ = w.Write([]byte("event: log\ndata: {\"stream\":\"stdout\",\"data\":\"hi\"}\n\n"))
+		flusher.Flush()
+		_, _ = w.Write([]byte("event: exit\ndata: {\"exitCode\":0,\"reason\":\"completed\"}\n\n"))
+		flusher.Flush()
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "")
+	var events []InvokeEvent
+	err := c.InvokeStream(context.Background(), InvokeRequest{Command: []string{"echo", "hi"}}, func(ev InvokeEvent) error {
+		events = append(events, ev)
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("InvokeStream: %v", err)
+	}
+	wantTypes := []string{"start", "log", "exit"}
+	if len(events) != len(wantTypes) {
+		t.Fatalf("event count = %d, want %d (events=%+v)", len(events), len(wantTypes), events)
+	}
+	for i, want := range wantTypes {
+		if events[i].EventType != want {
+			t.Errorf("events[%d].EventType = %q, want %q", i, events[i].EventType, want)
+		}
+	}
+}
+
+func TestClient_InvokeCancelHappyPath(t *testing.T) {
+	gotPath := ""
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath = r.URL.Path
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+
+	c := New(srv.URL, "tok")
+	if err := c.InvokeCancel(context.Background(), "inv-abc"); err != nil {
+		t.Fatalf("InvokeCancel: %v", err)
+	}
+	if gotPath != "/invoke/cancel/inv-abc" {
+		t.Errorf("path = %q, want /invoke/cancel/inv-abc", gotPath)
+	}
+}
+
+func TestClient_InvokeCancelMissingID(t *testing.T) {
+	c := New("http://example.com", "")
+	if err := c.InvokeCancel(context.Background(), ""); err == nil {
+		t.Error("InvokeCancel with empty ID should error")
+	}
+}

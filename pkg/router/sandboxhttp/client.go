@@ -26,12 +26,14 @@ limitations under the License.
 package sandboxhttp
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 )
 
@@ -182,4 +184,151 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 		httpClient = &http.Client{Timeout: DefaultRequestTimeout}
 	}
 	return httpClient.Do(req)
+}
+
+
+// InvokeRequest mirrors sandboxruntime.InvokeRequest. Defined here so the
+// Router doesn't import the in-pod runtime package directly.
+type InvokeRequest struct {
+	Command        []string          `json:"command"`
+	Stdin          string            `json:"stdin,omitempty"`
+	TimeoutSeconds int               `json:"timeoutSeconds,omitempty"`
+	WorkingDir     string            `json:"workingDir,omitempty"`
+	Env            map[string]string `json:"env,omitempty"`
+	InvokeID       string            `json:"invokeId,omitempty"`
+}
+
+// InvokeEvent is one SSE event from the runtime's /invoke stream.
+// EventType is one of "start", "log", "exit". Data is the JSON payload
+// the runtime emitted under `data: ...` for that event.
+type InvokeEvent struct {
+	EventType string
+	Data      []byte
+}
+
+// InvokeStream calls /invoke and streams events back via the supplied
+// callback. Returns when the runtime closes the stream (after the
+// "exit" event), the context cancels, or the underlying HTTP transport
+// errors.
+//
+// The callback runs synchronously on the receive goroutine — long-
+// running work in onEvent backpressures the runtime via TCP. That's
+// usually what you want for a pass-through proxy.
+func (c *Client) InvokeStream(ctx context.Context, req InvokeRequest, onEvent func(InvokeEvent) error) error {
+	if c.BaseURL == "" {
+		return fmt.Errorf("sandboxhttp.Client: BaseURL is empty")
+	}
+	body, err := json.Marshal(req)
+	if err != nil {
+		return fmt.Errorf("marshal invoke request: %w", err)
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/invoke", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "text/event-stream")
+
+	// Streaming responses need an http.Client with no Timeout (the
+	// caller's ctx provides the bound). Reuse the client's Transport
+	// so connection pooling still helps but unset Timeout for the
+	// streamed call.
+	streamClient := *c.streamingClient()
+	streamClient.Timeout = 0
+
+	if c.Token != "" {
+		httpReq.Header.Set("Authorization", "Bearer "+c.Token)
+	}
+	resp, err := streamClient.Do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(io.LimitReader(resp.Body, 8192))
+		return fmt.Errorf("invoke returned %d: %s", resp.StatusCode, raw)
+	}
+
+	return parseSSE(resp.Body, onEvent)
+}
+
+// InvokeCancel addresses /invoke/cancel/<invokeID>. Returns nil on 204,
+// a sentinel-equivalent error on 404 (caller can use errors.Is /
+// strings.Contains "no in-flight invoke" to detect already-completed),
+// and a transport error otherwise.
+func (c *Client) InvokeCancel(ctx context.Context, invokeID string) error {
+	if c.BaseURL == "" {
+		return fmt.Errorf("sandboxhttp.Client: BaseURL is empty")
+	}
+	if invokeID == "" {
+		return fmt.Errorf("invokeID is required")
+	}
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, c.BaseURL+"/invoke/cancel/"+invokeID, nil)
+	if err != nil {
+		return err
+	}
+	resp, err := c.do(httpReq)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNoContent {
+		return nil
+	}
+	raw, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+	return fmt.Errorf("invoke cancel returned %d: %s", resp.StatusCode, raw)
+}
+
+// streamingClient returns the configured HTTPClient or a fresh default
+// when none is set. Used by InvokeStream which needs to clone-and-
+// modify the timeout before issuing a streamed request.
+func (c *Client) streamingClient() *http.Client {
+	if c.HTTPClient != nil {
+		return c.HTTPClient
+	}
+	return &http.Client{
+		Timeout: DefaultRequestTimeout,
+		Transport: &http.Transport{
+			ResponseHeaderTimeout: DefaultDialTimeout,
+		},
+	}
+}
+
+// parseSSE consumes the runtime's SSE response and dispatches each event
+// to onEvent. Returns nil on graceful end-of-stream (server closed),
+// the underlying error otherwise.
+//
+// The runtime's wire format is the bare minimum SSE: `event: NAME\ndata:
+// JSON\n\n`. We don't support `id:`, `retry:`, or multi-line data
+// because the runtime never emits them. Keep the parser tight to
+// reduce surface area.
+func parseSSE(body io.Reader, onEvent func(InvokeEvent) error) error {
+	scanner := bufio.NewScanner(body)
+	// SSE events are unbounded in theory; in practice the runtime
+	// emits 4 KiB log chunks. Allocate 1 MiB max line so a chatty
+	// stdout chunk can't error out the parser.
+	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+
+	var current InvokeEvent
+	for scanner.Scan() {
+		line := scanner.Text()
+		switch {
+		case line == "":
+			// Blank line = event boundary.
+			if current.EventType != "" || len(current.Data) > 0 {
+				if err := onEvent(current); err != nil {
+					return err
+				}
+			}
+			current = InvokeEvent{}
+		case strings.HasPrefix(line, "event:"):
+			current.EventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
+		case strings.HasPrefix(line, "data:"):
+			current.Data = []byte(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
+		case strings.HasPrefix(line, ":"):
+			// Comment (keepalive). Ignore.
+		}
+	}
+	return scanner.Err()
 }

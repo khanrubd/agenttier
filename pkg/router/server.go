@@ -212,6 +212,13 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 			}
 			return governance.Resolve(ctx, s.governanceStore, namespace)
 		},
+		// HTTP-exec opt-in resolver. The agent /invoke handler asks for
+		// a dispatcher per request; when the sandbox is opted in and
+		// the runtime is reachable, /invoke streams via HTTP and cancel
+		// flows through the runtime's registry — fixing the
+		// cross-replica cancel bug. Falls back to SPDY transparently
+		// when this returns (nil, false).
+		HTTPExecOf: s.agentHTTPExec,
 	})
 	agentHandler.RegisterRoutes(api)
 

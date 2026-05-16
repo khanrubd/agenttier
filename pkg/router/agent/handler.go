@@ -95,6 +95,43 @@ type SandboxLookup func(ctx context.Context, sandboxID string, claims *Claims) (
 // policy is a valid signal that no limits apply.
 type PolicyResolver func(ctx context.Context, namespace string) (governance.Policy, error)
 
+// HTTPExecResolver tries to resolve an HTTP-exec dispatcher for the given
+// sandbox. Returns (dispatcher, true) when the sandbox is opted in and
+// the in-pod runtime is reachable; (nil, false) means "use SPDY." This
+// is the exact same shape s.dispatchExec uses for /exec — pulled into an
+// interface so the agent package doesn't have to import the parent
+// router package.
+type HTTPExecResolver func(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox) (HTTPExecDispatcher, bool)
+
+// HTTPExecDispatcher is the surface the agent /invoke handler needs from
+// the in-pod runtime client. Two methods: stream an invoke, cancel an
+// invoke. Both delegate to pkg/router/sandboxhttp.Client in production.
+type HTTPExecDispatcher interface {
+	// InvokeStream runs the entrypoint via the runtime's /invoke SSE
+	// endpoint. The onEvent callback fires for each SSE event the
+	// runtime emits (start / log / exit). Returning an error from
+	// onEvent aborts the stream.
+	InvokeStream(ctx context.Context, req HTTPInvokeRequest, onEvent func(eventType string, data []byte) error) error
+
+	// InvokeCancel terminates an in-flight invoke addressed by ID.
+	// Returns nil on success, error otherwise. 404-equivalent (no
+	// such invoke) is a non-nil error — the caller distinguishes via
+	// strings.Contains so we don't leak http-specific errors here.
+	InvokeCancel(ctx context.Context, invokeID string) error
+}
+
+// HTTPInvokeRequest is the agent-package-local shape of the HTTP runtime's
+// /invoke request body. Mirrors sandboxhttp.InvokeRequest so the Router
+// can pass it through unchanged.
+type HTTPInvokeRequest struct {
+	Command        []string
+	Stdin          string
+	TimeoutSeconds int
+	WorkingDir     string
+	Env            map[string]string
+	InvokeID       string
+}
+
 // Options bundles the dependencies the agent package needs. The Router
 // constructs one of these from its existing state and hands it to New().
 type Options struct {
@@ -106,6 +143,11 @@ type Options struct {
 	// PolicyOf is optional. When nil, no governance clamping is applied
 	// at /configure time and the template's values pass through.
 	PolicyOf PolicyResolver
+	// HTTPExecOf is optional. When set and the sandbox is opted into
+	// HTTP-exec, /invoke streams through the in-pod runtime instead of
+	// going through SPDY. Cancel routes to the runtime too — fixing
+	// the cross-replica cancel bug naturally.
+	HTTPExecOf HTTPExecResolver
 }
 
 // Handler holds dependencies for the agent endpoints and exposes
