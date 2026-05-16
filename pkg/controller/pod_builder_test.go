@@ -335,7 +335,6 @@ func TestPodBuilder_RestartPolicyNever(t *testing.T) {
 	}
 }
 
-
 // TestPodBuilder_FileDeployerHandlesEOFMarker verifies that file content
 // containing the literal string "AGENTLOFT_EOF" on its own line round-trips
 // through the file deployer init container without truncation. The previous

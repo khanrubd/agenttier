@@ -166,7 +166,6 @@ func TestNewReconciler_DefaultNamespace(t *testing.T) {
 	}
 }
 
-
 // TestClaim_ConcurrentClaimersDoNotDoubleClaim simulates two callers racing
 // to claim from a pool of one. The fake client doesn't enforce
 // resourceVersion conflicts on its own, so we wrap it with a synchronizing
@@ -274,7 +273,6 @@ func (c *conflictingClient) Update(ctx context.Context, obj client.Object, opts 
 	c.mu.Unlock()
 	return c.Client.Update(ctx, obj, opts...)
 }
-
 
 // TestConfig_NormalizePromotesLegacyShape verifies that ConfigMaps written
 // in the old single-template shape (top-level DesiredCount + Template) are
