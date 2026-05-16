@@ -242,7 +242,9 @@ jobs:
       # doesn't get aggregated with general-coding's findings.
       - name: Build sandbox-general image for scanning
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: docker build -t agenttier-sandbox-general:scan -f images/general-coding/Dockerfile images/general-coding
+        # Context is the repo root so the runtime build stage can pull in
+        # cmd/sandbox-runtime + pkg/sandboxruntime. Matches release.yml.
+        run: docker build -t agenttier-sandbox-general:scan -f images/general-coding/Dockerfile .
 
       - name: Trivy image scan (sandbox-general)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

@@ -1,7 +1,40 @@
 # AgentTier General Coding Sandbox Image
 # Full development environment with Node.js, Python, Go, and common tools.
 # Builds for linux/amd64 and linux/arm64 via buildx TARGETARCH.
+#
+# Build context: repository root (so the Dockerfile can COPY in the Go
+# sources for the bundled `agenttier-sandbox-runtime` binary). The
+# release.yml matrix sets context: . and dockerfile:
+# images/general-coding/Dockerfile for this reason.
 
+# ---- Stage 1: build the in-pod runtime binary ------------------------------
+#
+# Bakes a small HTTP server into the sandbox so the Router can proxy
+# requests directly instead of going through SPDY exec. See
+# pkg/sandboxruntime for design rationale.
+FROM public.ecr.aws/docker/library/golang:1.22 AS runtime-build
+
+ARG TARGETARCH
+
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+
+# Copy only the packages the runtime binary actually depends on. This keeps
+# the build cache small and avoids invalidating it on changes to unrelated
+# parts of the repo (controller, router, web UI, etc.).
+COPY cmd/sandbox-runtime ./cmd/sandbox-runtime
+COPY pkg/sandboxruntime ./pkg/sandboxruntime
+COPY pkg/version ./pkg/version
+
+# CGO disabled for a fully static binary — no glibc dependency, runs on
+# any base image including Alpine and distroless variants we may
+# downstream from.
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags='-s -w' \
+    -o /out/agenttier-sandbox-runtime ./cmd/sandbox-runtime
+
+# ---- Stage 2: the actual sandbox image -------------------------------------
 FROM public.ecr.aws/docker/library/ubuntu:22.04
 
 # Declared by buildx when --platform is set. We re-declare as an ARG so the
@@ -53,6 +86,13 @@ RUN case "${TARGETARCH}" in \
     && curl -fsSL "https://go.dev/dl/go1.22.5.linux-${GOARCH}.tar.gz" | tar -C /usr/local -xzf -
 ENV PATH="/usr/local/go/bin:${PATH}"
 
+# In-pod runtime binary + entrypoint that backgrounds it.
+COPY --from=runtime-build /out/agenttier-sandbox-runtime /usr/local/bin/agenttier-sandbox-runtime
+COPY images/general-coding/entrypoint.sh /usr/local/bin/agenttier-entrypoint
+RUN chmod 0755 /usr/local/bin/agenttier-sandbox-runtime /usr/local/bin/agenttier-entrypoint \
+    && mkdir -p /var/log \
+    && chmod 1777 /var/log
+
 # Create non-root user
 RUN useradd -m -u 1000 -s /bin/bash sandbox \
     && mkdir -p /workspace \
@@ -64,4 +104,8 @@ WORKDIR /workspace
 # Configure git
 RUN git config --global init.defaultBranch main
 
+# Background the runtime, then run the user's command. CMD stays
+# `sleep infinity` for compatibility with the existing template default —
+# the entrypoint script simply exec's whatever CMD becomes.
+ENTRYPOINT ["/usr/local/bin/agenttier-entrypoint"]
 CMD ["sleep", "infinity"]

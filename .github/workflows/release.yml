@@ -35,7 +35,12 @@ jobs:
             context: web-ui
             dockerfile: web-ui/Dockerfile
           - name: sandbox-general
-            context: images/general-coding
+            # Build context is the repo root so the Dockerfile can pull in
+            # cmd/sandbox-runtime + pkg/sandboxruntime to bake the in-pod
+            # HTTP server into the image. Other sandbox-* images keep their
+            # subdir context for now and inherit the runtime once their
+            # Dockerfiles are migrated in follow-up phases.
+            context: .
             dockerfile: images/general-coding/Dockerfile
           - name: sandbox-claude-code
             context: images/claude-code
