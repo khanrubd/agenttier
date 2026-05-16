@@ -211,6 +211,16 @@ func (r *SandboxReconciler) reconcileCreating(ctx context.Context, sandbox *agen
 	}
 	mergedConfig := MergeSandboxWithTemplate(&sandbox.Spec, templateSpec, defaults)
 
+	// Persist the merged AgentSpec onto sandbox status so /configure and
+	// /invoke can read the resolved per-template caps without re-walking
+	// the inheritance chain on every request. Without this a child
+	// template that inherits MaxConcurrentInvokes from a parent would see
+	// the cap silently ignored — the Router only inspects directly
+	// referenced templates and never the chain.
+	if templateSpec != nil && templateSpec.Harness != nil && templateSpec.Harness.Agent != nil {
+		sandbox.Status.ResolvedAgentSpec = templateSpec.Harness.Agent.DeepCopy()
+	}
+
 	// Step 3: Create PVC (if not already exists)
 	storageSpec := sandbox.Spec.Storage
 	if storageSpec == nil && templateSpec != nil {

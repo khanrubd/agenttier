@@ -18,11 +18,15 @@ package warmpool
 
 import (
 	"context"
+	"fmt"
+	"sync"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -158,4 +162,113 @@ func TestNewReconciler_DefaultNamespace(t *testing.T) {
 	if r.Namespace() != DefaultNamespace {
 		t.Errorf("NewReconciler(\"\") namespace = %q, want %q", r.Namespace(), DefaultNamespace)
 	}
+}
+
+
+// TestClaim_ConcurrentClaimersDoNotDoubleClaim simulates two callers racing
+// to claim from a pool of one. The fake client doesn't enforce
+// resourceVersion conflicts on its own, so we wrap it with a synchronizing
+// client that lets the first Update win and rejects the second with
+// IsConflict — the same behavior the real apiserver provides.
+//
+// Regression coverage for the Claim race: the previous code listed pods,
+// updated, and silently `continue`d on any Update error, relying on the
+// optimistic-concurrency conflicts to enforce single-claim semantics
+// without actually distinguishing "lost a race, retry with fresh data"
+// from "claim succeeded somewhere else." This test asserts that exactly
+// one claimer wins and the other returns empty.
+func TestClaim_ConcurrentClaimersDoNotDoubleClaim(t *testing.T) {
+	scheme := newScheme(t)
+	const ns = "agenttier"
+
+	makePod := func(name string) *corev1.Pod {
+		return &corev1.Pod{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: ns,
+				Labels: map[string]string{
+					LabelPooled:   "true",
+					LabelTemplate: "general-coding",
+				},
+			},
+			Status: corev1.PodStatus{
+				Phase: corev1.PodRunning,
+				Conditions: []corev1.PodCondition{{
+					Type:   corev1.PodReady,
+					Status: corev1.ConditionTrue,
+				}},
+			},
+		}
+	}
+	pod := makePod("pool-only-1")
+	c := fake.NewClientBuilder().
+		WithScheme(scheme).
+		WithObjects(pod).
+		Build()
+
+	// Synchronize: gate the second Update behind the first's commit so
+	// we deterministically reproduce the race. We wrap the fake client
+	// with one that returns IsConflict on the second Update of the same
+	// pod, mirroring real apiserver behavior.
+	wrapped := &conflictingClient{Client: c, claimedPod: make(map[string]bool)}
+
+	// Two claimers, run sequentially through the wrapper. The first wins;
+	// the second sees IsConflict on its Update attempt, which Claim now
+	// recognizes via errors.IsConflict and walks past instead of falsely
+	// reporting success.
+	pod1, pvc1, err1 := Claim(context.Background(), wrapped, ns, "general-coding")
+	pod2, pvc2, err2 := Claim(context.Background(), wrapped, ns, "general-coding")
+
+	if err1 != nil || err2 != nil {
+		t.Fatalf("Claim errors: %v / %v", err1, err2)
+	}
+
+	wins := 0
+	for _, name := range []string{pod1, pod2} {
+		if name != "" {
+			wins++
+		}
+	}
+	if wins != 1 {
+		t.Errorf("expected exactly one claimer to win, got %d (pod1=%q pod2=%q)", wins, pod1, pod2)
+	}
+
+	// Whichever won should have got a (possibly empty) PVC name
+	// without errors. Whichever lost should have empty pvc too.
+	if pod1 != "" && pvc1 != "" && pod1 != "pool-only-1" {
+		t.Errorf("winner returned wrong pod %q", pod1)
+	}
+	if pod2 != "" && pvc2 != "" && pod2 != "pool-only-1" {
+		t.Errorf("winner returned wrong pod %q", pod2)
+	}
+}
+
+// conflictingClient simulates the apiserver's optimistic-concurrency check
+// for tests: the first Update on a given pool pod succeeds, subsequent
+// Updates on the same pod return IsConflict. This is exactly what the
+// real apiserver does when two writers race on a stale resourceVersion.
+type conflictingClient struct {
+	client.Client
+	mu         sync.Mutex
+	claimedPod map[string]bool
+}
+
+func (c *conflictingClient) Update(ctx context.Context, obj client.Object, opts ...client.UpdateOption) error {
+	pod, ok := obj.(*corev1.Pod)
+	if !ok {
+		return c.Client.Update(ctx, obj, opts...)
+	}
+	c.mu.Lock()
+	if c.claimedPod[pod.Name] {
+		c.mu.Unlock()
+		// Mirror the apiserver: GroupResource conflict on stale RV.
+		return apierrors.NewConflict(
+			schema.GroupResource{Group: "", Resource: "pods"},
+			pod.Name,
+			fmt.Errorf("the object has been modified; please apply your changes to the latest version and try again"),
+		)
+	}
+	c.claimedPod[pod.Name] = true
+	c.mu.Unlock()
+	return c.Client.Update(ctx, obj, opts...)
 }

@@ -66,6 +66,14 @@ const (
 
 	// How often the controller reconciles the pool
 	ReconcileInterval = 15 * time.Second
+
+	// claimMaxAttempts caps how many fresh-list retries Claim makes when
+	// it loses an optimistic-concurrency race. Three is plenty in practice:
+	// each retry re-Lists and walks every Ready pod, so even with high
+	// burst contention the chance of three consecutive losses is
+	// vanishingly small. More retries would just amplify apiserver load
+	// without changing the outcome (caller falls through to cold start).
+	claimMaxAttempts = 3
 )
 
 // Config is persisted in the ConfigMap.
@@ -277,29 +285,66 @@ func SetConfig(ctx context.Context, k8sClient client.Client, namespace string, c
 // The pool itself lives in `namespace` (where AgentTier is installed). After
 // claiming, the controller relabels the Pod to belong to the requesting
 // Sandbox — which can live in any namespace.
+//
+// Concurrency model: two callers can race on the same pool pod. We use the
+// resourceVersion-based optimistic concurrency Kubernetes provides — the
+// kube-apiserver rejects an Update with errors.IsConflict if another writer
+// committed first. On conflict we re-list and retry up to claimMaxAttempts
+// times with a fresh List, so the loser of a race always either grabs a
+// different ready pod or returns empty (and the requester falls through to
+// a normal cold start). The conflicts metric lets operators see contention.
 func Claim(ctx context.Context, k8sClient client.Client, namespace, template string) (podName, pvcName string, err error) {
 	if namespace == "" {
 		namespace = DefaultNamespace
 	}
-	podList := &corev1.PodList{}
-	if err := k8sClient.List(ctx, podList,
-		client.InNamespace(namespace),
-		client.MatchingLabels{LabelPooled: "true", LabelTemplate: template},
-	); err != nil {
-		return "", "", err
-	}
 
-	for _, pod := range podList.Items {
-		if isPodReady(&pod) {
-			// Claim this pod by removing pool labels
+	// We'll loop up to claimMaxAttempts times on conflict. Each attempt
+	// re-lists from the apiserver so we always see the freshest state and
+	// don't keep retrying the same pod another claimer just grabbed.
+	for attempt := 0; attempt < claimMaxAttempts; attempt++ {
+		podList := &corev1.PodList{}
+		if err := k8sClient.List(ctx, podList,
+			client.InNamespace(namespace),
+			client.MatchingLabels{LabelPooled: "true", LabelTemplate: template},
+		); err != nil {
+			return "", "", err
+		}
+
+		// Try each ready pod. Conflicts on a specific pod mean another
+		// claimer won that pod — keep walking the list rather than
+		// jumping straight to a re-list, since the same List response
+		// likely has more candidates.
+		var sawConflict bool
+		for i := range podList.Items {
+			pod := &podList.Items[i]
+			if !isPodReady(pod) {
+				continue
+			}
+
+			// CAS-style claim: copy with label removal, attempt Update.
+			// The apiserver rejects with IsConflict when our copy's
+			// resourceVersion is stale relative to a concurrent winner.
 			podCopy := pod.DeepCopy()
 			delete(podCopy.Labels, LabelPooled)
 			delete(podCopy.Labels, LabelTemplate)
+
 			if err := k8sClient.Update(ctx, podCopy); err != nil {
-				continue // Try next pod
+				if errors.IsConflict(err) {
+					ClaimConflictsTotal.Inc()
+					sawConflict = true
+					continue // Another claimer won this pod; try next
+				}
+				if errors.IsNotFound(err) {
+					// Pod was deleted between our List and Update —
+					// e.g. by a scaleDown. Treat like a conflict and
+					// keep walking.
+					sawConflict = true
+					continue
+				}
+				return "", "", fmt.Errorf("update pool pod %s: %w", pod.Name, err)
 			}
 
-			// Find PVC name
+			// Won the claim. Find the PVC name and return.
 			pvc := ""
 			for _, vol := range pod.Spec.Volumes {
 				if vol.PersistentVolumeClaim != nil {
@@ -309,9 +354,20 @@ func Claim(ctx context.Context, k8sClient client.Client, namespace, template str
 			}
 			return pod.Name, pvc, nil
 		}
+
+		// Walked the entire list. If we never saw a conflict, there are
+		// genuinely no ready pods to claim — bail out without wasting
+		// another round-trip.
+		if !sawConflict {
+			return "", "", nil
+		}
+		// Otherwise we lost every race we tried; fresh List on the next
+		// loop iteration may surface pods that just became Ready.
 	}
 
-	return "", "", nil // No ready pods available
+	// Exhausted retries — every Ready pod we saw was claimed by someone
+	// else. Return empty (caller falls through to cold start).
+	return "", "", nil
 }
 
 // createPoolPod creates a single idle pod for the warm pool.

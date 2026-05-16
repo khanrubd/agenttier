@@ -401,44 +401,26 @@ func (h *Handler) persistStatus(ctx context.Context, sandbox *agenttierv1alpha1.
 	return lastErr
 }
 
-// resolveAgentCaps fetches the directly referenced template and returns
-// (maxConcurrentInvokes, defaultInvokeTimeout). When no template ref or no
-// agent block is present, returns zeros (= use Router defaults).
+// resolveAgentCaps returns (maxConcurrentInvokes, defaultInvokeTimeout) for
+// the sandbox, preferring the merged AgentSpec the controller persists on
+// status at create time. The controller already walks the full template
+// inheritance chain via TemplateResolver, so reading from status correctly
+// surfaces caps inherited from parent templates — a child template that
+// only sets MaxConcurrentInvokes via inheritance still gets the cap
+// enforced.
 //
-// Deliberately doesn't walk the inheritance chain — the controller already
-// did that at sandbox-create time, but the resolved chain isn't persisted
-// onto the sandbox spec. Documenting "use the directly referenced template's
-// agent caps" as the v0.3.0 contract; full inheritance lands later if any
-// real user hits the limitation.
+// Falls back to direct template lookup for sandboxes created before the
+// status field was added (no migration churn — the next reconcile populates
+// it). Final fallback is zeros, meaning "use Router defaults."
 func (h *Handler) resolveAgentCaps(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox) (int32, time.Duration) {
-	if sandbox.Spec.TemplateRef == nil {
-		return 0, 0
-	}
-	kind := sandbox.Spec.TemplateRef.Kind
-	if kind == "" {
-		kind = "ClusterSandboxTemplate" // sandbox-template namespacing handled by lookup below
-	}
+	agentSpec := sandbox.Status.ResolvedAgentSpec
 
-	var agentSpec *agenttierv1alpha1.AgentSpec
-	switch kind {
-	case "ClusterSandboxTemplate":
-		t := &agenttierv1alpha1.ClusterSandboxTemplate{}
-		if err := h.opts.K8sClient.Get(ctx, ctrlClientKeyClusterTemplate(sandbox.Spec.TemplateRef.Name), t); err == nil {
-			if t.Spec.Harness != nil {
-				agentSpec = t.Spec.Harness.Agent
-			}
-		}
-	case "SandboxTemplate":
-		ns := sandbox.Spec.TemplateRef.Namespace
-		if ns == "" {
-			ns = sandbox.Namespace
-		}
-		t := &agenttierv1alpha1.SandboxTemplate{}
-		if err := h.opts.K8sClient.Get(ctx, ctrlClientKeyNamespacedTemplate(ns, sandbox.Spec.TemplateRef.Name), t); err == nil {
-			if t.Spec.Harness != nil {
-				agentSpec = t.Spec.Harness.Agent
-			}
-		}
+	// Fallback path: status field empty (legacy sandbox or no template
+	// ref). Look at the directly referenced template — same path the
+	// previous implementation took, retained so we don't regress
+	// pre-existing sandboxes during a rolling controller upgrade.
+	if agentSpec == nil && sandbox.Spec.TemplateRef != nil {
+		agentSpec = h.directTemplateAgentSpec(ctx, sandbox)
 	}
 
 	if agentSpec == nil {
@@ -454,9 +436,9 @@ func (h *Handler) resolveAgentCaps(ctx context.Context, sandbox *agenttierv1alph
 		defaultTimeout = agentSpec.DefaultInvokeTimeout.Duration
 	}
 
-	// Clamp the template's value against the cluster ceiling if a
+	// Clamp the resolved value against the cluster ceiling if a
 	// PolicyResolver is configured. Empty policy or unset ceiling means
-	// the template wins unchanged.
+	// the resolved value wins unchanged.
 	if h.opts.PolicyOf != nil {
 		if policy, err := h.opts.PolicyOf(ctx, sandbox.Namespace); err == nil {
 			maxConcurrent = governance.ClampConcurrency(policy, maxConcurrent)
@@ -464,6 +446,40 @@ func (h *Handler) resolveAgentCaps(ctx context.Context, sandbox *agenttierv1alph
 	}
 
 	return maxConcurrent, defaultTimeout
+}
+
+// directTemplateAgentSpec is the legacy fallback path — fetches only the
+// directly referenced template, ignoring inheritance. Kept narrow so the
+// happy path (status.resolvedAgentSpec) is the dominant code path going
+// forward.
+func (h *Handler) directTemplateAgentSpec(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox) *agenttierv1alpha1.AgentSpec {
+	kind := sandbox.Spec.TemplateRef.Kind
+	if kind == "" {
+		kind = "ClusterSandboxTemplate" // sandbox-template namespacing handled by lookup below
+	}
+
+	switch kind {
+	case "ClusterSandboxTemplate":
+		t := &agenttierv1alpha1.ClusterSandboxTemplate{}
+		if err := h.opts.K8sClient.Get(ctx, ctrlClientKeyClusterTemplate(sandbox.Spec.TemplateRef.Name), t); err == nil {
+			if t.Spec.Harness != nil {
+				return t.Spec.Harness.Agent
+			}
+		}
+	case "SandboxTemplate":
+		ns := sandbox.Spec.TemplateRef.Namespace
+		if ns == "" {
+			ns = sandbox.Namespace
+		}
+		t := &agenttierv1alpha1.SandboxTemplate{}
+		if err := h.opts.K8sClient.Get(ctx, ctrlClientKeyNamespacedTemplate(ns, sandbox.Spec.TemplateRef.Name), t); err == nil {
+			if t.Spec.Harness != nil {
+				return t.Spec.Harness.Agent
+			}
+		}
+	}
+
+	return nil
 }
 
 func modeOrDefault(m agenttierv1alpha1.SandboxMode) string {

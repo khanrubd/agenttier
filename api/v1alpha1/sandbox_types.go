@@ -203,6 +203,16 @@ type SandboxStatus struct {
 	// completed at least once.
 	// +optional
 	AgentConfigure *AgentConfigureStatus `json:"agentConfigure,omitempty"`
+
+	// ResolvedAgentSpec is the fully merged AgentSpec from the template
+	// inheritance chain, recorded on the sandbox at create time. The Router
+	// reads MaxConcurrentInvokes and DefaultInvokeTimeout from here at
+	// /configure time so it doesn't have to re-walk the chain (and so a
+	// child template that inherits caps from a parent still gets them
+	// enforced — see "Template inheritance not walked when resolving
+	// agent caps" for the regression context).
+	// +optional
+	ResolvedAgentSpec *AgentSpec `json:"resolvedAgentSpec,omitempty"`
 }
 
 // AgentConfigureStatus records the resolved configuration applied via the most
@@ -439,10 +449,34 @@ type SharePermission struct {
 	Level string `json:"level"`
 }
 
-// ShareLink provides temporary access via a shareable URL.
+// ShareLink provides temporary access via a shareable URL. Tokens are hashed
+// before persistence — the raw token is returned exactly once at creation
+// time via the create-link API response and never stored on the CR. Validators
+// compare an incoming raw token against TokenHash with bcrypt.
 type ShareLink struct {
-	// Token is the unique share link identifier.
-	Token string `json:"token"`
+	// ID is a stable, non-secret identifier for this share link, used for
+	// revocation and audit. Unlike the legacy Token field, ID is safe to
+	// log and surface in admin views.
+	// +optional
+	ID string `json:"id,omitempty"`
+
+	// TokenHash is a bcrypt hash of the raw token. The raw token is
+	// generated at create time, returned to the caller in the API
+	// response, and never persisted in plaintext anywhere.
+	// +optional
+	TokenHash string `json:"tokenHash,omitempty"`
+
+	// Token is the legacy plaintext token field. DEPRECATED: present only
+	// for one minor release of backward compatibility while consumers
+	// migrate to the create-response-only flow. New code must NOT set
+	// this field. Validators read TokenHash; if Token is non-empty,
+	// validators may also accept it as a fallback during the deprecation
+	// window. Will be removed in the release after sharing GA.
+	//
+	// +optional
+	// Deprecated: store TokenHash; surface raw tokens only via the create
+	// API response.
+	Token string `json:"token,omitempty"`
 
 	// Level is the permission level granted by this link.
 	// +kubebuilder:validation:Enum=viewer;collaborator
