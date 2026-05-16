@@ -43,13 +43,14 @@ jobs:
             context: .
             dockerfile: images/general-coding/Dockerfile
           - name: sandbox-claude-code
-            context: images/claude-code
+            # Repo-root context — see sandbox-general note above.
+            context: .
             dockerfile: images/claude-code/Dockerfile
           - name: sandbox-minimal
-            context: images/minimal
+            context: .
             dockerfile: images/minimal/Dockerfile
           - name: sandbox-langgraph
-            context: images/langgraph
+            context: .
             dockerfile: images/langgraph/Dockerfile
     steps:
       - uses: actions/checkout@v6

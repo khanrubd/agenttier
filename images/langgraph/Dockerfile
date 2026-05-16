@@ -4,6 +4,23 @@
 # preinstalled so a user can drop an agent.py into /workspace and call
 # /invoke without first running pip via /configure.
 #
+# Build context: repository root (for cmd/sandbox-runtime). release.yml +
+# ci.yml set context: . and dockerfile: images/langgraph/Dockerfile.
+
+# ---- Stage 1: in-pod runtime binary ----------------------------------------
+FROM public.ecr.aws/docker/library/golang:1.22 AS runtime-build
+ARG TARGETARCH
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/sandbox-runtime ./cmd/sandbox-runtime
+COPY pkg/sandboxruntime ./pkg/sandboxruntime
+COPY pkg/version ./pkg/version
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags='-s -w' \
+    -o /out/agenttier-sandbox-runtime ./cmd/sandbox-runtime
+
+# ---- Stage 2: langgraph sandbox --------------------------------------------
 # Multi-arch build (linux/amd64, linux/arm64) — TARGETARCH is a buildx ARG.
 # Base image is ECR Public to avoid Docker Hub rate-limiting from EKS nodes.
 FROM public.ecr.aws/docker/library/python:3.11-slim
@@ -40,6 +57,13 @@ RUN pip install --no-cache-dir \
 RUN pip install --no-cache-dir \
         mem0ai==0.1.115
 
+# In-pod runtime binary + entrypoint that backgrounds it.
+COPY --from=runtime-build /out/agenttier-sandbox-runtime /usr/local/bin/agenttier-sandbox-runtime
+COPY images/langgraph/entrypoint.sh /usr/local/bin/agenttier-entrypoint
+RUN chmod 0755 /usr/local/bin/agenttier-sandbox-runtime /usr/local/bin/agenttier-entrypoint \
+    && mkdir -p /var/log \
+    && chmod 1777 /var/log
+
 # Standard sandbox user / workspace conventions. AgentTier's NetworkPolicy +
 # PVC + FSGroup all assume uid 1000 / gid 1000.
 RUN useradd -m -u 1000 -s /bin/bash sandbox \
@@ -49,8 +73,8 @@ RUN useradd -m -u 1000 -s /bin/bash sandbox \
 # Sample agent — copied into /opt/agenttier/examples so users can:
 #   cp /opt/agenttier/examples/agent.py /workspace/
 # and immediately /invoke without writing any code.
-COPY --chown=sandbox:sandbox agent.py /opt/agenttier/examples/agent.py
-COPY --chown=sandbox:sandbox README.md /opt/agenttier/examples/README.md
+COPY --chown=sandbox:sandbox images/langgraph/agent.py /opt/agenttier/examples/agent.py
+COPY --chown=sandbox:sandbox images/langgraph/README.md /opt/agenttier/examples/README.md
 
 USER sandbox
 WORKDIR /workspace
@@ -58,4 +82,5 @@ WORKDIR /workspace
 # The container runs `sleep infinity` by default the same way the existing
 # code-mode reference images do — agent code is invoked on demand via
 # /invoke, not at container start.
+ENTRYPOINT ["/usr/local/bin/agenttier-entrypoint"]
 CMD ["sleep", "infinity"]

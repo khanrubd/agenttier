@@ -23,6 +23,12 @@ spec:
   harness:
     shell: /bin/bash
     workingDir: /workspace
+    # HTTP-exec opt-in: this image bakes the in-pod sandbox-runtime
+    # binary, so /exec, /files, and /invoke calls go through the
+    # runtime's HTTP API instead of SPDY. Falls back to SPDY
+    # transparently when /healthz fails or the token Secret isn't
+    # available — see pkg/router/exec_dispatch.go.
+    useHTTPExec: true
     tools:
       - name: node
         verifyCommand: "node --version"
@@ -58,6 +64,10 @@ spec:
   harness:
     shell: /bin/bash
     workingDir: /workspace
+    # HTTP-exec opt-in. Same rationale as general-coding above —
+    # claude-code-bedrock ships the in-pod runtime, so /exec, /files,
+    # and /invoke route via HTTP with SPDY fallback.
+    useHTTPExec: true
     tools:
       - name: claude
         verifyCommand: "claude --version"
@@ -109,6 +119,10 @@ spec:
   harness:
     shell: /bin/bash
     workingDir: /workspace
+    # HTTP-exec opt-in. langgraph ships the in-pod runtime — agent
+    # /invoke now streams via HTTP, fixing cross-replica cancel.
+    # Falls back to SPDY automatically when the runtime isn't ready.
+    useHTTPExec: true
     agent:
       # Default entrypoint runs /workspace/agent.py (the bundled example
       # ships at /opt/agenttier/examples/agent.py — copy it to /workspace

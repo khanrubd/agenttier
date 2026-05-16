@@ -5,7 +5,26 @@
 #
 # NOTE: Pinned to v2.1.81 because v2.1.83+ has a known regression where
 # -p (print) mode produces zero output (github.com/anthropics/claude-code/issues/38760).
+#
+# Build context: repository root (so the Dockerfile can pull in
+# cmd/sandbox-runtime). release.yml + ci.yml set context: . and dockerfile:
+# images/claude-code/Dockerfile for this reason.
 
+# ---- Stage 1: in-pod runtime binary ----------------------------------------
+# See pkg/sandboxruntime for design rationale.
+FROM public.ecr.aws/docker/library/golang:1.22 AS runtime-build
+ARG TARGETARCH
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/sandbox-runtime ./cmd/sandbox-runtime
+COPY pkg/sandboxruntime ./pkg/sandboxruntime
+COPY pkg/version ./pkg/version
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
+    go build -trimpath -ldflags='-s -w' \
+    -o /out/agenttier-sandbox-runtime ./cmd/sandbox-runtime
+
+# ---- Stage 2: claude-code sandbox ------------------------------------------
 FROM public.ecr.aws/docker/library/node:20-bookworm
 
 ARG TARGETARCH
@@ -34,6 +53,13 @@ RUN usermod -l sandbox -d /home/sandbox -m node \
 # Install Claude Code CLI (pinned to 2.1.81 — see NOTE above)
 RUN npm install -g @anthropic-ai/claude-code@2.1.81
 
+# In-pod runtime binary + entrypoint that backgrounds it.
+COPY --from=runtime-build /out/agenttier-sandbox-runtime /usr/local/bin/agenttier-sandbox-runtime
+COPY images/claude-code/entrypoint.sh /usr/local/bin/agenttier-entrypoint
+RUN chmod 0755 /usr/local/bin/agenttier-sandbox-runtime /usr/local/bin/agenttier-entrypoint \
+    && mkdir -p /var/log \
+    && chmod 1777 /var/log
+
 # Pre-create workspace
 RUN mkdir -p /workspace && chown sandbox:sandbox /workspace
 
@@ -45,4 +71,5 @@ ENV HOME=/workspace
 USER sandbox
 WORKDIR /workspace
 
+ENTRYPOINT ["/usr/local/bin/agenttier-entrypoint"]
 CMD ["sleep", "infinity"]

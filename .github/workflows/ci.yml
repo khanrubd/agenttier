@@ -267,7 +267,7 @@ jobs:
 
       - name: Build sandbox-claude-code image for scanning
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: docker build -t agenttier-sandbox-claude-code:scan -f images/claude-code/Dockerfile images/claude-code
+        run: docker build -t agenttier-sandbox-claude-code:scan -f images/claude-code/Dockerfile .
 
       - name: Trivy image scan (sandbox-claude-code)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -290,7 +290,7 @@ jobs:
 
       - name: Build sandbox-minimal image for scanning
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: docker build -t agenttier-sandbox-minimal:scan -f images/minimal/Dockerfile images/minimal
+        run: docker build -t agenttier-sandbox-minimal:scan -f images/minimal/Dockerfile .
 
       - name: Trivy image scan (sandbox-minimal)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
@@ -313,7 +313,7 @@ jobs:
 
       - name: Build sandbox-langgraph image for scanning
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: docker build -t agenttier-sandbox-langgraph:scan -f images/langgraph/Dockerfile images/langgraph
+        run: docker build -t agenttier-sandbox-langgraph:scan -f images/langgraph/Dockerfile .
 
       - name: Trivy image scan (sandbox-langgraph)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
