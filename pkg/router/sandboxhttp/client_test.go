@@ -180,7 +180,6 @@ func TestClient_NoTokenWhenEmpty(t *testing.T) {
 	}
 }
 
-
 func TestClient_InvokeStreamForwardsEvents(t *testing.T) {
 	// Simulate the in-pod runtime emitting start + log + exit. Verify
 	// the client's parser dispatches each event to the callback in

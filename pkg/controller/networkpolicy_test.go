@@ -225,7 +225,6 @@ func TestNetworkPolicyBuilder_IngressRules(t *testing.T) {
 	}
 }
 
-
 // TestNetworkPolicyBuilder_HTTPExecIngressRule verifies that when
 // NetworkPolicyOptions.AllowRouterIngressOn9000 is true, the resulting
 // policy includes an ingress rule scoped to:

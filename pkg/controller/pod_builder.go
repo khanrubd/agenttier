@@ -69,12 +69,12 @@ type MergedPodConfig struct {
 	// controller creates this Secret with a 32-byte random token; the
 	// Sandbox owns it via owner reference so it's GC'd on delete.
 	RuntimeTokenSecret string
-	Sidecars        []corev1.Container
-	InitContainers  []corev1.Container
-	InitScripts     []string
-	Files           []agenttierv1alpha1.FileSpec
-	Credentials     []agenttierv1alpha1.CredentialRef
-	ServiceAccount  string // Kubernetes ServiceAccount name (for IRSA)
+	Sidecars           []corev1.Container
+	InitContainers     []corev1.Container
+	InitScripts        []string
+	Files              []agenttierv1alpha1.FileSpec
+	Credentials        []agenttierv1alpha1.CredentialRef
+	ServiceAccount     string // Kubernetes ServiceAccount name (for IRSA)
 }
 
 // Build creates a Pod for the given sandbox with the merged configuration.

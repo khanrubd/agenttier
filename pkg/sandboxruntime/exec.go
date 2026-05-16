@@ -128,6 +128,13 @@ func (defaultExecutor) Execute(ctx context.Context, req ExecRequest) ExecRespons
 	defer cancel()
 
 	cmd := exec.CommandContext(cmdCtx, req.Command[0], req.Command[1:]...) //nolint:gosec // command is provided by an authenticated caller and we explicitly run arbitrary user input — that's the contract
+	// Without WaitDelay, killing a shell wrapper (e.g. /bin/sh -c "sleep 10")
+	// leaves the orphaned child holding the inherited stdout/stderr pipes
+	// open, so cmd.Wait() blocks until the orphan finishes naturally —
+	// which is the entire point of the timeout we're supposedly enforcing.
+	// 500ms gives the post-cancel cleanup a small grace window before we
+	// tear down the I/O goroutines and return TimedOut=true.
+	cmd.WaitDelay = 500 * time.Millisecond
 	if req.WorkingDir != "" {
 		cmd.Dir = req.WorkingDir
 	}

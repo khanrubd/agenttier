@@ -448,7 +448,6 @@ func extractBase64Token(t *testing.T, script string) string {
 	return quoted
 }
 
-
 // TestPodBuilder_HTTPExecInjectsTokenEnvVar verifies that when
 // MergedPodConfig has UseHTTPExec=true and a RuntimeTokenSecret name,
 // the main container picks up an AGENTTIER_RUNTIME_TOKEN env var sourced

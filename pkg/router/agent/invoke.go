@@ -521,7 +521,6 @@ func shellQuote(s string) string {
 //nolint:unused // reserved for future error-response shaping
 func itoa(n int) string { return strconv.Itoa(n) }
 
-
 // resolveHTTPExec asks the host Router whether this sandbox is opted into
 // HTTP-exec and, if so, returns a dispatcher pointed at the in-pod
 // runtime. Returns (nil, false) on every fallback condition — no token

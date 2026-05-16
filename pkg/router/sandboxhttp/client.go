@@ -186,7 +186,6 @@ func (c *Client) do(req *http.Request) (*http.Response, error) {
 	return httpClient.Do(req)
 }
 
-
 // InvokeRequest mirrors sandboxruntime.InvokeRequest. Defined here so the
 // Router doesn't import the in-pod runtime package directly.
 type InvokeRequest struct {
@@ -326,8 +325,11 @@ func parseSSE(body io.Reader, onEvent func(InvokeEvent) error) error {
 			current.EventType = strings.TrimSpace(strings.TrimPrefix(line, "event:"))
 		case strings.HasPrefix(line, "data:"):
 			current.Data = []byte(strings.TrimSpace(strings.TrimPrefix(line, "data:")))
-		case strings.HasPrefix(line, ":"):
-			// Comment (keepalive). Ignore.
+			// Lines starting with ':' are SSE comments / keepalives and any
+			// other unknown prefix is ignored — they fall through this switch
+			// without explicit cases. We deliberately don't add an empty
+			// `case strings.HasPrefix(line, ":"):` because staticcheck (SA4017)
+			// treats it as a no-op call to a pure function, which it is.
 		}
 	}
 	return scanner.Err()

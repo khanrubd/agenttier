@@ -188,7 +188,6 @@ func (s *Server) lookupPodIP(ctx context.Context, sandbox *agenttierv1alpha1.San
 	return pod.Status.PodIP
 }
 
-
 // agentHTTPExec implements the agent package's HTTPExecResolver. Returns
 // (dispatcher, true) when the sandbox is opted into HTTP-exec and the
 // in-pod runtime is reachable; (nil, false) otherwise. Reuses the same
