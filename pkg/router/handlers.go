@@ -360,7 +360,10 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := s.bridge.ExecCommand(r.Context(), sandbox.Namespace, sandbox.Status.PodName, "sandbox", []string{"/bin/sh", "-c", req.Command}, req.Timeout)
+	// Dispatch picks HTTP-exec when the sandbox is opted in and the
+	// in-pod runtime is reachable, else falls back to SPDY transparently.
+	// See pkg/router/exec_dispatch.go for the decision tree.
+	result, err := s.dispatchExec(r.Context(), sandbox, []string{"/bin/sh", "-c", req.Command}, req.Timeout)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "exec failed: "+err.Error())
 		return
