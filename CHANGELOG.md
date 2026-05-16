@@ -7,23 +7,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.3.5] — 2026-05-16
+
 ### Added
 
 - **`agenttier` CLI shipped via `pip install agenttier`** — Python entry point on top of the SDK. `pip install` now gives users both the SDK and the `agenttier` shell command on `PATH`. Mirrors the Go CLI's surface and adds full lifecycle management: `sandbox list/get/create/stop/resume/delete/exec/wait`, `sandbox files {ls,cat,upload,download,write}`, `sandbox ports {list,forward,remove}`, `template {list,get}`, plus the existing `configure` and `invoke`. Adds `login` for saving endpoint and credentials to `~/.config/agenttier/config.json` and `whoami` for verifying auth. Every command supports `--output text|json` for scriptable use. (Closes [todo 5.7](#).)
+- **Per-template warm pools** — `Config.Pools` is the new canonical shape; each entry warms one template with its own desired count, scaled independently. `Reconcile` walks every entry and converges them in parallel; orphaned pods (templates dropped from config) are cleaned up automatically. Old single-template config shape (`Config.Template` + `Config.DesiredCount`) is auto-migrated on read via `Config.Normalize()`, so existing ConfigMaps keep working through one rolling controller upgrade.
+- **Per-IP and per-user rate limiting on the Router** — opt-in via `router.rateLimit.perIPPerSecond` and `router.rateLimit.perUserPerSecond` Helm values (both default to `0` = off). Token-bucket implementation backed by `golang.org/x/time/rate`. Per-IP runs before `authMiddleware` so anonymous abuse gets throttled; per-user (Sub claim) runs after auth on the `/api/v1` subrouter. Health endpoints (`/healthz`, `/readyz`, `/metrics`) and WebSocket terminals (`/ws/*`) are always exempt. 429 responses include `Retry-After` and a structured JSON body matching the existing `concurrency_exceeded` shape.
+- **Trivy CVE scanning for all four sandbox base images in CI** — `sandbox-general`, `sandbox-claude-code`, `sandbox-minimal`, and `sandbox-langgraph` are scanned on every push to main, each with its own SARIF category in the GitHub Security tab. Closes the supply-chain gap where a CVE in a base layer could land in user workloads via `helm upgrade` with no early-warning channel.
+- **`Sandbox.status.resolvedAgentSpec` field** — additive optional field, persists the merged `AgentSpec` so `/configure` doesn't have to re-walk the template inheritance chain on every request. CRD manifests regenerated.
+- **`ShareLink.TokenHash` and `ShareLink.ID` fields** — preventive secure-by-default schema for the share-link feature (sharing not yet GA). New `pkg/router/sharelinks` package with `Generate()` returning `(id, raw, hash)` and `Validate(link, raw)` using `crypto/subtle.ConstantTimeCompare`. SHA-256 hashing (raw tokens are 256-bit cryptographic random, fast hash is appropriate). Legacy `Token` field deprecated for one minor release of backward compatibility.
 - New **CLI command reference** docs page at `/cli-reference/` with the full command tree, flags, and examples.
+- **Tutorials section in the docs** — hub page plus four hands-on walkthroughs (Web UI, Python SDK, code mode, agent mode). Each tutorial assumes AgentTier is already installed and walks end-to-end through real workflows with copy-pasteable commands.
+
+### Fixed
+
+- **Heredoc injection truncated files containing the marker string** (P0) — the file deployer init container used a fixed-string heredoc terminator (`AGENTLOFT_EOF`); user files containing that string on their own line were silently truncated. Now uses `printf '%s' '<base64>' | base64 -d`, the same pattern `/configure` already uses. End-to-end verified by executing a generated init script through `/bin/sh` against content containing the literal marker plus quotes, apostrophes, and `$vars`.
+- **Warm pool hardcoded to `default` namespace** (P0) — `GetStatus`, `SetConfig`, `Claim`, `listPoolPods`, and `createPoolPod` all assumed the pool lived in the `default` namespace; on every real install (which runs in `agenttier`) the pool was mis-targeted and Sandboxes never claimed from it. Namespace is now threaded through every operation, plumbed from `POD_NAMESPACE` injected via the Kubernetes downward API in both controller and router Deployments.
+- **Restart count off-by-one between `handleInfrastructureFailure` (`>`) and `reconcileError` (`>=`)** — infrastructure failures got one extra restart attempt past the documented `MaxRestartCount`. Standardized on `>=` in both call sites.
+- **Router `ReadTimeout: 0` exposed every endpoint to slowloris** — required for WebSocket but inherited by REST, SSE, file PUT/GET, and port-preview. Added `ReadHeaderTimeout: 5s` which bounds only the request-line + headers phase and coexists cleanly with WebSocket upgrades.
+- **`/readyz` always returned 200 even when the K8s API was unreachable** — the Service kept routing traffic to broken Router pods. Probe now does a cheap `client.List(&SandboxList{}, Limit=1)` with a 3-second context timeout, returning 503 with a diagnostic body on failure.
+- **Warm pool `Claim` had a list-then-update race** — two concurrent claimers could pick the same pod and silently `continue` on the loser's `Update`. Now uses explicit `errors.IsConflict` / `errors.IsNotFound` detection with a 3-attempt retry loop that re-Lists each iteration. Added `agenttier_warmpool_claim_conflicts_total` counter for contention visibility.
+- **Template inheritance not walked when resolving agent caps** — child templates inheriting `MaxConcurrentInvokes` from parents had the cap silently dropped to zero. Controller now persists the merged `AgentSpec` onto `Sandbox.status.resolvedAgentSpec` at create time; `/configure` reads from there with zero extra K8s round-trips. Falls back to the old direct-template lookup for legacy sandboxes that predate the status field.
 
 ### Changed
 
 - `docs/docs/cli.md` and `docs/docs/sdk.md` now point at `cli-reference.md` and call out that `pip install agenttier` ships the CLI alongside the SDK.
-
-### Tutorials section in the docs
-
-- Hub page plus four hands-on walkthroughs — Web UI, Python SDK, code mode, and agent mode. Each tutorial assumes AgentTier is already installed and walks end-to-end through real workflows with copy-pasteable commands.
-
-### Documentation polish
-
 - README header links the new Tutorials section.
 - Left-nav: bold uppercase section labels in primary purple with indented children, top borders separating sections, dark-mode friendly.
+
+### Security
+
+- **Share-link tokens hashed at rest** — when the share-link feature lands end-to-end (todo 7.2), tokens will only ever exist in plaintext in the create-link API response. Past v0.3.5, raw tokens never persist on the CR or in etcd. The legacy `Token` field is honored as a fallback for one deprecation window, then removed.
 
 ## [v0.3.0] — 2026-05-13
 
