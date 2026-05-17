@@ -51,7 +51,7 @@ as a sink. Every transition emits a Kubernetes Event on the Sandbox resource.
 A Go HTTP server serving:
 
 - REST API at `/api/v1/*` (sandboxes, templates, governance, port forwarding, audit, analytics, warm pool, identity)
-- WebSocket terminal at `/ws/terminal/{id}` bridging browser WebSocket to SPDY pod exec
+- WebSocket terminal at `/ws/terminal/{id}` bridging browser WebSocket to either an in-pod HTTP-PTY (when the sandbox has `useHTTPExec: true`) or SPDY pod exec (legacy fallback)
 - Authenticated in-cluster reverse proxy at `/api/v1/sandboxes/{id}/preview/{port}/...` for forwarded ports
 - Prometheus metrics at `/metrics`, liveness at `/healthz`, readiness at `/readyz`
 
@@ -92,8 +92,12 @@ cluster permissions.
 2. Router authenticates via JWT / API key (or grants anonymous admin in dev mode).
 3. Router looks up the Sandbox, checks it is `Running`, and finds its Pod name.
 4. Per-session credential injection — if the template specifies credentials, Router fetches (STS AssumeRole, Kubernetes Secret, …) and injects them into the exec environment.
-5. Router calls `POST /api/v1/namespaces/{ns}/pods/{pod}/exec` with `tty=true`, `stdin=true`, bridging the SPDY stream to the WebSocket. Resize events flow through the SPDY `TerminalSizeQueue`.
-6. The session is tracked in Router memory with a 30-second reconnection window. If the WebSocket drops, the exec stream stays alive for 30 seconds so the client can reconnect without losing shell state.
+5. Router picks the terminal transport based on `harness.useHTTPExec`:
+    - **HTTP-PTY** (preferred when `useHTTPExec: true` and the in-pod runtime is healthy) — Router dials `ws://<pod-ip>:9000/pty?session=agenttier-<sandbox>` directly, bridging WebSocket frames TCP-to-TCP. The runtime spawns the shell with a tmux wrap (`tmux new-session -A -s <session>`) so reconnects re-attach the same shell with running processes intact (gdownload, builds, long apt installs). The kube-apiserver is out of the request path.
+    - **SPDY exec** (legacy, used for non-opted-in sandboxes or when the runtime is unreachable) — Router calls `POST /api/v1/namespaces/{ns}/pods/{pod}/exec` with `tty=true`, `stdin=true`, bridging the SPDY stream to the WebSocket. Resize events flow through the SPDY `TerminalSizeQueue`. The shell is wrapped in tmux the same way (via `bridge.go`'s `buildShellCommand`) so resume-on-reconnect works there too. Shell survives the drop, but the WebSocket itself drops every 20-60 minutes because the EKS apiserver recycles long-lived streaming connections.
+6. The session is tracked in Router memory with a 30-second reconnection window. If the WebSocket drops, the exec stream (or HTTP-PTY connection) stays alive for 30 seconds so the client can reconnect without losing shell state.
+
+To verify which transport a session used, check Router logs for `terminal session via HTTP-PTY` (success) or `HTTP-PTY fallback to SPDY` with a structured `reason` field (fallback).
 
 ## Data flow: port forwarding
 

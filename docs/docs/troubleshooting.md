@@ -1,5 +1,39 @@
 # Troubleshooting
 
+## Terminal drops every 20-60 minutes (older sandboxes)
+
+If your sandbox uses the legacy SPDY-exec terminal path (any sandbox created
+on a template without `harness.useHTTPExec: true`, or on a pod that doesn't
+have the in-pod runtime baked in), the browser terminal will reconnect every
+20-60 minutes regardless of LB idle settings. The cause is the EKS apiserver
+recycling long-lived streaming connections, which is unavoidable on the SPDY
+path.
+
+What you'll see in Router logs: nothing alarming — the WebSocket reconnect is
+fast and the tmux wrap means your shell + running processes survive the drop.
+What you'll see in the browser: a brief "Reconnecting…" banner and your
+prompt re-appears. If you're running a long task (gdownload, builds), it
+keeps going inside tmux even though the terminal blinked.
+
+To eliminate the drop entirely, opt the template into the in-pod HTTP-PTY
+path:
+
+```yaml
+harness:
+  useHTTPExec: true   # also routes /exec, /files, /invoke through the pod runtime
+```
+
+The runtime listens on port 9000 inside the pod; the Router dials it directly
+TCP-to-TCP, so the apiserver isn't in the request path and there's nothing to
+recycle. All four reference images (`general-coding`, `claude-code`,
+`minimal`, `langgraph`) ship with the runtime baked in. Custom images that
+don't have the runtime fall back to SPDY transparently — same behavior as
+before. To verify which transport a session used, look in Router logs for:
+
+- `terminal session via HTTP-PTY` — success on the new path.
+- `HTTP-PTY fallback to SPDY` with a structured `reason` field — fallback
+  (e.g. `runtime healthz failed`, `pod IP not yet assigned`).
+
 ## Terminal disconnects after a long idle period
 
 Every released Router sends RFC 6455 WebSocket ping control frames **and**

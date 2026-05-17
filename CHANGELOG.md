@@ -7,6 +7,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **In-pod WebSocket `/pty` endpoint and HTTP-PTY browser-terminal transport** — the browser terminal was the last call path still going through `kubectl exec` SPDY, which means the EKS apiserver was recycling long-lived streams every 20-60 minutes regardless of LB tuning. New `/pty` WebSocket endpoint on `pkg/sandboxruntime` that spawns a child shell with `creack/pty`, bidirectionally bridges WS frames to the PTY, runs the same 30s keepalive cadence as the Router-side bridge, and (when the Router passes a session name) wraps the spawn in `tmux new-session -A -s <name>` for resume-on-reconnect uniformity with the SPDY path. Router-side `pkg/router/pty_dispatch.go` mirrors `exec_dispatch.go`'s decision tree (token Secret + PodIP + healthy `/healthz` → HTTP-PTY, anything else → SPDY fallback) so opted-in sandboxes silently shift to the new transport without any configuration churn. Existing sandboxes without `useHTTPExec: true` continue on SPDY unchanged.
+- **`agenttier` Web UI now resumes the same shell across drops on opted-in sandboxes** — when the template has `harness.useHTTPExec: true` and the in-pod runtime is healthy, the WebSocket terminal goes pod-to-Router-to-browser without an apiserver hop, so the every-20-minutes drop disappears. Older sandboxes still benefit from the tmux wrap that landed in v0.3.5 — they keep dropping but the shell + running processes survive.
+
+### Changed
+
+- `docs/docs/architecture.md` data-flow section for terminal sessions documents both transports and how to verify which one a session used (Router log lines `terminal session via HTTP-PTY` vs `HTTP-PTY fallback to SPDY`).
+- `docs/docs/troubleshooting.md` adds a top-of-page entry on the 20-60 minute terminal drop symptom and the `useHTTPExec: true` opt-in to eliminate it.
+
 ## [v0.3.5] — 2026-05-16
 
 ### Added
