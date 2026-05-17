@@ -527,8 +527,7 @@ func buildPTYCommand(req PTYRequest) []string {
 	// pkg/controller/pod_builder.go's tmpVolumeName).
 	tmuxConfigPath := "/tmp/.agenttier-tmux.conf"
 	tmuxConfig := "set -g status off\n" +
-		"set -g default-terminal \"tmux-256color\"\n" +
-		"set -g mouse on\n"
+		"set -g default-terminal \"tmux-256color\"\n"
 	writeConfig := "printf '%s' " + ptyShellQuote(tmuxConfig) + " > " + tmuxConfigPath
 	tmuxCmd := "exec tmux -u -2 -f " + tmuxConfigPath + " new-session -A -s " + sessionQuoted + " -- " + shellQuoted + " -l"
 	fallbackCmd := "exec " + shellQuoted + " -l"

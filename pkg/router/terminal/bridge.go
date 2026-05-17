@@ -332,8 +332,7 @@ func buildShellCommand(session *Session) []string {
 	// connect since it's tiny and the pod's /tmp is per-Pod ephemeral.
 	tmuxConfigPath := "/tmp/.agenttier-tmux.conf"
 	tmuxConfig := "set -g status off\n" +
-		"set -g default-terminal \"tmux-256color\"\n" +
-		"set -g mouse on\n"
+		"set -g default-terminal \"tmux-256color\"\n"
 	writeConfig := "printf '%s' " + shellQuote(tmuxConfig) + " > " + tmuxConfigPath
 	tmuxCmd := "exec tmux -u -2 -f " + tmuxConfigPath + " new-session -A -s " + shellQuote(sessionName) + " -- " + shellQuoted + " -l"
 	fallbackCmd := "exec " + shellQuoted + " -l"
