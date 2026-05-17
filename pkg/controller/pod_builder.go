@@ -21,6 +21,7 @@ import (
 	"fmt"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
@@ -29,7 +30,15 @@ import (
 const (
 	sandboxContainerName = "sandbox"
 	workspaceVolumeName  = "workspace"
+	tmpVolumeName        = "tmp"
 	defaultShell         = "/bin/bash"
+
+	// tmpVolumeSizeLimit caps the size of the in-memory /tmp tmpfs. Anything
+	// the user wants to keep should land in /workspace (PVC-backed) anyway;
+	// 256 MiB is enough headroom for tmux sockets, pip caches, npm caches,
+	// and the usual scratch space without giving runaway processes a way
+	// to OOM the node by writing to /tmp forever.
+	tmpVolumeSizeLimit = "256Mi"
 )
 
 var (
@@ -159,6 +168,17 @@ func (b *PodBuilder) buildMainContainer(config *MergedPodConfig) corev1.Containe
 				Name:      workspaceVolumeName,
 				MountPath: config.MountPath,
 			},
+			{
+				// Writable in-memory /tmp. The container's root filesystem
+				// is read-only by default (see buildSecurityContext), and
+				// many common tools — tmux, pip, npm, gcc — refuse to run
+				// without a writable /tmp. A tmpfs emptyDir is the
+				// conventional fix: per-pod, sized, ephemeral, and
+				// invisible to other pods on the node. Anything the user
+				// wants to keep belongs in /workspace anyway.
+				Name:      tmpVolumeName,
+				MountPath: "/tmp",
+			},
 		},
 		Env:             config.Env,
 		SecurityContext: b.buildSecurityContext(config.Privileged),
@@ -268,12 +288,26 @@ func (b *PodBuilder) buildSecurityContext(privileged bool) *corev1.SecurityConte
 
 // buildVolumes creates the volume list for the pod.
 func (b *PodBuilder) buildVolumes(config *MergedPodConfig) []corev1.Volume {
+	tmpSize := resource.MustParse(tmpVolumeSizeLimit)
 	volumes := []corev1.Volume{
 		{
 			Name: workspaceVolumeName,
 			VolumeSource: corev1.VolumeSource{
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 					ClaimName: config.PVCName,
+				},
+			},
+		},
+		{
+			// Memory-backed /tmp. Sized to keep a runaway process from
+			// OOMing the node. emptyDir{Medium: Memory} counts against the
+			// Pod's memory limits, so this also surfaces as a clean OOM
+			// kill rather than node-wide pressure if the cap is exceeded.
+			Name: tmpVolumeName,
+			VolumeSource: corev1.VolumeSource{
+				EmptyDir: &corev1.EmptyDirVolumeSource{
+					Medium:    corev1.StorageMediumMemory,
+					SizeLimit: &tmpSize,
 				},
 			},
 		},
@@ -366,6 +400,7 @@ func (b *PodBuilder) buildFileDeployerInit(config *MergedPodConfig) corev1.Conta
 		Command: []string{"/bin/sh", "-c", script},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: workspaceVolumeName, MountPath: config.MountPath},
+			{Name: tmpVolumeName, MountPath: "/tmp"},
 		},
 		SecurityContext: b.buildSecurityContext(false),
 	}
@@ -385,6 +420,7 @@ func (b *PodBuilder) buildScriptRunnerInit(config *MergedPodConfig) corev1.Conta
 		Command: []string{"/bin/sh", "-c", script},
 		VolumeMounts: []corev1.VolumeMount{
 			{Name: workspaceVolumeName, MountPath: config.MountPath},
+			{Name: tmpVolumeName, MountPath: "/tmp"},
 		},
 		Env: config.Env,
 		// Init scripts may need to install packages (npm, pip) which require

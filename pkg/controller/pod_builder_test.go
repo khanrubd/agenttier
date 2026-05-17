@@ -512,3 +512,52 @@ func TestPodBuilder_HTTPExecOffSkipsTokenEnvVar(t *testing.T) {
 		}
 	}
 }
+
+// TestPodBuilder_TmpVolumeMountedTmpfs verifies the sandbox container gets a
+// writable /tmp backed by an in-memory tmpfs emptyDir. Without this, the
+// container's read-only root filesystem makes /tmp read-only too, which
+// breaks tmux ("couldn't create directory /tmp/tmux-1000"), pip, npm, and
+// any tool that uses mkstemp(3).
+func TestPodBuilder_TmpVolumeMountedTmpfs(t *testing.T) {
+	builder := &PodBuilder{DefaultImage: "default:latest"}
+	sandbox := &agenttierv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "sbx-1", Namespace: "agenttier"},
+	}
+	cfg := &MergedPodConfig{
+		Image:     "test:latest",
+		MountPath: "/workspace",
+		PVCName:   "sbx-1-pvc",
+	}
+	pod := builder.Build(sandbox, cfg)
+
+	// Volume must be present and Memory-backed.
+	var tmpVol *corev1.Volume
+	for i := range pod.Spec.Volumes {
+		if pod.Spec.Volumes[i].Name == tmpVolumeName {
+			tmpVol = &pod.Spec.Volumes[i]
+			break
+		}
+	}
+	if tmpVol == nil {
+		t.Fatalf("expected a %q volume on the pod (got %+v)", tmpVolumeName, pod.Spec.Volumes)
+	}
+	if tmpVol.EmptyDir == nil {
+		t.Fatalf("%q volume is not an emptyDir: %+v", tmpVolumeName, tmpVol)
+	}
+	if tmpVol.EmptyDir.Medium != corev1.StorageMediumMemory {
+		t.Errorf("%q volume medium = %q, want Memory (tmpfs)", tmpVolumeName, tmpVol.EmptyDir.Medium)
+	}
+
+	// Mount must be on the sandbox container at /tmp.
+	main := pod.Spec.Containers[0]
+	found := false
+	for _, vm := range main.VolumeMounts {
+		if vm.Name == tmpVolumeName && vm.MountPath == "/tmp" {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("sandbox container missing /tmp mount: %+v", main.VolumeMounts)
+	}
+}
