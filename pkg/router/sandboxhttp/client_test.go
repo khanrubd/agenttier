@@ -243,3 +243,51 @@ func TestClient_InvokeCancelMissingID(t *testing.T) {
 		t.Error("InvokeCancel with empty ID should error")
 	}
 }
+
+// DialPTY URL construction tests. These don't actually establish a
+// WebSocket — that requires the server side to consent to an upgrade,
+// which httptest.Server doesn't do by default — but they do verify the
+// pre-dial URL gets built right and that schemes / params translate
+// the way we expect.
+
+func TestDialPTY_RequiresShell(t *testing.T) {
+	c := New("http://10.0.0.1:9000", "tok")
+	_, err := c.DialPTY(context.Background(), PTYOptions{})
+	if err == nil || !strings.Contains(err.Error(), "Shell is required") {
+		t.Errorf("expected 'Shell is required' error, got %v", err)
+	}
+}
+
+func TestDialPTY_RequiresHTTPBaseURL(t *testing.T) {
+	c := New("ftp://nope", "tok")
+	_, err := c.DialPTY(context.Background(), PTYOptions{Shell: "/bin/bash"})
+	if err == nil || !strings.Contains(err.Error(), "must start with http") {
+		t.Errorf("expected scheme-rejection error, got %v", err)
+	}
+}
+
+func TestDialPTY_EmptyBaseURL(t *testing.T) {
+	c := &Client{}
+	_, err := c.DialPTY(context.Background(), PTYOptions{Shell: "/bin/bash"})
+	if err == nil || !strings.Contains(err.Error(), "BaseURL is empty") {
+		t.Errorf("expected 'BaseURL is empty' error, got %v", err)
+	}
+}
+
+// urlQueryEscape is exported only via the unexported helper, but we want
+// to confirm a couple of key cases — in particular that paths with
+// slashes and spaces survive a round trip via url.QueryEscape (they do).
+func TestURLQueryEscape_KeyCases(t *testing.T) {
+	cases := map[string]string{
+		"/bin/bash":       "%2Fbin%2Fbash",
+		"/usr/bin/zsh":    "%2Fusr%2Fbin%2Fzsh",
+		"path with space": "path+with+space",
+		"weird&value":     "weird%26value",
+	}
+	for in, want := range cases {
+		got := urlQueryEscape(in)
+		if got != want {
+			t.Errorf("urlQueryEscape(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

@@ -460,10 +460,13 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 	defer cancelKeepalive()
 	session.StartKeepalive(keepaliveCtx, s.logger)
 
-	// Bridge the WebSocket to the pod exec stream
+	// Bridge the WebSocket to the pod exec stream. The dispatcher picks
+	// HTTP-PTY (in-pod runtime) when the sandbox is opted in and the
+	// runtime is healthy, falling back to SPDY transparently otherwise.
+	// See pkg/router/pty_dispatch.go for the decision tree.
 	if s.bridge != nil {
-		if err := s.bridge.Connect(r.Context(), session); err != nil {
-			s.logger.Error("terminal bridge error", "sessionId", session.ID, "error", err)
+		if err := s.dispatchTerminal(r.Context(), sandbox, session); err != nil {
+			s.logger.Error("terminal dispatch error", "sessionId", session.ID, "error", err)
 		}
 	}
 

@@ -128,6 +128,11 @@ func New(cfg Config) *Server {
 	// /invoke/cancel/<invokeID> terminates an in-flight invoke; auth mandatory.
 	// Trailing-slash mux pattern lets the path carry the ID directly.
 	mux.HandleFunc("/invoke/cancel/", s.requireAuth(s.handleInvokeCancel))
+	// /pty upgrades to WebSocket and bridges a PTY-spawned shell. Auth
+	// is enforced on the upgrade GET via the same Bearer token middleware
+	// — once upgraded, the connection is implicitly authorized for the
+	// session lifetime.
+	mux.HandleFunc("/pty", s.requireAuth(s.handlePTY))
 
 	s.httpServer = &http.Server{
 		Addr:    cfg.ListenAddr,

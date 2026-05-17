@@ -33,8 +33,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
+
+	"github.com/gorilla/websocket"
 )
 
 // DefaultDialTimeout caps connect-establish time. Pod IPs change on every
@@ -333,4 +336,122 @@ func parseSSE(body io.Reader, onEvent func(InvokeEvent) error) error {
 		}
 	}
 	return scanner.Err()
+}
+
+// PTYOptions configure DialPTY. Shell + Cwd + initial size + tmux
+// session name flow as URL query params on the upgrade request — POST
+// bodies aren't valid for WebSocket upgrades.
+type PTYOptions struct {
+	// Shell is the absolute path to the shell binary inside the
+	// sandbox. Required. The runtime rejects relative paths.
+	Shell string
+
+	// Cwd is the working directory the shell starts in. Empty leaves
+	// the runtime's default (typically /workspace).
+	Cwd string
+
+	// Cols / Rows seed the initial terminal size. Zero falls back to
+	// 120x40 in the runtime, matching what the Router-side session
+	// pushes today on first connect.
+	Cols int
+	Rows int
+
+	// Session, when set, asks the runtime to wrap the spawned shell
+	// in `tmux new-session -A -s <Session>`. All sessions sharing the
+	// same name attach to the same tmux server in the pod, which is
+	// the resume-on-reconnect mechanism for the browser terminal.
+	// Empty disables the wrap and runs the bare shell.
+	Session string
+}
+
+// DialPTY establishes a WebSocket connection to the runtime's /pty
+// endpoint and returns the raw connection. The caller owns the
+// connection's lifecycle — closing it disconnects the session, and the
+// runtime will SIGHUP+SIGKILL the spawned shell on the way out.
+//
+// The returned connection is NOT shared with anything else in this
+// package; gorilla/websocket explicitly disallows concurrent writes,
+// and the Router-side terminal bridge is the only intended consumer.
+//
+// Auth is by Bearer token on the upgrade request, identical to
+// /exec / /invoke. After the upgrade succeeds, the connection is
+// implicitly authorized for its lifetime.
+//
+// Why this returns *websocket.Conn rather than a higher-level
+// abstraction: the Router's terminal bridge already knows how to drive
+// a gorilla websocket — it owns the protocol semantics for the browser
+// side and just needs a transport for the pod side. Wrapping further
+// would be premature.
+func (c *Client) DialPTY(ctx context.Context, opts PTYOptions) (*websocket.Conn, error) {
+	if c.BaseURL == "" {
+		return nil, fmt.Errorf("sandboxhttp.Client: BaseURL is empty")
+	}
+	if opts.Shell == "" {
+		return nil, fmt.Errorf("sandboxhttp.Client.DialPTY: Shell is required")
+	}
+
+	// Translate http://host:9000 → ws://host:9000 (and https → wss).
+	// The runtime currently only listens HTTP, so the wss case is
+	// future-proofing for when the Router learns to terminate TLS
+	// inside the pod.
+	wsBase := c.BaseURL
+	switch {
+	case strings.HasPrefix(wsBase, "http://"):
+		wsBase = "ws://" + strings.TrimPrefix(wsBase, "http://")
+	case strings.HasPrefix(wsBase, "https://"):
+		wsBase = "wss://" + strings.TrimPrefix(wsBase, "https://")
+	default:
+		return nil, fmt.Errorf("sandboxhttp.Client.DialPTY: BaseURL must start with http:// or https://, got %q", c.BaseURL)
+	}
+
+	// Build the URL with query params manually rather than via
+	// net/url.Values — the parameter set is small and known, and
+	// Sprintf produces a stable order that's nicer in logs.
+	q := fmt.Sprintf("shell=%s", urlQueryEscape(opts.Shell))
+	if opts.Cwd != "" {
+		q += "&cwd=" + urlQueryEscape(opts.Cwd)
+	}
+	if opts.Cols > 0 {
+		q += fmt.Sprintf("&cols=%d", opts.Cols)
+	}
+	if opts.Rows > 0 {
+		q += fmt.Sprintf("&rows=%d", opts.Rows)
+	}
+	if opts.Session != "" {
+		q += "&session=" + urlQueryEscape(opts.Session)
+	}
+	wsURL := wsBase + "/pty?" + q
+
+	headers := http.Header{}
+	if c.Token != "" {
+		headers.Set("Authorization", "Bearer "+c.Token)
+	}
+
+	dialer := &websocket.Dialer{
+		HandshakeTimeout: DefaultDialTimeout,
+		// The runtime listens HTTP; no TLS config needed. When that
+		// changes we'll thread a TLSClientConfig in via Client.
+	}
+
+	conn, resp, err := dialer.DialContext(ctx, wsURL, headers)
+	if err != nil {
+		// Surface the HTTP status when the upgrade itself failed —
+		// 401s and 403s come back as a non-nil resp with the body
+		// containing the runtime's JSON error envelope.
+		if resp != nil {
+			body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+			_ = resp.Body.Close()
+			return nil, fmt.Errorf("pty upgrade failed: %s — %s", resp.Status, strings.TrimSpace(string(body)))
+		}
+		return nil, fmt.Errorf("pty dial failed: %w", err)
+	}
+	return conn, nil
+}
+
+// urlQueryEscape escapes a single query-param value using net/url's
+// canonical encoder. We don't ship our own escape table — the standard
+// library's behavior is what every other Go HTTP client expects, and
+// matching it is the whole point.
+func urlQueryEscape(s string) string {
+	return url.QueryEscape(s)
 }
