@@ -18,6 +18,7 @@ Typical usage::
 See :mod:`agenttier.async_client` for the ``async/await`` variant.
 """
 
+from agenttier._retry import RetryConfig
 from agenttier._version import __version__
 from agenttier.async_client import AsyncAgentTierClient
 from agenttier.async_sandbox import AsyncSandbox
@@ -63,6 +64,8 @@ __all__ = [
     "APIKeyAuth",
     "BearerTokenAuth",
     "KubeconfigAuth",
+    # Retry
+    "RetryConfig",
     # Models
     "AuditEvent",
     "CommandResult",

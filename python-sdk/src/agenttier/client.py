@@ -11,6 +11,7 @@ from typing import Optional
 import httpx
 
 from agenttier._http import default_user_agent, raise_for_status
+from agenttier._retry import RetryConfig, wrap_transport
 from agenttier._version import __version__
 from agenttier.auth import AuthProvider, auto_detect_auth
 from agenttier.models import CurrentUser, SandboxSummary, Template
@@ -41,15 +42,22 @@ class AgentTierClient:
         timeout: float = _DEFAULT_TIMEOUT,
         *,
         verify: bool | str = True,
+        retry: Optional[RetryConfig] = None,
     ) -> None:
         if not api_url:
             raise ValueError("api_url must be a non-empty string")
         self._api_url = api_url.rstrip("/")
         self._auth = auth or auto_detect_auth()
+        # Wrap the default transport in a retry layer when the caller asked
+        # for one. Default is no retries — failing fast is the safer
+        # behavior for code that already runs against a healthy local
+        # cluster.
+        transport: httpx.BaseTransport = httpx.HTTPTransport(verify=verify)
+        transport = wrap_transport(transport, retry)
         self._http = httpx.Client(
             base_url=f"{self._api_url}{_API_PREFIX}",
             timeout=timeout,
-            verify=verify,
+            transport=transport,
             headers={"User-Agent": default_user_agent(__version__)},
             event_hooks={"request": [self._apply_auth]},
         )

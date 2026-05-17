@@ -60,6 +60,30 @@ client = AgentTierClient(
 )
 ```
 
+## Retries
+
+By default the SDK fails fast on transient errors. Enable retries by passing a `RetryConfig`:
+
+```python
+from agenttier import AgentTierClient, RetryConfig
+
+with AgentTierClient(
+    api_url="https://agenttier.company.com",
+    retry=RetryConfig(max_retries=3, backoff_factor=0.25, backoff_max=8.0),
+) as client:
+    ...
+```
+
+Behavior:
+
+- Retries on **408, 429, 500, 502, 503, 504** by default. Override with `retry_status=frozenset({...})`.
+- Retries on connection errors for idempotent methods (`GET`, `HEAD`, `OPTIONS`, `PUT`, `DELETE`). `POST` is retried only when `retry_post=True` since most Router endpoints are not idempotent.
+- Honors the **`Retry-After`** header on `429` and `503` (capped at `backoff_max` so a misbehaving server can't park the SDK forever). Disable with `respect_retry_after=False`.
+- Backoff is `min(backoff_max, backoff_factor * 2 ** attempt)` plus 0–25% random jitter so concurrent clients don't synchronize.
+- **SSE-streaming endpoints** (`/configure`, `/invoke`) bypass retries entirely. Replaying half a stream would emit duplicate events; the SDK detects `Accept: text/event-stream` and passes the request through unchanged.
+
+The same `retry=` parameter works on `AsyncAgentTierClient`.
+
 ## Async
 
 ```python

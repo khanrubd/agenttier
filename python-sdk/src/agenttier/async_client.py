@@ -11,6 +11,7 @@ from typing import Optional
 import httpx
 
 from agenttier._http import default_user_agent, raise_for_status
+from agenttier._retry import RetryConfig, wrap_async_transport
 from agenttier._version import __version__
 from agenttier.async_sandbox import AsyncSandbox
 from agenttier.auth import AuthProvider, auto_detect_auth
@@ -30,15 +31,18 @@ class AsyncAgentTierClient:
         timeout: float = _DEFAULT_TIMEOUT,
         *,
         verify: bool | str = True,
+        retry: Optional[RetryConfig] = None,
     ) -> None:
         if not api_url:
             raise ValueError("api_url must be a non-empty string")
         self._api_url = api_url.rstrip("/")
         self._auth = auth or auto_detect_auth()
+        transport: httpx.AsyncBaseTransport = httpx.AsyncHTTPTransport(verify=verify)
+        transport = wrap_async_transport(transport, retry)
         self._http = httpx.AsyncClient(
             base_url=f"{self._api_url}{_API_PREFIX}",
             timeout=timeout,
-            verify=verify,
+            transport=transport,
             headers={"User-Agent": default_user_agent(__version__)},
             event_hooks={"request": [self._apply_auth]},
         )
