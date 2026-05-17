@@ -36,6 +36,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
         ca-certificates \
+        tmux \
     && rm -rf /var/lib/apt/lists/*
 
 # Pin every dep so this image rebuilds reproducibly. Bumping these is a

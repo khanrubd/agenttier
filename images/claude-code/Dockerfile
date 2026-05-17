@@ -31,7 +31,7 @@ ARG TARGETARCH
 
 # System dependencies
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    bash curl git unzip python3 python3-pip ca-certificates openssh-client sudo \
+    bash curl git unzip python3 python3-pip ca-certificates openssh-client sudo tmux \
     && rm -rf /var/lib/apt/lists/*
 
 # AWS CLI v2 — select the right bundle per architecture.

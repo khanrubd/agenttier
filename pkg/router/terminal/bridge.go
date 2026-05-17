@@ -49,6 +49,20 @@ func NewBridge(clientset kubernetes.Interface, restConfig *rest.Config, logger *
 
 // Connect establishes the exec stream and bridges it to the session's WebSocket.
 // This blocks until the session ends (disconnect, sandbox stop, or error).
+//
+// Shell command construction:
+// We try to wrap the shell in `tmux new-session -A -s agenttier-<sandboxId>`
+// so the bash process survives SPDY drops and apiserver-side stream churn.
+// tmux daemonizes itself, decoupling the shell lifetime from the kubectl exec
+// parent. When the WebSocket reconnects (every 20-60 minutes is typical on
+// EKS), the new exec re-attaches the same tmux session — the user's shell
+// state, environment, and any running command (long-running downloads, build
+// processes) keep going.
+//
+// If tmux isn't installed in the image (older sandboxes, custom images), we
+// fall back to plain shell silently. This keeps existing pods working without
+// a forced rebuild — the only regression for those is the same session-loss
+// behavior they had before this change.
 func (b *Bridge) Connect(ctx context.Context, session *Session) error {
 	b.logger.Info("establishing exec stream",
 		"sessionId", session.ID,
@@ -56,6 +70,8 @@ func (b *Bridge) Connect(ctx context.Context, session *Session) error {
 		"namespace", session.Namespace,
 		"shell", session.Shell,
 	)
+
+	command := buildShellCommand(session)
 
 	// Build the exec request
 	req := b.clientset.CoreV1().RESTClient().Post().
@@ -65,7 +81,7 @@ func (b *Bridge) Connect(ctx context.Context, session *Session) error {
 		SubResource("exec").
 		VersionedParams(&corev1.PodExecOptions{
 			Container: "sandbox",
-			Command:   []string{session.Shell},
+			Command:   command,
 			Stdin:     true,
 			Stdout:    true,
 			Stderr:    true,
@@ -255,4 +271,80 @@ func extractExitCode(err error) int {
 		return codeErr.Code
 	}
 	return -1
+}
+
+// buildShellCommand decides how to invoke the shell inside the sandbox.
+//
+// When tmux is available, we wrap the shell in:
+//
+//	sh -c 'command -v tmux >/dev/null && exec tmux new-session -A -s agenttier-<sandbox> <shell> -l || exec <shell> -l'
+//
+// The `-A` flag tells tmux "attach if a session named agenttier-<sandbox>
+// already exists, otherwise create a new one." That's exactly what we want
+// for reconnect: the first WS connection creates the tmux session and runs
+// the user's shell as the only window; every subsequent reconnect attaches
+// to the same window and the user picks up exactly where they left off.
+//
+// `exec` replaces the wrapper sh in both branches so the user's shell is
+// PID-2 with no extra layer hanging around. `-l` makes the shell a login
+// shell so /etc/profile and ~/.profile are read — same behavior as the
+// pre-tmux path.
+//
+// The presence-check is necessary because we still support older sandbox
+// images that don't bake tmux in. When tmux is missing the wrapper falls
+// back to `exec <shell> -l`, giving identical pre-change behavior. There's
+// no flag-day, no migration, just an opportunistic upgrade per pod.
+//
+// Why a per-sandbox session name and not a per-user one: a sandbox is the
+// security boundary. All terminal sessions on the same sandbox already
+// share the same pod and PVC, so attaching to the same tmux session is
+// not a privilege escalation — it's the equivalent of two SSH sessions
+// `tmux attach`-ing to the same daemon, which is exactly the existing
+// "share a sandbox URL" UX. Per-user sessions would defeat the resume use
+// case entirely (a new browser tab would get a fresh shell, not the one
+// running gdownload).
+func buildShellCommand(session *Session) []string {
+	shell := session.Shell
+	if shell == "" {
+		shell = "/bin/bash"
+	}
+
+	// Quote the shell path defensively. session.Shell is currently always
+	// hardcoded to /bin/bash by the handler but if that ever becomes
+	// user-configurable we don't want a shell-injection escape hatch.
+	shellQuoted := shellQuote(shell)
+	sessionName := "agenttier-" + session.SandboxID
+
+	// `tmux new-session -A` attaches if the named session exists, else
+	// creates it. -s names the session, -- separates flags from the shell
+	// argument. We pass -l so the shell behaves like a login shell.
+	tmuxCmd := "exec tmux new-session -A -s " + shellQuote(sessionName) + " -- " + shellQuoted + " -l"
+	fallbackCmd := "exec " + shellQuoted + " -l"
+
+	// `command -v tmux` is POSIX and works in both bash and ash (Alpine).
+	// Redirect to /dev/null so the result code is the only thing we use.
+	wrapper := "command -v tmux >/dev/null 2>&1 && " + tmuxCmd + " || " + fallbackCmd
+
+	return []string{"/bin/sh", "-c", wrapper}
+}
+
+// shellQuote wraps a string in single quotes for safe interpolation into a
+// /bin/sh -c command line. Internal single quotes are escaped using the
+// canonical '\” break-out-and-back-in idiom. We avoid pulling in a full
+// shell-escape library because we control the inputs (shell path, sandbox
+// ID) and want zero new dependencies in the terminal hot path.
+func shellQuote(s string) string {
+	const sq = "'"
+	const escapedSQ = `'\''`
+	out := make([]byte, 0, len(s)+2)
+	out = append(out, sq...)
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\'' {
+			out = append(out, escapedSQ...)
+			continue
+		}
+		out = append(out, s[i])
+	}
+	out = append(out, sq...)
+	return string(out)
 }

@@ -60,6 +60,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tree \
     ripgrep \
     fd-find \
+    tmux \
     && rm -rf /var/lib/apt/lists/*
 
 # Node.js 20 LTS (nodesource setup handles both architectures).

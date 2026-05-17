@@ -25,6 +25,7 @@ RUN apk add --no-cache \
     curl \
     openssh-client \
     ca-certificates \
+    tmux \
     && rm -rf /var/cache/apk/*
 
 # In-pod runtime binary + entrypoint that backgrounds it.
