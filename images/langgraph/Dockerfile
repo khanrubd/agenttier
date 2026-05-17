@@ -61,9 +61,7 @@ RUN pip install --no-cache-dir \
 # In-pod runtime binary + entrypoint that backgrounds it.
 COPY --from=runtime-build /out/agenttier-sandbox-runtime /usr/local/bin/agenttier-sandbox-runtime
 COPY images/langgraph/entrypoint.sh /usr/local/bin/agenttier-entrypoint
-RUN chmod 0755 /usr/local/bin/agenttier-sandbox-runtime /usr/local/bin/agenttier-entrypoint \
-    && mkdir -p /var/log \
-    && chmod 1777 /var/log
+RUN chmod 0755 /usr/local/bin/agenttier-sandbox-runtime /usr/local/bin/agenttier-entrypoint
 
 # Standard sandbox user / workspace conventions. AgentTier's NetworkPolicy +
 # PVC + FSGroup all assume uid 1000 / gid 1000.

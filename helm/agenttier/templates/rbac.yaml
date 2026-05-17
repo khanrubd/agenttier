@@ -60,10 +60,15 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
-  # Secrets (for template file references; read-only)
+  # Secrets — read-only for template file references, plus full lifecycle on
+  # the per-sandbox runtime-token Secrets the controller creates as part of
+  # the HTTP-exec rollout (Phase 3). Each Secret is owned by its Sandbox via
+  # ownerReferences, so deletion cleans up automatically — but the
+  # controller still needs explicit create/update/delete to create them in
+  # the first place and to rotate them when a sandbox is recreated.
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "list", "watch"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

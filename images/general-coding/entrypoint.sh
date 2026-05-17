@@ -29,9 +29,15 @@ RUNTIME_BIN=/usr/local/bin/agenttier-sandbox-runtime
 # own builds but lets users base downstream images off this one without
 # inheriting the runtime if they don't want it.
 if [ -x "${RUNTIME_BIN}" ]; then
-    # Background the runtime; redirect its logs to /var/log so they don't
-    # mix with the user's stdout/stderr (which feed kubectl logs).
-    "${RUNTIME_BIN}" > /var/log/agenttier-runtime.log 2>&1 &
+    # Background the runtime, leaving its stdout/stderr going to the
+    # container's log stream (kubectl logs / CloudWatch). On read-only-
+    # rootfs pods (the default for AgentTier sandboxes), redirecting to
+    # a path under /var/log fails with EROFS, leaving us with a defunct
+    # entrypoint and no runtime — exactly the symptom we're trying to
+    # avoid here. Letting logs flow through kubelet is also strictly
+    # better operationally: aggregator pipelines (CloudWatch, Loki,
+    # Splunk) all key off container stdout already.
+    "${RUNTIME_BIN}" &
 fi
 
 # Hand off to the configured command. `exec` replaces the shell so the

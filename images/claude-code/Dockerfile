@@ -56,9 +56,7 @@ RUN npm install -g @anthropic-ai/claude-code@2.1.81
 # In-pod runtime binary + entrypoint that backgrounds it.
 COPY --from=runtime-build /out/agenttier-sandbox-runtime /usr/local/bin/agenttier-sandbox-runtime
 COPY images/claude-code/entrypoint.sh /usr/local/bin/agenttier-entrypoint
-RUN chmod 0755 /usr/local/bin/agenttier-sandbox-runtime /usr/local/bin/agenttier-entrypoint \
-    && mkdir -p /var/log \
-    && chmod 1777 /var/log
+RUN chmod 0755 /usr/local/bin/agenttier-sandbox-runtime /usr/local/bin/agenttier-entrypoint
 
 # Pre-create workspace
 RUN mkdir -p /workspace && chown sandbox:sandbox /workspace

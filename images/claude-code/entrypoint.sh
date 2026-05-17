@@ -10,6 +10,6 @@
 set -e
 RUNTIME_BIN=/usr/local/bin/agenttier-sandbox-runtime
 if [ -x "${RUNTIME_BIN}" ]; then
-    "${RUNTIME_BIN}" > /var/log/agenttier-runtime.log 2>&1 &
+    "${RUNTIME_BIN}" &
 fi
 exec "$@"

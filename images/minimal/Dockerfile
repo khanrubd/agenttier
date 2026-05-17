@@ -31,9 +31,7 @@ RUN apk add --no-cache \
 # In-pod runtime binary + entrypoint that backgrounds it.
 COPY --from=runtime-build /out/agenttier-sandbox-runtime /usr/local/bin/agenttier-sandbox-runtime
 COPY images/minimal/entrypoint.sh /usr/local/bin/agenttier-entrypoint
-RUN chmod 0755 /usr/local/bin/agenttier-sandbox-runtime /usr/local/bin/agenttier-entrypoint \
-    && mkdir -p /var/log \
-    && chmod 1777 /var/log
+RUN chmod 0755 /usr/local/bin/agenttier-sandbox-runtime /usr/local/bin/agenttier-entrypoint
 
 # Create non-root user (UID 1000 matches SecurityContext)
 RUN adduser -D -u 1000 -h /workspace sandbox
