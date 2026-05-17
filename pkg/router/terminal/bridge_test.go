@@ -49,8 +49,11 @@ func TestBuildShellCommand_DefaultBash(t *testing.T) {
 	if !strings.Contains(wrapper, "command -v tmux") {
 		t.Errorf("wrapper missing tmux presence check: %s", wrapper)
 	}
-	if !strings.Contains(wrapper, "exec tmux new-session -A -s 'agenttier-sb-abc123' -- '/bin/bash' -l") {
+	if !strings.Contains(wrapper, "exec tmux -u -2 -f /tmp/.agenttier-tmux.conf new-session -A -s 'agenttier-sb-abc123' -- '/bin/bash' -l") {
 		t.Errorf("wrapper missing tmux command for sb-abc123: %s", wrapper)
+	}
+	if !strings.Contains(wrapper, "set -g status off") {
+		t.Errorf("wrapper not writing status-off tmux config: %s", wrapper)
 	}
 	if !strings.Contains(wrapper, "exec '/bin/bash' -l") {
 		t.Errorf("wrapper missing fallback shell: %s", wrapper)

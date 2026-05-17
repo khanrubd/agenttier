@@ -403,7 +403,7 @@ func TestBuildPTYCommand_WithSessionUsesTmuxWrap(t *testing.T) {
 	if !strings.Contains(wrapper, "command -v tmux") {
 		t.Errorf("wrapper missing tmux check: %s", wrapper)
 	}
-	if !strings.Contains(wrapper, "exec tmux new-session -A -s 'agenttier-sb-1' -- '/bin/bash' -l") {
+	if !strings.Contains(wrapper, "exec tmux -u -2 -f /tmp/.agenttier-tmux.conf new-session -A -s 'agenttier-sb-1' -- '/bin/bash' -l") {
 		t.Errorf("wrapper missing tmux wrap: %s", wrapper)
 	}
 	if !strings.Contains(wrapper, "exec '/bin/bash' -l") {

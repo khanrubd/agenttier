@@ -521,9 +521,18 @@ func buildPTYCommand(req PTYRequest) []string {
 	shellQuoted := ptyShellQuote(shell)
 	sessionQuoted := ptyShellQuote(req.Session)
 
-	tmuxCmd := "exec tmux new-session -A -s " + sessionQuoted + " -- " + shellQuoted + " -l"
+	// Match bridge.go: force UTF-8 (-u), force 256 colors (-2), suppress
+	// the default green status bar via a tmpfs-backed config file. /tmp
+	// is a 256 MiB writable emptyDir on every sandbox Pod (see
+	// pkg/controller/pod_builder.go's tmpVolumeName).
+	tmuxConfigPath := "/tmp/.agenttier-tmux.conf"
+	tmuxConfig := "set -g status off\n" +
+		"set -g default-terminal \"tmux-256color\"\n" +
+		"set -g mouse on\n"
+	writeConfig := "printf '%s' " + ptyShellQuote(tmuxConfig) + " > " + tmuxConfigPath
+	tmuxCmd := "exec tmux -u -2 -f " + tmuxConfigPath + " new-session -A -s " + sessionQuoted + " -- " + shellQuoted + " -l"
 	fallbackCmd := "exec " + shellQuoted + " -l"
-	wrapper := "command -v tmux >/dev/null 2>&1 && " + tmuxCmd + " || " + fallbackCmd
+	wrapper := "command -v tmux >/dev/null 2>&1 && { " + writeConfig + "; " + tmuxCmd + "; } || " + fallbackCmd
 
 	return []string{"/bin/sh", "-c", wrapper}
 }

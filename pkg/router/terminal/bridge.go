@@ -316,14 +316,31 @@ func buildShellCommand(session *Session) []string {
 	sessionName := "agenttier-" + session.SandboxID
 
 	// `tmux new-session -A` attaches if the named session exists, else
-	// creates it. -s names the session, -- separates flags from the shell
+	// creates it. `-u` forces UTF-8 mode so Unicode glyphs (Claude Code's
+	// status badges, CJK, emoji, box-drawing chars) render correctly
+	// instead of decaying to underscores. `-2` forces a 256-color
+	// capability flag so colored TUIs render correctly even when the
+	// inherited TERM is generic. `--` separates flags from the shell
 	// argument. We pass -l so the shell behaves like a login shell.
-	tmuxCmd := "exec tmux new-session -A -s " + shellQuote(sessionName) + " -- " + shellQuoted + " -l"
+	//
+	// Status bar: tmux's default green footer is visual noise for users
+	// who came in expecting a plain shell. We write a minimal config
+	// file to /tmp (mounted as a writable tmpfs in the Pod) and pass it
+	// via -f. Doing it this way avoids the `\;` quoting dance that
+	// `tmux ... \; set-option ...` otherwise requires through `/bin/sh`.
+	// The `tee` redirect is idempotent — we overwrite the file on every
+	// connect since it's tiny and the pod's /tmp is per-Pod ephemeral.
+	tmuxConfigPath := "/tmp/.agenttier-tmux.conf"
+	tmuxConfig := "set -g status off\n" +
+		"set -g default-terminal \"tmux-256color\"\n" +
+		"set -g mouse on\n"
+	writeConfig := "printf '%s' " + shellQuote(tmuxConfig) + " > " + tmuxConfigPath
+	tmuxCmd := "exec tmux -u -2 -f " + tmuxConfigPath + " new-session -A -s " + shellQuote(sessionName) + " -- " + shellQuoted + " -l"
 	fallbackCmd := "exec " + shellQuoted + " -l"
 
 	// `command -v tmux` is POSIX and works in both bash and ash (Alpine).
 	// Redirect to /dev/null so the result code is the only thing we use.
-	wrapper := "command -v tmux >/dev/null 2>&1 && " + tmuxCmd + " || " + fallbackCmd
+	wrapper := "command -v tmux >/dev/null 2>&1 && { " + writeConfig + "; " + tmuxCmd + "; } || " + fallbackCmd
 
 	return []string{"/bin/sh", "-c", wrapper}
 }
