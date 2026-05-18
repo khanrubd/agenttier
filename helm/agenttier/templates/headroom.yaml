@@ -1,0 +1,115 @@
+{{- /*
+Copyright 2024 AgentTier Authors.
+SPDX-License-Identifier: Apache-2.0
+
+Proactive headroom Deployment + PriorityClass.
+
+Pattern: ship N pause Pods at a deeply-negative PriorityClass. They
+squat on cluster capacity. When a real sandbox needs to schedule, the
+scheduler preempts the pause Pods (instant) and the evicted Pods go
+Pending, which triggers Cluster Autoscaler to add a node. Net effect:
+real sandboxes always land on already-warm nodes, new nodes come up
+in the background.
+
+Disabled by default. Enable via `optional.headroom.enabled=true` and
+size via `replicas` × `cpu`/`memory`. See docs/docs/scaling.md.
+
+Companion: `optional.clusterAutoscaler.enabled=true` (or any other
+node autoscaler — Karpenter, GKE node auto-provisioning, AKS) is
+required for the spare-node-on-preemption mechanism to actually
+materialize a new node. Headroom alone just reserves capacity that's
+already there.
+*/ -}}
+{{- if .Values.optional.headroom.enabled }}
+---
+apiVersion: scheduling.k8s.io/v1
+kind: PriorityClass
+metadata:
+  name: {{ include "agenttier.fullname" . }}-headroom
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+value: {{ .Values.optional.headroom.priorityValue }}
+globalDefault: false
+description: "AgentTier headroom pause Pods. Always preemptable so real workloads schedule first."
+preemptionPolicy: Never
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agenttier.fullname" . }}-headroom
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+    app.kubernetes.io/component: headroom
+spec:
+  replicas: {{ .Values.optional.headroom.replicas }}
+  # Use Recreate rather than RollingUpdate. Rolling would briefly
+  # exceed the requested headroom by 25% (default maxSurge), which
+  # could trigger a spurious scale-up. Recreate just resizes in place.
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: {{ include "agenttier.name" . }}
+      app.kubernetes.io/instance: {{ .Release.Name }}
+      app.kubernetes.io/component: headroom
+  template:
+    metadata:
+      labels:
+        {{- include "agenttier.labels" . | nindent 8 }}
+        app.kubernetes.io/component: headroom
+    spec:
+      priorityClassName: {{ include "agenttier.fullname" . }}-headroom
+      # Ensure we don't pile up multiple replicas on the same node —
+      # otherwise the headroom isn't actually reserving a node's worth
+      # of capacity, it's just reserving 1 node total. Soft anti-
+      # affinity so a small cluster (1 node, replicas=4) still
+      # schedules without errors during early bring-up.
+      affinity:
+        {{- with .Values.optional.headroom.affinity }}
+        {{- toYaml . | nindent 8 }}
+        {{- end }}
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app.kubernetes.io/name: {{ include "agenttier.name" . }}
+                    app.kubernetes.io/component: headroom
+                topologyKey: kubernetes.io/hostname
+      {{- with .Values.optional.headroom.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.optional.headroom.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      # `terminationGracePeriodSeconds: 0` so eviction by a real Pod
+      # is instant — the pause Pod has no work to drain, no reason to
+      # delay the real Pod's startup.
+      terminationGracePeriodSeconds: 0
+      containers:
+        - name: pause
+          image: {{ .Values.optional.headroom.image }}
+          imagePullPolicy: IfNotPresent
+          resources:
+            requests:
+              cpu: {{ .Values.optional.headroom.cpu }}
+              memory: {{ .Values.optional.headroom.memory }}
+            # Limits == requests so pause Pods can't accidentally
+            # consume more than their declared reservation.
+            limits:
+              cpu: {{ .Values.optional.headroom.cpu }}
+              memory: {{ .Values.optional.headroom.memory }}
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 65535
+            runAsGroup: 65535
+            capabilities:
+              drop: ["ALL"]
+            seccompProfile:
+              type: RuntimeDefault
+{{- end }}

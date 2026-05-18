@@ -260,6 +260,107 @@ optional:
             pathType: Prefix
     tls: []
 
+  # Cluster Autoscaler — opt-in node-level autoscaling.
+  #
+  # Adds the upstream `kubernetes/autoscaler` Cluster Autoscaler as a
+  # Deployment in this namespace, plus the ServiceAccount + ClusterRole +
+  # ClusterRoleBinding it needs. The Helm chart does NOT add the cloud-
+  # provider IAM (IRSA on EKS, Workload Identity on GKE, etc.) — operators
+  # provision that out-of-band and supply the role ARN below.
+  #
+  # When enabled, CAS auto-discovers ASGs / MIGs tagged with
+  # `k8s.io/cluster-autoscaler/enabled` and `k8s.io/cluster-autoscaler/<cluster>`,
+  # scales them up when pods go Pending, scales them down when nodes sit
+  # idle past the configured threshold. Cloud-neutral: works on EKS, GKE,
+  # AKS, kops, kubeadm + cluster-api.
+  #
+  # See docs/docs/scaling.md for the full pairing with `optional.headroom`
+  # below to get N+1-node-spare proactive scaling instead of
+  # reactive-only.
+  clusterAutoscaler:
+    enabled: false
+    # Cloud provider: aws | gce | azure | clusterapi | externalgrpc.
+    cloudProvider: aws
+    # Auto-discovery filter (cluster name) — required when CAS is set to
+    # discover ASGs by tag rather than statically configured. Default
+    # matches the standard EKS naming convention.
+    clusterName: ""
+    # IRSA role ARN (or equivalent) for the ServiceAccount. Cloud-provider-
+    # specific; for EKS this is the role with the AutoScalingFullAccess +
+    # EKS describe + EC2 describe + EC2 launch policies attached. Empty
+    # disables the annotation, useful for kops/kubeadm where the underlying
+    # node IAM role already has the perms.
+    serviceAccountRoleArn: ""
+    image:
+      repository: registry.k8s.io/autoscaling/cluster-autoscaler
+      # Tag must match the cluster's K8s minor version. Default tracks 1.30.
+      tag: v1.30.3
+      pullPolicy: IfNotPresent
+    resources:
+      requests:
+        cpu: 100m
+        memory: 300Mi
+      limits:
+        cpu: 200m
+        memory: 600Mi
+    # Tunables — see https://github.com/kubernetes/autoscaler/blob/master/cluster-autoscaler/FAQ.md
+    extraArgs:
+      # Wait this long before scaling a node down for being underutilized.
+      # 10m = default. Raise to 30m if you have bursty workloads with brief
+      # quiet windows so CAS doesn't churn nodes you'll need again.
+      scaleDownUnneededTime: 10m
+      # A node below this utilization is a scale-down candidate.
+      scaleDownUtilizationThreshold: "0.5"
+      # Skip nodes that have local PVCs attached (we use them for sandbox
+      # workspaces). Without this CAS may try to drain a node out from
+      # under a sandbox with active state on its PVC.
+      skipNodesWithLocalStorage: "false"
+      # Skip nodes running pods from kube-system. Default true; we keep it
+      # so the autoscaler doesn't shrink the cluster below kube-system's
+      # minimum footprint.
+      skipNodesWithSystemPods: "true"
+      # Don't reduce the cluster below this many nodes regardless of
+      # utilization. Set to 1 by default so the headroom Deployment always
+      # has at least one node to land on.
+      coresTotalMin: ""
+      memoryTotalMin: ""
+
+  # Proactive headroom — pause Pods that reserve N+1 node capacity.
+  #
+  # Cluster Autoscaler is REACTIVE: scale-up is triggered by Pending pods
+  # and takes 60-90s on EKS (ASG round-trip). For interactive workloads
+  # (browser terminals, sandbox creates) that's a visible wait. The
+  # headroom pattern fixes it: deploy N pause pods at negative priority
+  # sized to ~1 node's worth of capacity. They squat on the spare node.
+  # When a real sandbox arrives, the scheduler preempts the pause pods
+  # (instant), the sandbox lands on the warm node, and the evicted pause
+  # pods go Pending — which fires CAS to add a fresh spare node. Net
+  # effect: real sandboxes always land on already-warm nodes; new nodes
+  # come up in the background.
+  #
+  # See docs/docs/scaling.md for sizing math + cost trade-offs. Disabled
+  # by default because it adds ~$15-25/mo per always-on spare node-pair
+  # of t3.large equivalents; turn on for latency-sensitive deployments.
+  headroom:
+    enabled: false
+    # Replicas × resources determines how many sandboxes can land
+    # instantly before a fresh node has to spin up. Default 4 × 500m/1Gi
+    # = ~2 vCPU + 4Gi reserved, roughly one t3.large worth.
+    replicas: 4
+    cpu: 500m
+    memory: 1Gi
+    # PriorityClass value. Negative so any real pod preempts. -1000 is far
+    # below kube-system's typical 2000000000 cutoff so we never preempt
+    # system components.
+    priorityValue: -1000
+    # Image: pause is a 700KiB binary that sleeps forever. Public ECR
+    # mirror to avoid Docker Hub rate limits.
+    image: registry.k8s.io/pause:3.9
+    # Standard k8s scheduling knobs.
+    nodeSelector: {}
+    tolerations: []
+    affinity: {}
+
 # --- Cost Estimation ---
 costs:
   rates:

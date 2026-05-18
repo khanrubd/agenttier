@@ -50,86 +50,69 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 
 ### Sandbox lifecycle
 
-- **Declarative sandboxes** — Kubernetes CRDs (`Sandbox`, `SandboxTemplate`, `ClusterSandboxTemplate`) manage the full lifecycle with an operator-driven state machine.
-- **Stop and resume** — Stopped sandboxes preserve their PVC, workspace, packages, and git state; resuming re-attaches the same volume in seconds.
-- **Idle and max-runtime timeouts** — Per-sandbox and per-namespace policies auto-stop sandboxes, with configurable grace periods to notify connected sessions.
-- **Self-healing** — Automatic restart with exponential backoff on infrastructure failures, permanent Error state after retry budget exhausted.
-- **Sub-second warm pool** — Optional pre-provisioned Pod + PVC pool claims a sandbox in ~800ms (measured) vs ~10s cold start.
+- **Create, stop, resume, delete** — sandboxes spin up from a template; stopping preserves the workspace, packages, and git state on a persistent volume; resume reattaches the same volume in seconds; idle and max-runtime caps auto-stop with grace.
+- **Sub-second cold starts** — per-template warm pools, optional immediate PVC binding, and an opt-in image pre-pull DaemonSet take creation from ~10 s down to ~800 ms.
+- **Self-healing** — bounded retries on infrastructure failures with structured Kubernetes events for every transition; clean Error state once the retry budget is exhausted.
 
 ### Templates and agent harnesses
 
-- **Template inheritance** — Templates can extend other templates via `inheritsFrom`, with field-level merge and sandbox-level overrides.
-- **Agent harness config** — Templates describe the shell, tools, system prompt, hooks, and init scripts needed to run a specific agent (Claude Code, Cursor, Aider, custom).
-- **Ready-to-use images** — Bundled Dockerfiles for `general-coding`, `claude-code-developer`, `minimal-shell`, `security-scanner`, and `data-analysis` workloads.
-- **Claude Code + Bedrock** — First-class support for running Claude Code against Amazon Bedrock, including IRSA-based IAM credential injection.
+- **Compose templates from other templates** with field-level merge and per-sandbox overrides; the harness block defines the shell, tools, system prompt, hooks, and init scripts.
+- **Reference images out of the box** — general coding, Claude Code on AWS Bedrock (with cloud-native credential injection), minimal shell, and a LangGraph agent-mode image.
 
-### Agent mode (v0.3.0)
+### Agent mode
 
-- **`mode: agent` sandboxes** — Same Sandbox CRD, same Pod, same PVC, same governance — driven via REST instead of the terminal. Configure once with `POST /configure` (uploads files + runs an install command), then run on demand with `POST /invoke` (Server-Sent Events streaming runner). Closing the SSE connection cancels the in-pod process.
-- **Bring your own framework or harness** — `langgraph-agent` reference template ships in the box; the same shape works for Strands Agents, AutoGen, OpenHands, OpenClaw, or any pip-installable agent library. The framework owns the loop; AgentTier owns lifecycle, auth, transport, audit, and governance.
-- **Concurrency + timeout caps** — Per-sandbox `maxConcurrentInvokes` returns HTTP 429 with `Retry-After` over cap. Default 30-minute per-invoke timeout; callers can lower via `?timeout=`. Cluster ceiling clamps both via governance.
-- **Audit + observability** — OTel spans (`agenttier.invoke`, `agenttier.configure`), Prometheus metrics (`agenttier_invoke_*`, `agenttier_configure_*`), and Kubernetes events on the Sandbox CR for `kubectl describe`-based audit.
-- **Optional `mem0` memory sidecar** — Helm-flagged opt-in that injects a mem0 server next to the agent container. Bring-your-own memory (PVC-local, Pinecone, Postgres + pgvector, AgentCore Memory) is fully supported and documented.
+- **Run an agent on demand** — configure a sandbox once with your code and install command, then call `/invoke` to run it; output streams back as Server-Sent Events and closing the connection cancels the in-pod process.
+- **Bring your own framework or harness** — the LangGraph reference template ships in the box; the same shape works for Strands Agents, AutoGen, OpenHands, OpenClaw, or any pip-installable agent library. The framework owns the loop; AgentTier owns lifecycle, auth, transport, audit, and governance.
+- **Throttle, time out, and audit every invoke** — per-sandbox concurrency caps return a clean 429 with `Retry-After`; default 30-minute per-invoke timeout with a cluster ceiling; OpenTelemetry spans, Prometheus metrics, and Kubernetes events emitted on every configure and invoke.
+- **Optional local memory** — Helm flag adds a `mem0` sidecar next to the agent. Bring-your-own memory (PVC-local, Pinecone, Postgres + pgvector, AgentCore Memory) is fully supported and documented.
 
 ### Security and isolation
 
-- **Network isolation** — Default deny-all egress with configurable allow rules, always-on DNS, and optional inter-sandbox peering via label selectors.
-- **Hardened pod defaults** — Non-root user, read-only root filesystem, all capabilities dropped, `seccomp=RuntimeDefault`, and per-sandbox ServiceAccounts with no cluster permissions.
-- **Kernel-level isolation** — Optional gVisor RuntimeClass for untrusted agent workloads.
-- **Per-session credentials** — STS AssumeRole or secret credentials injected at terminal session start (not baked into the image).
-- **IRSA / Workload Identity** — Cloud-native credential attachment on EKS and GKE without long-lived secrets.
+- **Locked-down sandboxes by default** — non-root user, read-only root filesystem with a writable in-memory `/tmp`, all capabilities dropped, `seccomp=RuntimeDefault`, and per-sandbox service accounts with no cluster permissions.
+- **Network isolation** — default deny-all egress with a configurable allow-list and always-on DNS; optional gVisor RuntimeClass for kernel-level isolation of untrusted workloads.
+- **Cloud-native credentials** — wire AWS Bedrock and other cloud APIs in via IRSA on EKS or workload identity on GKE; mount Kubernetes Secrets as env vars or files; no long-lived secrets baked into images.
+- **Hashed share-link tokens** — share links store SHA-256 hashes at rest, never the raw secret, with constant-time comparison on validation.
 
 ### Interactive access
 
-- **Browser terminal** — Full PTY over WebSocket with xterm.js, resize, ANSI colors, and reconnection after transient drops.
-- **Session reconnection** — 30s default grace window lets network blips and laptop sleeps reconnect without losing shell state.
-- **Keepalive pings and heartbeats** — The Router sends RFC 6455 WebSocket control pings and application-level heartbeat messages every 30 seconds, so long idle terminal sessions survive behind 60-second load balancer timeouts without disconnects. The browser tracks heartbeat staleness and auto-reconnects after 90 seconds of silence.
-- **Non-interactive exec API** — `POST /api/v1/sandboxes/{id}/exec` for request-response and fire-and-forget commands.
-- **Port forwarding** — Expose any container port via `POST /api/v1/sandboxes/{id}/ports`; the controller creates a Service (and optional Ingress when a preview domain is configured), the Router provides an authenticated in-cluster reverse proxy at `/api/v1/sandboxes/{id}/preview/{port}/...`, and exposed ports show up both in the Web UI sandbox card and in `Sandbox.status.forwardedPorts`.
-- **File transfer API** — `GET /api/v1/sandboxes/{id}/files/` lists a directory, `GET .../files/{path}` streams a file, and `PUT .../files/{path}` writes one. 32 MiB per request; drives the existing exec bridge so it works on any cluster without extra infra.
+- **Browser terminal that survives drops** — full PTY over WebSocket with reconnect, plus an in-pod terminal endpoint that bypasses the Kubernetes API server so long sessions survive load-balancer and apiserver-side timeouts; a tmux wrap keeps the same shell across reconnects.
+- **Run commands programmatically** — fire-and-forget or request-response exec, file upload/download/list, and port forwarding with authenticated previews through the Router; ports also surface as Ingress URLs when a preview domain is configured.
 
 ### Multi-tenancy and governance
 
-- **OIDC + API keys** — Cognito, Okta, Azure AD, or any OIDC-compliant provider; API keys stored as SHA-256 hashes with LRU caching.
-- **Hierarchical governance policies** — Cluster → namespace policy resolution with field-level merge, enforced synchronously at sandbox creation. Limits max sandboxes per user and total, CPU/memory/storage caps, timeout caps, allowed templates, and approved image registries. Violations return a structured `policy_violation` response with machine codes so UIs can pinpoint the failing field.
-- **Admin-gated policy editor** — `Settings → Governance` renders per-scope editors, protected by the `isAdmin` claim in production; dev mode (no OIDC configured) auto-grants admin so the flow is fully exercised locally.
-- **Audit trail** — Lifecycle, terminal, credential, share, clone, and port-forward events recorded to Kubernetes events (and optional SQL backend for long-term retention).
-- **Sharing and collaboration** — User or group sharing with viewer/collaborator roles and expiring share links (in progress).
+- **Plug into any OIDC provider** — Cognito, Okta, Azure AD, or anything OIDC-compliant, plus API keys stored as SHA-256 hashes with LRU caching.
+- **Hierarchical governance policies** — cluster and per-namespace caps on sandbox counts, CPU / memory / storage, idle and max-runtime timeouts, agent-mode concurrency, allowed templates, and approved image registries; violations return a structured response so UIs can pinpoint the failing field.
+- **Per-IP and per-user rate limiting** — opt-in token-bucket throttling on Router endpoints, with health checks and WebSocket terminals exempt; 429 responses carry `Retry-After`.
+- **Built-in audit trail** — every lifecycle, terminal, credential, share, clone, and port-forward event is recorded as a Kubernetes event (and optionally a row in a SQL backend for long-term retention).
 
 ### Web UI
 
-- **Dashboard** — Sandbox cards with status, template, age, and one-click Stop / Resume / Delete / Open Terminal. Running cards also show an inline "Port forwards" panel for exposing container ports and opening authenticated previews.
-- **Templates editor** — In-browser YAML editor for creating, editing, and deleting `ClusterSandboxTemplate`s with syntax highlighting.
-- **Activity log** — Time-ordered audit events with filter-by-action, user, and time range.
-- **Metrics and cost estimator** — Live sandbox counts, average startup time, and estimated monthly cost based on current running resources.
-- **Settings** — Governance policies (cluster and per-namespace), warm pool sizing and template, and other operational knobs persisted to the backend.
+- **One-click sandbox management** — dashboard cards show status, template, age and run Stop / Resume / Delete / Open Terminal; running cards expose inline Files and Port-forward panels.
+- **Browser-based admin** — YAML template editor, time-ordered activity log with filters, live metrics + monthly cost estimator, and a Settings page for governance policies and warm-pool sizing.
 
 ### Client tooling
 
-- **Python SDK (`pip install agenttier`)** — Sync + async clients with auto-detected auth (kubeconfig / OIDC / API key), typed Pydantic models, and streaming file transfers.
-- **CLI (`agenttier`)** — Go binary for sandbox and template management from the terminal, distributed for linux/darwin/windows on amd64 + arm64.
-- **REST API** — Fully documented REST endpoints for sandboxes, templates, governance, audit, sharing, and port forwarding.
+- **`pip install agenttier`** — installs both the Python SDK (sync + async, typed models, auto-detected auth, streaming file transfers, opt-in retry layer with backoff and `Retry-After`) and the same `agenttier` shell command on PATH.
+- **Cross-platform CLI** — Go binary for sandbox and template management distributed for linux / darwin / windows on amd64 + arm64; the `pip` install gives you the same command tree without the Go dependency.
+- **REST API** — documented endpoints for sandboxes, templates, governance, audit, sharing, port forwarding, files, configure, and invoke.
 
-### Performance
+### Performance and observability
 
-- **Startup duration logging** — Per-sandbox `startupDurationMs` in controller logs and Kubernetes events for regression tracking.
-- **Immediate PVC binding** — Warm pool uses `gp3-immediate` so EBS volumes are provisioned ahead of pod scheduling.
-- **Image pre-pull** — Optional DaemonSet pre-caches the configured sandbox and Claude Code images (plus any extras you list) on every node, eliminating the 15–30s first-pull latency on cold sandbox starts.
-
-### Observability
-
-- **OpenTelemetry** — Distributed traces across controller and router with trace context in structured JSON logs; OTLP export.
-- **Prometheus metrics** — `/metrics` endpoint exposes sandbox counts, startup duration histogram, reconciliation queue depth, error counters, and terminal session stats.
-- **Kubernetes-native events** — Every lifecycle transition emits a typed Event on the Sandbox resource for native `kubectl describe` inspection.
+- **Tracking and pre-warming** — per-sandbox startup duration in logs and events for regression tracking; optional warm pool, immediate PVC binding, and image pre-pull eliminate cold-start latency.
+- **OpenTelemetry traces and Prometheus metrics** — distributed traces across controller and router with trace context in structured JSON logs; `/metrics` exposes sandbox counts, startup histograms, queue depth, error counters, terminal stats, and the agent-mode invoke / configure / throttle metrics.
+- **Continuous CVE scanning** — every sandbox base image is scanned with Trivy on every push; findings land in the GitHub Security tab as SARIF.
 
 ### Deployment and operations
 
-- **Single Helm chart** — One `helm install` deploys controller, router, web UI, CRDs, RBAC, and optional add-ons (gVisor, ServiceMonitor, PDB, image pre-pull, OTel Collector).
-- **AWS ALB ready** — Optional Ingress template with sensible AWS Load Balancer Controller defaults (`idle_timeout.timeout_seconds=4000`, sticky sessions, IP allowlist support) so the Web UI and WebSocket terminals survive long idle sessions. Compatible with `ingress-nginx` and Traefik by overriding `optional.ingress.className`.
-- **Terraform EKS module** — Opinionated VPC + EKS + managed node groups + gVisor nodes + EBS CSI + ALB controller + IRSA + Helm release for one-command provisioning.
-- **Multi-cluster ready** — Works on EKS, GKE, AKS, and self-managed Kubernetes 1.27+ with any CNI that supports NetworkPolicy.
-- **Leader-elected controller** — Multi-replica HA with Lease-based election; degraded mode for non-critical dependency failures.
-- **Kubernetes-native state** — Defaults to using Kubernetes etcd + Events for all state; optional SQL backend for compliance-driven long-term retention.
+- **Single Helm chart** — one `helm install` deploys controller, router, web UI, CRDs, RBAC, and optional add-ons (gVisor, ServiceMonitor, PDB, image pre-pull, OTel Collector, mem0 sidecar, rate limiting).
+- **Production load-balancer support** — opt-in Ingress template with AWS Load Balancer Controller defaults (4000 s idle timeout, sticky sessions, IP allow-list); compatible with ingress-nginx and Traefik via a single override.
+- **Multi-cluster ready** — runs on EKS, GKE, AKS, and self-managed Kubernetes 1.27+ on any CNI with NetworkPolicy support.
+- **Highly available** — multi-replica controllers with leader election; multi-replica router with HTTP-routed exec, files, and invoke so any replica can serve any request.
+- **Container images you can verify** — every image is multi-arch, cosign-signed via GitHub Actions OIDC, and ships SPDX + CycloneDX SBOMs as OCI attestations.
+
+### On the roadmap
+
+These are tracked but not yet shipped: Terraform module for EKS, sharing and collaboration UX, webhook / email / Slack notifications, sandbox cloning via VolumeSnapshot, inter-sandbox networking, optional SQL backend for state, validating admission webhook, and additional reference images (Strands Agents on Bedrock, OpenHands, OpenClaw, RL training).
 
 ## Architecture
 
