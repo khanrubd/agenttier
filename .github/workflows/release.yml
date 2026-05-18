@@ -111,21 +111,69 @@ jobs:
           COSIGN_EXPERIMENTAL: "true"
           IMAGE: ${{ env.REGISTRY }}/${{ matrix.name }}:${{ steps.version.outputs.VERSION }}
           DIGEST: ${{ steps.build.outputs.digest }}
-        run: cosign sign --yes "${IMAGE}@${DIGEST}"
+        # Sigstore's public Rekor occasionally throttles writes for
+        # extended windows; cosign's built-in retry (4 quick attempts)
+        # is too short for those. We wrap the call in an explicit
+        # exponential-backoff loop so a single Rekor blip doesn't kill
+        # an otherwise-clean release. After ~12 minutes of cumulative
+        # backoff we give up and surface the failure for a manual rerun.
+        run: |
+          set -eo pipefail
+          delays="30 60 120 180 240"
+          attempt=1
+          for d in $delays end; do
+            echo "Signing attempt #${attempt}..."
+            if cosign sign --yes "${IMAGE}@${DIGEST}"; then
+              echo "Signing succeeded on attempt #${attempt}."
+              exit 0
+            fi
+            if [ "$d" = "end" ]; then
+              echo "Cosign signing failed after ${attempt} attempts."
+              echo "If this is a transient Rekor issue, rerun the failed"
+              echo "release-images job(s) once https://status.sigstore.dev/"
+              echo "shows the public log as healthy."
+              exit 1
+            fi
+            echo "Signing failed. Sleeping ${d}s before next attempt..."
+            sleep "$d"
+            attempt=$((attempt + 1))
+          done
 
       - name: Generate and attach SBOM
         env:
           IMAGE: ${{ env.REGISTRY }}/${{ matrix.name }}:${{ steps.version.outputs.VERSION }}
           DIGEST: ${{ steps.build.outputs.digest }}
+        # Same backoff envelope as signing — `cosign attest` writes to
+        # Rekor too, so it shares the same flakiness profile. We tolerate
+        # SBOM attestation flake but never block the release on it: the
+        # image itself is signed, which is the security-critical bit;
+        # SBOM is operational metadata that consumers can re-derive
+        # later from the manifest if needed.
         run: |
-          # SPDX is the most widely-recognized SBOM format in the
-          # compliance world; we also attach CycloneDX because Trivy
-          # and several other scanners prefer it.
+          set -eo pipefail
           syft "${IMAGE}@${DIGEST}" -o spdx-json=sbom.spdx.json
           syft "${IMAGE}@${DIGEST}" -o cyclonedx-json=sbom.cdx.json
           cosign attach sbom --sbom sbom.spdx.json "${IMAGE}@${DIGEST}"
-          cosign attest --yes --predicate sbom.spdx.json --type spdx "${IMAGE}@${DIGEST}"
-          cosign attest --yes --predicate sbom.cdx.json --type cyclonedx "${IMAGE}@${DIGEST}"
+          attest_with_retry() {
+            local predicate="$1"
+            local type="$2"
+            local delays="30 60 120 180"
+            local attempt=1
+            for d in $delays end; do
+              if cosign attest --yes --predicate "${predicate}" --type "${type}" "${IMAGE}@${DIGEST}"; then
+                return 0
+              fi
+              if [ "$d" = "end" ]; then
+                echo "::warning::cosign attest (${type}) failed after ${attempt} attempts; continuing without ${type} SBOM attestation."
+                return 0
+              fi
+              echo "attest ${type} failed; sleeping ${d}s..."
+              sleep "$d"
+              attempt=$((attempt + 1))
+            done
+          }
+          attest_with_retry sbom.spdx.json spdx
+          attest_with_retry sbom.cdx.json cyclonedx
 
   # ------------------------------------------------------------------
   # Package the Helm chart, push it to the `gh-pages` branch, and
