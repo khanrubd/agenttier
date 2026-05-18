@@ -271,6 +271,36 @@ class FilesAPI:
         self._put_bytes(path, payload)
         return len(payload)
 
+    def archive(self, destination: str, path: str = "/workspace") -> int:
+        """Download a directory tree as a streamed ``.zip`` to ``destination``.
+
+        Mirrors the Web UI's "Download workspace as zip" button. The Router
+        builds the zip on the fly by piping ``tar -cf - -C <path> .`` through
+        ``archive/zip`` server-side, so this works on every sandbox image
+        (no in-pod ``zip`` binary needed). The endpoint is locked to the
+        ``/workspace`` subtree.
+
+        Returns the number of compressed bytes written. Streaming keeps memory
+        bounded for large workspaces — the file size on disk is the only real
+        constraint (default soft cap is 5 GiB; larger archives are truncated
+        with a logged warning on the Router).
+        """
+        if not path:
+            raise ValueError("path must be a non-empty string")
+        written = 0
+        with self._http.stream(
+            "GET",
+            f"/sandboxes/{self._sandbox.id}/archive",
+            params={"path": path},
+        ) as resp:
+            raise_for_status(resp)
+            with open(destination, "wb") as fh:
+                for chunk in resp.iter_bytes():
+                    if chunk:
+                        fh.write(chunk)
+                        written += len(chunk)
+        return written
+
     def _put_bytes(self, path: str, payload: bytes) -> None:
         stripped = path.lstrip("/")
         if not stripped:

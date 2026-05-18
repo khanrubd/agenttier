@@ -141,3 +141,67 @@ async def test_async_files_list_and_read(httpx_mock: HTTPXMock) -> None:
         data = await sb.files.read("/workspace/a.txt")
     assert [e.name for e in entries] == ["a.txt"]
     assert data == b"a"
+
+
+def test_files_archive_streams_to_destination(tmp_path, httpx_mock: HTTPXMock) -> None:
+    _register_get_sandbox(httpx_mock)
+    # The Router's /archive endpoint streams a real .zip; for the SDK
+    # contract we just need to verify (a) the right URL is hit, (b) the
+    # path query param is forwarded, and (c) bytes are written verbatim
+    # to the destination. We use a sentinel byte string in place of a
+    # real zip file — the SDK does not parse the stream.
+    payload = b"PK\x03\x04 fake-zip-bytes"
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{API_URL}/api/v1/sandboxes/sb1/archive?path=%2Fworkspace",
+        content=payload,
+        headers={"Content-Type": "application/zip"},
+    )
+    out = tmp_path / "ws.zip"
+    with AgentTierClient(api_url=API_URL) as client:
+        sb = client.get_sandbox("sb1")
+        n = sb.files.archive(str(out))
+    assert n == len(payload)
+    assert out.read_bytes() == payload
+
+
+def test_files_archive_forwards_subpath(tmp_path, httpx_mock: HTTPXMock) -> None:
+    _register_get_sandbox(httpx_mock)
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{API_URL}/api/v1/sandboxes/sb1/archive?path=%2Fworkspace%2Fsrc",
+        content=b"PK\x03\x04",
+    )
+    out = tmp_path / "src.zip"
+    with AgentTierClient(api_url=API_URL) as client:
+        sb = client.get_sandbox("sb1")
+        n = sb.files.archive(str(out), path="/workspace/src")
+    assert n == 4
+
+
+def test_files_archive_rejects_empty_path(httpx_mock: HTTPXMock) -> None:
+    _register_get_sandbox(httpx_mock)
+    with AgentTierClient(api_url=API_URL) as client:
+        sb = client.get_sandbox("sb1")
+        with pytest.raises(ValueError):
+            sb.files.archive("/tmp/x.zip", path="")
+
+
+@pytest.mark.asyncio
+async def test_async_files_archive(tmp_path, httpx_mock: HTTPXMock) -> None:
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{API_URL}/api/v1/sandboxes/sb1",
+        json=_SANDBOX_RESP,
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=f"{API_URL}/api/v1/sandboxes/sb1/archive?path=%2Fworkspace",
+        content=b"PKzip",
+    )
+    out = tmp_path / "ws.zip"
+    async with AsyncAgentTierClient(api_url=API_URL) as client:
+        sb = await client.get_sandbox("sb1")
+        n = await sb.files.archive(str(out))
+    assert n == 5
+    assert out.read_bytes() == b"PKzip"

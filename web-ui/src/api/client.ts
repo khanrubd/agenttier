@@ -315,6 +315,14 @@ export function downloadFileUrl(sandboxId: string, fullPath: string): string {
   return `${API_BASE}/sandboxes/${sandboxId}/files/${stripped}`;
 }
 
+// archiveUrl returns a URL the browser can GET to receive a streamed .zip
+// of the directory rooted at `path` (default /workspace). The Router enforces
+// that the path lives under /workspace; anything else returns 400.
+export function archiveUrl(sandboxId: string, path = '/workspace'): string {
+  const q = new URLSearchParams({ path });
+  return `${API_BASE}/sandboxes/${sandboxId}/archive?${q}`;
+}
+
 // --- Agent mode (Phase 10) ---
 
 // SSE event payload as the Router emits it. We surface the raw event name +

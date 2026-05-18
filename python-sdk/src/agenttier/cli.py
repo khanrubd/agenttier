@@ -370,6 +370,14 @@ def cmd_files_download(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_files_archive(args: argparse.Namespace) -> int:
+    with _client(args) as client:
+        sandbox = client.get_sandbox(args.sandbox_id)
+        n = sandbox.files.archive(args.output, args.path)
+    sys.stdout.write(f"archived {args.path} to {args.output} ({n} bytes)\n")
+    return 0
+
+
 def cmd_files_write(args: argparse.Namespace) -> int:
     if args.data is not None:
         payload: bytes | str = args.data
@@ -682,6 +690,22 @@ def build_parser() -> argparse.ArgumentParser:
     p_dn.add_argument("remote", help="Sandbox source path")
     p_dn.add_argument("local", help="Local destination path")
     p_dn.set_defaults(func=cmd_files_download)
+
+    p_arc = sub_files.add_parser(
+        "archive",
+        help="Download a sandbox directory as a streamed .zip (default /workspace)",
+    )
+    _add_global_flags(p_arc)
+    p_arc.add_argument("sandbox_id")
+    p_arc.add_argument(
+        "-o", "--output", required=True, help="Local path for the .zip output"
+    )
+    p_arc.add_argument(
+        "--path",
+        default="/workspace",
+        help="Sandbox directory to archive (must live under /workspace)",
+    )
+    p_arc.set_defaults(func=cmd_files_archive)
 
     p_wr = sub_files.add_parser("write", help="Write inline content into a sandbox file")
     _add_global_flags(p_wr)

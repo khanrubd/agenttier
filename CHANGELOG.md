@@ -7,6 +7,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.4.1] — 2026-05-17
+
+### Added
+
+- **Hierarchical file browser + workspace zip download.** The Web UI Settings page Files panel now lets you click into folders, breadcrumb back, download a single file, download a single folder as a `.zip`, or download the entire workspace as `.zip`. New streaming Router endpoint `GET /api/v1/sandboxes/{id}/archive?path=/workspace[/subdir]` execs `tar -cf - -C <path> .` in the pod and re-encodes to a real `.zip` on the fly using Go's `archive/zip` — no `zip` binary required in any sandbox image, no full-archive buffering in the Router (one tar entry's deflate window at a time). Locked to the `/workspace` subtree. Soft cap of 5 GiB per archive. Mirror surface in the SDK (`sandbox.files.archive(destination, path="/workspace")` on both sync and async clients) and Python CLI (`agenttier sandbox files archive <id> -o ws.zip [--path /workspace/sub]`). Closes the hierarchical-file-browser item on the project board.
+- **Chromium / Playwright runtime libs baked into `sandbox-claude-code`.** The Dockerfile now installs the canonical Microsoft Playwright Chromium dep set (`libnss3`, `libnspr4`, `libatk1.0-0`, `libatk-bridge2.0-0`, `libatspi2.0-0`, `libcups2`, `libdbus-1-3`, `libdrm2`, `libegl1`, `libgbm1`, `libglib2.0-0`, `libgtk-3-0`, `libxkbcommon0`, `libxcomposite1`, `libxdamage1`, `libxfixes3`, `libxrandr2`, `libx11-6`, `libx11-xcb1`, `libxcb1`, `libxext6`, `libxshmfence1`, `libasound2`, `libpango-1.0-0`, `libcairo2`, `fonts-liberation`). Agents running inside Claude Code can now run `npx playwright install chromium` and launch a headless Chromium without needing root or write access to the read-only sandbox rootfs. The Chromium binary itself still downloads to the writable PVC at `/workspace/.cache/ms-playwright/`, where it persists across stop/resume.
+
+### Fixed
+
+- **Claude Code Bash tool wedged after failed self-update.** The `sandbox-claude-code` image now sets `ENV DISABLE_AUTOUPDATER=1` and `ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. Sandbox pods run with a read-only root filesystem (security hardening), so Claude Code's `npm install -g @anthropic-ai/claude-code` self-update attempt at every launch failed with EROFS — and Claude Code v2.1.x has a known regression where a failed self-update leaves its persistent Bash tool's bash subprocess in a wedged state, returning exit 1 with no output for every command (`whoami`, `pwd`, anything). Disabling the auto-updater entirely sidesteps the doomed code path; the version pinned at image build time is the only one that ever runs, matching the release discipline of every other reference image. Reproduced on the live cluster from the user-visible `✗ Auto-update failed · Try claude doctor` banner; verified post-fix with the `dev-archive-claude` and `dev-chromium` builds.
+
 ## [v0.4.0] — 2026-05-17
 
 ### Added

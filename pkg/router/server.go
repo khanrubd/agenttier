@@ -140,6 +140,9 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	api.HandleFunc("/sandboxes/{id}/files/", s.handleListFiles).Methods("GET")
 	api.HandleFunc("/sandboxes/{id}/files/{path:.*}", s.handleGetFile).Methods("GET")
 	api.HandleFunc("/sandboxes/{id}/files/{path:.*}", s.handlePutFile).Methods("PUT")
+	// Streaming archive download. /archive?path=/workspace[/subdir] returns
+	// a real .zip with the subtree contents. Path is locked to /workspace.
+	api.HandleFunc("/sandboxes/{id}/archive", s.handleArchive).Methods("GET")
 
 	// Port forwarding
 	api.HandleFunc("/sandboxes/{id}/ports", s.handleListPorts).Methods("GET")

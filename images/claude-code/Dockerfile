@@ -30,8 +30,21 @@ FROM public.ecr.aws/docker/library/node:20-bookworm
 ARG TARGETARCH
 
 # System dependencies
+# The libNN* packages are the canonical Playwright/Chromium runtime deps for
+# Debian Bookworm (matches Microsoft's `mcr.microsoft.com/playwright` image
+# Chromium dep set, see playwright-core/src/server/registry/nativeDeps.ts).
+# These are baked at build time so the read-only sandbox rootfs already
+# has everything Chromium needs — agents only download the Chromium binary
+# itself at runtime via `npx playwright install chromium`, which lands in
+# the writable PVC under /workspace/.cache.
 RUN apt-get update && apt-get install -y --no-install-recommends \
     bash curl git unzip python3 python3-pip ca-certificates openssh-client sudo tmux \
+    fonts-liberation \
+    libnss3 libnspr4 libatk1.0-0 libatk-bridge2.0-0 libatspi2.0-0 \
+    libcups2 libdbus-1-3 libdrm2 libegl1 libgbm1 libglib2.0-0 libgtk-3-0 \
+    libxkbcommon0 libxcomposite1 libxdamage1 libxfixes3 libxrandr2 \
+    libx11-6 libx11-xcb1 libxcb1 libxext6 libxshmfence1 \
+    libasound2 libpango-1.0-0 libcairo2 \
     && rm -rf /var/lib/apt/lists/*
 
 # AWS CLI v2 — select the right bundle per architecture.
@@ -65,6 +78,28 @@ RUN mkdir -p /workspace && chown sandbox:sandbox /workspace
 ENV CLAUDE_CODE_USE_BEDROCK=1
 ENV AWS_DEFAULT_REGION=us-east-1
 ENV HOME=/workspace
+
+# Disable Claude Code's self-updater. Sandbox pods run with a read-only
+# root filesystem (security hardening, see pod_builder.go), so the
+# auto-update path can never succeed — npm install -g would try to write
+# to /usr/local/lib/node_modules and fail with EROFS. When that happens
+# Claude Code v2.1.x leaves its persistent Bash tool's bash subprocess
+# in a broken state where every subsequent command returns exit 1 with
+# no output, even simple ones like `whoami` and `pwd`. The user-visible
+# symptom is "Bash tool stops working mid-session" with the
+# `✗ Auto-update failed · Try claude doctor` banner on the title bar.
+#
+# DISABLE_AUTOUPDATER skips the upgrade attempt entirely; the version
+# baked into this image (pinned via the npm install -g above) is the
+# only one that ever runs. Operators who want a newer Claude Code
+# rebuild this image with a newer pin and roll the cluster — the same
+# release discipline they apply to every other reference image.
+#
+# CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC also turns off telemetry +
+# version-check pings on every prompt, which is good hygiene for
+# air-gapped or deny-by-default-egress sandboxes.
+ENV DISABLE_AUTOUPDATER=1
+ENV CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1
 
 USER sandbox
 WORKDIR /workspace

@@ -37,6 +37,7 @@ What AgentTier ships today, grouped by what you probably need first.
 
 - **Browser terminal** — full PTY over WebSocket with xterm.js. Resize, ANSI colors, paste, copy, and a 30-second reconnection window for network blips.
 - **Non-interactive exec** — `POST /api/v1/sandboxes/{id}/exec` returns `stdout` / `stderr` / `exitCode`. Matches how the SDK's `sandbox.exec()` is wired.
+- **Hierarchical file browser** — Web UI Settings page lets you click into folders, breadcrumb back, download a single file, download a single folder as `.zip`, or download the entire workspace as `.zip`. The archive endpoint streams the tree directly: Router execs `tar` in the pod and re-encodes to zip on the fly via Go's `archive/zip`, so no in-pod `zip` binary is needed and large workspaces stream end-to-end without buffering. Locked to the `/workspace` subtree. Mirror surface in the SDK (`sandbox.files.archive(...)`) and CLI (`agenttier sandbox files archive ...`).
 - **Port forwarding** — expose any container port with one click (Web UI) or one API call. AgentTier creates a ClusterIP Service, adds an Ingress when a preview domain is configured, and also offers an authenticated in-Router reverse proxy so users can reach ports even without DNS. See [Port forwarding](port-forwarding.md).
 
 ## Multi-tenancy and governance
@@ -79,7 +80,7 @@ What AgentTier ships today, grouped by what you probably need first.
 
 ## What is not here yet
 
-Roadmap items that are *not* shipped in v0.4.0 and will return real errors or missing features if you rely on them:
+Roadmap items that are *not* shipped in v0.4.1 and will return real errors or missing features if you rely on them:
 
 - Sharing and collaboration (viewer/collaborator roles, expiring share links) — planned for 0.2.x.
 - File transfer API — planned for 0.2.x.

@@ -82,7 +82,7 @@ metadata:
 spec:
   mode: agent
   image:
-    repository: ghcr.io/agenttier/sandbox-langgraph:v0.4.0
+    repository: ghcr.io/agenttier/sandbox-langgraph:v0.4.1
   harness:
     workingDir: /workspace
     agent:

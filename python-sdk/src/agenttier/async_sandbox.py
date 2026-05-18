@@ -189,6 +189,28 @@ class AsyncFilesAPI:
         await self._put_bytes(path, payload)
         return len(payload)
 
+    async def archive(self, destination: str, path: str = "/workspace") -> int:
+        """Async twin of :meth:`agenttier.sandbox.FilesAPI.archive`.
+
+        Streams a ``.zip`` of the directory tree at ``path`` to ``destination``.
+        See the sync docstring for the full contract.
+        """
+        if not path:
+            raise ValueError("path must be a non-empty string")
+        written = 0
+        async with self._http.stream(
+            "GET",
+            f"/sandboxes/{self._sandbox.id}/archive",
+            params={"path": path},
+        ) as resp:
+            raise_for_status(resp)
+            with open(destination, "wb") as fh:
+                async for chunk in resp.aiter_bytes():
+                    if chunk:
+                        fh.write(chunk)
+                        written += len(chunk)
+        return written
+
     async def _put_bytes(self, path: str, payload: bytes) -> None:
         stripped = path.lstrip("/")
         if not stripped:

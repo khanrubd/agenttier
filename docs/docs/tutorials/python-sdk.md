@@ -27,7 +27,7 @@ Then in Python:
 from agenttier import AgentTierClient
 
 client = AgentTierClient(api_url="http://localhost:8081")
-print(client.health())  # {"status": "ok", "version": "0.4.0"}
+print(client.health())  # {"status": "ok", "version": "0.4.1"}
 ```
 
 The client auto-detects credentials in this order: explicit `api_key=` / `bearer_token=` / `kubeconfig=` arguments → `AGENTTIER_API_KEY` env var → `AGENTTIER_BEARER_TOKEN` env var → in-cluster service account → kubeconfig. For a port-forwarded dev cluster with the auth bypass on, no credentials are needed.

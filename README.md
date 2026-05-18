@@ -90,13 +90,14 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 - **One-click sandbox management** — dashboard cards show name, status, mode (Code or Agent), and key metadata; primary actions (Open Terminal / Stop / Resume / Delete) sit on the card; a gear icon opens a per-sandbox settings page at `/sandbox/<id>/settings` for ports, files, agent invoke, and (in time) governance overrides, network rules, and other deeper controls.
 - **Cluster glance** — the left nav shows live node + pod counts plus headroom spare and warm-pool size, with a green dot when Cluster Autoscaler is running. Refreshes every ten seconds without polling the dashboard.
 - **Per-template warm pools, edited in place** — the Settings page lets operators add and remove warm-pool entries one template at a time, see ready / pending / target counts per pool, and tune the optional headroom Deployment's replica count and per-replica CPU and memory without `helm upgrade`.
+- **Hierarchical workspace browser** — the Files panel on the per-sandbox settings page lets users click into folders, breadcrumb back, download a single file, download a single folder as `.zip`, or download the entire workspace as `.zip`. The archive endpoint streams `tar` from the pod and re-encodes to zip on the fly server-side, so it works on every sandbox image without extra binaries.
 - **Browser-based admin** — YAML template editor, time-ordered activity log with filters, live metrics + monthly cost estimator, and a Settings page for governance policies, warm pools, and cluster autoscaling.
 
 ### Client tooling
 
-- **`pip install agenttier`** — installs both the Python SDK (sync + async, typed models, auto-detected auth, streaming file transfers, opt-in retry layer with backoff and `Retry-After`) and the same `agenttier` shell command on PATH.
+- **`pip install agenttier`** — installs both the Python SDK (sync + async, typed models, auto-detected auth, streaming file transfers including workspace archive download, opt-in retry layer with backoff and `Retry-After`) and the same `agenttier` shell command on PATH.
 - **Cross-platform CLI** — Go binary for sandbox and template management distributed for linux / darwin / windows on amd64 + arm64; the `pip` install gives you the same command tree without the Go dependency.
-- **REST API** — documented endpoints for sandboxes, templates, governance, audit, sharing, port forwarding, files, configure, and invoke.
+- **REST API** — documented endpoints for sandboxes, templates, governance, audit, sharing, port forwarding, files, archive (workspace as zip), configure, and invoke.
 
 ### Performance and observability
 

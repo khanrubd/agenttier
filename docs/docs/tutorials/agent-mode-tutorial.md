@@ -44,7 +44,7 @@ kubectl wait --for=jsonpath='{.status.phase}'=Running \
   sandbox/agent-tutorial --timeout=180s
 ```
 
-The `langgraph-agent` template sets `mode: agent` and points at `ghcr.io/agenttier/sandbox-langgraph:v0.4.0`, which preinstalls Python 3.11, LangGraph, LangChain, httpx, and the `mem0` client.
+The `langgraph-agent` template sets `mode: agent` and points at `ghcr.io/agenttier/sandbox-langgraph:v0.4.1`, which preinstalls Python 3.11, LangGraph, LangChain, httpx, and the `mem0` client.
 
 ## 3. Configure with your agent code
 
