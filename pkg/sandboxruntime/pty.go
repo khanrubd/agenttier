@@ -527,7 +527,12 @@ func buildPTYCommand(req PTYRequest) []string {
 	// pkg/controller/pod_builder.go's tmpVolumeName).
 	tmuxConfigPath := "/tmp/.agenttier-tmux.conf"
 	tmuxConfig := "set -g status off\n" +
-		"set -g default-terminal \"tmux-256color\"\n"
+		"set -g default-terminal \"tmux-256color\"\n" +
+		// Strip smcup/rmcup so alt-screen apps (Claude Code, vim, less)
+		// run in the main buffer; xterm.js scrolls natively, selection
+		// works. See pkg/router/terminal/bridge.go for the long form
+		// of this comment — kept in sync across both transports.
+		"set -ga terminal-overrides 'xterm*:smcup@:rmcup@'\n"
 	writeConfig := "printf '%s' " + ptyShellQuote(tmuxConfig) + " > " + tmuxConfigPath
 	tmuxCmd := "exec tmux -u -2 -f " + tmuxConfigPath + " new-session -A -s " + sessionQuoted + " -- " + shellQuoted + " -l"
 	fallbackCmd := "exec " + shellQuoted + " -l"

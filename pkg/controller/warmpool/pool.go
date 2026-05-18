@@ -647,6 +647,16 @@ func (r *Reconciler) createPoolPod(ctx context.Context, templateName string) err
 					Env:   envVars,
 					VolumeMounts: []corev1.VolumeMount{
 						{Name: "workspace", MountPath: "/workspace"},
+						// Writable in-memory /tmp matches what the cold-
+						// start path's pod_builder mounts. Required by
+						// tmux (couldn't create /tmp/tmux-1000 otherwise),
+						// pip, npm, and any tool that uses mkstemp(3) on
+						// our read-only-rootfs sandbox containers. Without
+						// this, claiming a warm pool pod gave the user a
+						// /tmp-less environment that broke the browser
+						// terminal entirely. Mirror what
+						// pkg/controller/pod_builder.go does.
+						{Name: "tmp", MountPath: "/tmp"},
 					},
 					ImagePullPolicy: corev1.PullIfNotPresent,
 				},
@@ -657,6 +667,18 @@ func (r *Reconciler) createPoolPod(ctx context.Context, templateName string) err
 					VolumeSource: corev1.VolumeSource{
 						PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 							ClaimName: pvcName,
+						},
+					},
+				},
+				{
+					// 256 MiB in-memory tmpfs at /tmp. Same sizing as the
+					// cold-start path uses for tmpVolumeSizeLimit. Anything
+					// the user wants to keep belongs in /workspace anyway.
+					Name: "tmp",
+					VolumeSource: corev1.VolumeSource{
+						EmptyDir: &corev1.EmptyDirVolumeSource{
+							Medium:    corev1.StorageMediumMemory,
+							SizeLimit: ptrQuantity("256Mi"),
 						},
 					},
 				},
@@ -747,6 +769,13 @@ func isPodReady(pod *corev1.Pod) bool {
 func mustParseQuantity(s string) resource.Quantity {
 	q, _ := resource.ParseQuantity(s)
 	return q
+}
+
+// ptrQuantity returns a *resource.Quantity for the given size string.
+// emptyDir's SizeLimit is a pointer so we need an addressable value.
+func ptrQuantity(s string) *resource.Quantity {
+	q := mustParseQuantity(s)
+	return &q
 }
 
 func min(a, b int) int {

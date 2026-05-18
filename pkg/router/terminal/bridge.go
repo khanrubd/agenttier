@@ -332,7 +332,18 @@ func buildShellCommand(session *Session) []string {
 	// connect since it's tiny and the pod's /tmp is per-Pod ephemeral.
 	tmuxConfigPath := "/tmp/.agenttier-tmux.conf"
 	tmuxConfig := "set -g status off\n" +
-		"set -g default-terminal \"tmux-256color\"\n"
+		"set -g default-terminal \"tmux-256color\"\n" +
+		// Strip smcup/rmcup from xterm-family terminals so Claude Code,
+		// vim, less etc. NEVER enter the alt-screen. Their output flows
+		// into the main buffer instead, which xterm.js scrolls natively
+		// via the browser's mouse wheel — no tmux mouse mode needed,
+		// selection-to-clipboard still works. Trade-off: when an alt-
+		// screen app exits, its last frame stays in scrollback rather
+		// than uncovering the previous prompt; most users prefer this.
+		// Canonical fix from the tmux community since ~2011; cited in
+		// stackoverflow #22550854, superuser #1737355, and dozens of
+		// dotfile gists.
+		"set -ga terminal-overrides 'xterm*:smcup@:rmcup@'\n"
 	writeConfig := "printf '%s' " + shellQuote(tmuxConfig) + " > " + tmuxConfigPath
 	tmuxCmd := "exec tmux -u -2 -f " + tmuxConfigPath + " new-session -A -s " + shellQuote(sessionName) + " -- " + shellQuoted + " -l"
 	fallbackCmd := "exec " + shellQuoted + " -l"

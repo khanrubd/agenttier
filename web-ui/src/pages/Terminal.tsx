@@ -184,31 +184,28 @@ export default function Terminal() {
       console.warn('xterm WebGL renderer failed, falling back to DOM:', err);
     }
 
-    // Mouse-wheel handling: xterm.js' default behavior in alt-screen mode
-    // is to convert wheel-up/down into Up/Down arrow keystrokes so apps
-    // like `less` and `vim` can scroll without configuring a scrollback.
-    // For Claude Code (Ink-based REPL using the alt-screen) that has a
-    // very different effect: the prompt input maps Up/Down to history
-    // navigation, so mouse-wheel ends up cycling through previous
-    // prompts instead of scrolling the visible viewport.
+    // Mouse-wheel handling note: the previous version of this file
+    // intercepted wheel events in alt-screen mode because xterm.js'
+    // default behavior was to convert wheel-up/down into Up/Down arrow
+    // keystrokes (so apps like `less` and `vim` could scroll without a
+    // scrollback). For Claude Code that mapped to history navigation in
+    // the prompt input — wheel ended up cycling through previous prompts.
     //
-    // xterm v5.3 doesn't expose `attachCustomWheelEventHandler` (added
-    // in v5.4 of the `@xterm/xterm` package), so we intercept the wheel
-    // event at the DOM level. When we're on the alt-screen, stopPropagation
-    // prevents xterm from translating the wheel into arrow keys. On the
-    // main buffer (bash prompt) we let the event through so the native
-    // scrollback works.
+    // We now solve the problem at the tmux layer instead. The tmux config
+    // in pkg/router/terminal/bridge.go (and pkg/sandboxruntime/pty.go)
+    // adds `terminal-overrides 'xterm*:smcup@:rmcup@'`, which strips the
+    // alt-screen capability from the terminfo tmux exposes to its
+    // children. Apps that would have entered alt-screen now run in the
+    // main buffer, all output flows into xterm.js' scrollback, and the
+    // browser's native mouse wheel scrolls history without any custom
+    // event handling.
     //
-    // The wheel listener attaches to the terminal container; xterm's own
-    // listener attaches to the inner xterm-screen div, so capture-phase
-    // is required to win the race.
-    const wheelHandler = (e: WheelEvent) => {
-      const buf = term.buffer.active;
-      if (buf && buf.type === 'alternate') {
-        e.stopPropagation();
-      }
-    };
-    terminalRef.current.addEventListener('wheel', wheelHandler, { capture: true });
+    // No wheelHandler installed here on purpose — let xterm.js do its
+    // default thing. If we ever support a deployment without tmux (the
+    // fallback path in buildShellCommand), we'd want to bring back the
+    // suppression — but currently every reference image ships tmux and
+    // the fallback runs only on custom user images, where the user has
+    // already opted into bringing-their-own-shell semantics.
 
     term.onData((data) => {
       const ws = wsRef.current;
@@ -228,9 +225,6 @@ export default function Terminal() {
 
     return () => {
       window.removeEventListener('resize', handleResize);
-      if (terminalRef.current) {
-        terminalRef.current.removeEventListener('wheel', wheelHandler, { capture: true });
-      }
       if (reconnectTimerRef.current) clearTimeout(reconnectTimerRef.current);
       if (clientPingTimerRef.current) clearInterval(clientPingTimerRef.current);
       if (heartbeatCheckTimerRef.current) clearInterval(heartbeatCheckTimerRef.current);
