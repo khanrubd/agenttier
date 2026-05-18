@@ -59,6 +59,7 @@ nav:
     - Python SDK: sdk.md
   - Operations:
     - Verifying images: verifying-images.md
+    - Scaling: scaling.md
     - Troubleshooting: troubleshooting.md
 
 markdown_extensions:

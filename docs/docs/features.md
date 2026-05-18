@@ -73,6 +73,7 @@ What AgentTier ships today, grouped by what you probably need first.
 - **Single Helm chart** — one `helm install agenttier agenttier/agenttier` deploys controller, router, web UI, CRDs, RBAC, and all opt-ins.
 - **Multi-cluster** — works on EKS, GKE, AKS, kind, and any self-managed Kubernetes 1.27+ with NetworkPolicy-capable CNI.
 - **Leader-elected HA** — multi-replica controller with Lease-based election. Graceful degradation for non-critical dependency failures (e.g. can't reach OTel collector).
+- **Cluster autoscaling out of the box** — opt-in upstream Cluster Autoscaler installs cloud-neutral via Helm (works on EKS, GKE, AKS, OpenStack, Cluster API). Pair with the `headroom` Deployment for N+1 spare-node capacity: pause Pods at negative priority squat on a spare node, sandboxes preempt them instantly, evicted Pods trigger a fresh node in the background. See [Scaling](scaling.md) for sizing math + cost trade-offs.
 - **Kubernetes-native state** — defaults to Kubernetes etcd + Events + ConfigMaps for all state. An optional SQL backend (Postgres / MySQL / SQLite) is on the roadmap for compliance-driven long-term retention.
 - **Terraform** — EKS / GKE / AKS modules under [`terraform/`](https://github.com/agenttier/agenttier/tree/main/terraform) for fully-provisioned reference deployments.
 

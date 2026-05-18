@@ -7,6 +7,7 @@ import { useParams, Link } from 'react-router-dom';
 import { useEffect, useRef, useState, useCallback } from 'react';
 import { Terminal as XTerm } from 'xterm';
 import { FitAddon } from 'xterm-addon-fit';
+import { WebglAddon } from 'xterm-addon-webgl';
 import 'xterm/css/xterm.css';
 
 // WebSocket URL — auto-detected from current origin in production.
@@ -155,6 +156,31 @@ export default function Terminal() {
     term.loadAddon(fitAddon);
     term.open(terminalRef.current);
     fitAddon.fit();
+
+    // WebGL renderer collapses each redraw into a single GPU blit so
+    // full-screen TUI updates (Claude Code parallel work, vim, htop) don't
+    // flicker through partial-row paints on the main thread. The default
+    // DOM renderer paints character-by-character and the user sees a brief
+    // white-then-redraw on every \x1b[2J + reprint cycle.
+    //
+    // Loading the addon can throw on browsers without WebGL or in
+    // headless contexts (some Playwright tests, certain VPN inspection
+    // proxies). Catch and fall back silently — the DOM renderer is the
+    // automatic fallback and the terminal stays usable.
+    //
+    // onContextLoss disposes the addon when the GPU context is dropped
+    // (tab put in background long enough for the OS to reclaim, GPU
+    // driver crash). After dispose() the terminal also falls back to
+    // the DOM renderer.
+    try {
+      const webgl = new WebglAddon();
+      webgl.onContextLoss(() => webgl.dispose());
+      term.loadAddon(webgl);
+    } catch (err) {
+      // Don't crash the page on a renderer failure — the DOM renderer
+      // is an automatic, working fallback.
+      console.warn('xterm WebGL renderer failed, falling back to DOM:', err);
+    }
 
     term.onData((data) => {
       const ws = wsRef.current;

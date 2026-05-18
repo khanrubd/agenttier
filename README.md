@@ -104,10 +104,11 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 
 ### Deployment and operations
 
-- **Single Helm chart** — one `helm install` deploys controller, router, web UI, CRDs, RBAC, and optional add-ons (gVisor, ServiceMonitor, PDB, image pre-pull, OTel Collector, mem0 sidecar, rate limiting).
+- **Single Helm chart** — one `helm install` deploys controller, router, web UI, CRDs, RBAC, and optional add-ons (gVisor, ServiceMonitor, PDB, image pre-pull, OTel Collector, mem0 sidecar, rate limiting, cluster autoscaler, headroom).
 - **Production load-balancer support** — opt-in Ingress template with AWS Load Balancer Controller defaults (4000 s idle timeout, sticky sessions, IP allow-list); compatible with ingress-nginx and Traefik via a single override.
 - **Multi-cluster ready** — runs on EKS, GKE, AKS, and self-managed Kubernetes 1.27+ on any CNI with NetworkPolicy support.
 - **Highly available** — multi-replica controllers with leader election; multi-replica router with HTTP-routed exec, files, and invoke so any replica can serve any request.
+- **Cluster autoscaling out of the box** — opt-in upstream Cluster Autoscaler installs cloud-neutral via Helm (works on EKS, GKE, AKS, OpenStack, Cluster API). Pair it with the `headroom` Deployment to keep N+1 spare-node capacity warm: pause Pods at negative priority squat on a spare node, real sandboxes preempt them instantly, the evicted Pods trigger CAS to add the next spare in the background. Sandboxes never wait on a cold ASG round-trip.
 - **Container images you can verify** — every image is multi-arch, cosign-signed via GitHub Actions OIDC, and ships SPDX + CycloneDX SBOMs as OCI attestations.
 
 ### On the roadmap
