@@ -5,7 +5,7 @@ Full command reference for the `agenttier` CLI. The CLI is distributed two ways:
 - **`pip install agenttier`** — pure-Python CLI installed alongside the SDK. Works on any platform with Python 3.10+.
 - **GitHub Releases** — native Go binaries (`linux/darwin/windows × amd64/arm64`) for users who do not want a Python runtime.
 
-Both share the same command surface and flag names. This reference matches the v0.3.5 release.
+Both share the same command surface and flag names. This reference matches the v0.4.0 release.
 
 For tutorials, see [Web UI walkthrough](tutorials/web-ui.md), [Python SDK walkthrough](tutorials/python-sdk.md), and [Agent mode in depth](tutorials/agent-mode-tutorial.md).
 

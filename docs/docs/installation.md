@@ -50,7 +50,7 @@ security:
 
 defaults:
   sandbox:
-    image: "ghcr.io/agenttier/sandbox-general:v0.3.5"
+    image: "ghcr.io/agenttier/sandbox-general:v0.4.0"
     resources:
       requests:
         cpu: "500m"

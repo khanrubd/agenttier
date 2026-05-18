@@ -96,7 +96,7 @@ defaults:
   sandbox:
     # Defaults to the chart's appVersion when the tag is omitted at render
     # time. Users can override to pin a specific image.
-    image: ghcr.io/agenttier/sandbox-general:v0.3.5
+    image: ghcr.io/agenttier/sandbox-general:v0.4.0
     resources:
       requests:
         cpu: 500m
@@ -111,7 +111,7 @@ defaults:
     timeout: 8h
     idleTimeout: 1h
   claudeCode:
-    image: ghcr.io/agenttier/sandbox-claude-code:v0.3.5
+    image: ghcr.io/agenttier/sandbox-claude-code:v0.4.0
     # IRSA role ARN for Bedrock access (annotated on sandbox ServiceAccount)
     irsaRoleArn: ""
   langgraph:
@@ -119,7 +119,7 @@ defaults:
     # LangGraph + LangChain + httpx + the mem0 client. Pair with the
     # `langgraph-agent` default template (helm/agenttier/templates/
     # default-templates.yaml) to spin up an agent in one apply.
-    image: ghcr.io/agenttier/sandbox-langgraph:v0.3.5
+    image: ghcr.io/agenttier/sandbox-langgraph:v0.4.0
 
 # --- Networking ---
 networking:

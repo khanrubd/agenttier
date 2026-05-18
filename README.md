@@ -75,7 +75,7 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 
 ### Interactive access
 
-- **Browser terminal that survives drops** — full PTY over WebSocket with reconnect, plus an in-pod terminal endpoint that bypasses the Kubernetes API server so long sessions survive load-balancer and apiserver-side timeouts; a tmux wrap keeps the same shell across reconnects.
+- **Browser terminal that survives drops** — full PTY over WebSocket with reconnect, plus an in-pod terminal endpoint (`/pty` on each sandbox) that bypasses the Kubernetes API server so long sessions survive load-balancer and apiserver-side timeouts; a tmux wrap keeps the same shell across reconnects, and tmux's alt-screen capability is stripped so fullscreen TUIs (Claude Code, vim, less) write into the browser scrollback instead of swallowing history.
 - **Run commands programmatically** — fire-and-forget or request-response exec, file upload/download/list, and port forwarding with authenticated previews through the Router; ports also surface as Ingress URLs when a preview domain is configured.
 
 ### Multi-tenancy and governance
@@ -87,8 +87,10 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 
 ### Web UI
 
-- **One-click sandbox management** — dashboard cards show status, template, age and run Stop / Resume / Delete / Open Terminal; running cards expose inline Files and Port-forward panels.
-- **Browser-based admin** — YAML template editor, time-ordered activity log with filters, live metrics + monthly cost estimator, and a Settings page for governance policies and warm-pool sizing.
+- **One-click sandbox management** — dashboard cards show name, status, mode (Code or Agent), and key metadata; primary actions (Open Terminal / Stop / Resume / Delete) sit on the card; a gear icon opens a per-sandbox settings page at `/sandbox/<id>/settings` for ports, files, agent invoke, and (in time) governance overrides, network rules, and other deeper controls.
+- **Cluster glance** — the left nav shows live node + pod counts plus headroom spare and warm-pool size, with a green dot when Cluster Autoscaler is running. Refreshes every ten seconds without polling the dashboard.
+- **Per-template warm pools, edited in place** — the Settings page lets operators add and remove warm-pool entries one template at a time, see ready / pending / target counts per pool, and tune the optional headroom Deployment's replica count and per-replica CPU and memory without `helm upgrade`.
+- **Browser-based admin** — YAML template editor, time-ordered activity log with filters, live metrics + monthly cost estimator, and a Settings page for governance policies, warm pools, and cluster autoscaling.
 
 ### Client tooling
 

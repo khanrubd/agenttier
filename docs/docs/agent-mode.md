@@ -139,9 +139,9 @@ Argv and stdin payloads are deliberately not recorded — they may contain secre
 ## Limits and trade-offs
 
 - **CPU only.** Phase 10 explicitly does not add GPU support. Resource overrides at `/configure` time are also deferred. Both are tracked for follow-up releases.
-- **Single Router replica for cancel routing.** The in-process invoke registry means `/invoke/cancel` only works against the Router instance that started the invoke. Multi-replica routers (rare today) would need a sticky-session ALB or a real registry; not blocking for v0.3.5.
-- **No payload audit by default.** Argv and stdin are intentionally excluded from audit logs to avoid recording secrets. A Helm-flagged `audit.includeInvokePayloads=true` toggle is planned but not in v0.3.5.
-- **One reference image.** v0.3.5 ships `sandbox-langgraph` only. Strands+Bedrock, OpenHands, OpenClaw, and an RL-rollout image are deferred to a future release.
+- **Single Router replica for cancel routing.** The in-process invoke registry means `/invoke/cancel` only works against the Router instance that started the invoke. Multi-replica routers (rare today) would need a sticky-session ALB or a real registry; not blocking for v0.4.0.
+- **No payload audit by default.** Argv and stdin are intentionally excluded from audit logs to avoid recording secrets. A Helm-flagged `audit.includeInvokePayloads=true` toggle is planned but not in v0.4.0.
+- **One reference image.** v0.4.0 ships `sandbox-langgraph` only. Strands+Bedrock, OpenHands, OpenClaw, and an RL-rollout image are deferred to a future release.
 
 ## See also
 
