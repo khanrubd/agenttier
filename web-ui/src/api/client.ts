@@ -161,6 +161,23 @@ export async function setWarmPoolConfig(desiredCount: number, template: string):
   });
 }
 
+// --- Cluster Status API ---
+//
+// Used by the Web UI's left-nav glance widget to show node + pod counts
+// alongside the warm pool status. Updates every few seconds.
+export interface ClusterStatus {
+  nodes: number;
+  nodesReady: number;
+  pods: number;
+  sandboxPods: number;
+  headroomReady: number;
+  autoscalerEnabled: boolean;
+}
+
+export async function fetchClusterStatus(): Promise<ClusterStatus> {
+  return request<ClusterStatus>('/cluster/status');
+}
+
 // --- Port Forwarding API ---
 
 export interface PortForward {

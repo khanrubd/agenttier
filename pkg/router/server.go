@@ -194,6 +194,11 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	api.HandleFunc("/warmpool/status", s.handleGetWarmPoolStatus).Methods("GET")
 	api.HandleFunc("/warmpool/config", s.handleSetWarmPoolConfig).Methods("PUT")
 
+	// Cluster status — node + pod headcount for the Web UI's left-nav glance.
+	// Auth via the same /api/v1 middleware; ClusterRole already grants the
+	// node + pod read verbs we need.
+	api.HandleFunc("/cluster/status", s.handleGetClusterStatus).Methods("GET")
+
 	// WebSocket terminal (auth handled inside handler)
 	r.HandleFunc("/ws/terminal/{sandboxId}", s.handleTerminalWebSocket)
 

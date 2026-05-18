@@ -5,7 +5,7 @@
 
 import { NavLink, Outlet } from 'react-router-dom';
 import { useState, useEffect } from 'react';
-import { fetchWarmPoolStatus, type WarmPoolStatus } from '../api/client';
+import { fetchWarmPoolStatus, type WarmPoolStatus, fetchClusterStatus, type ClusterStatus } from '../api/client';
 
 const navItems = [
   { to: '/', label: 'Sandboxes' },
@@ -18,13 +18,15 @@ const navItems = [
 
 export default function Layout() {
   const [poolStatus, setPoolStatus] = useState<WarmPoolStatus | null>(null);
+  const [clusterStatus, setClusterStatus] = useState<ClusterStatus | null>(null);
 
   useEffect(() => {
-    const fetchPool = () => {
+    const fetchAll = () => {
       fetchWarmPoolStatus().then(setPoolStatus).catch(() => {});
+      fetchClusterStatus().then(setClusterStatus).catch(() => {});
     };
-    fetchPool();
-    const interval = setInterval(fetchPool, 10000);
+    fetchAll();
+    const interval = setInterval(fetchAll, 10000);
     return () => clearInterval(interval);
   }, []);
 
@@ -55,6 +57,35 @@ export default function Layout() {
               {label}
             </NavLink>
           ))}
+        </div>
+
+        {/* Cluster status — node + pod headcount.
+            Always visible (even on a fixed-size cluster) so operators
+            can see at a glance how busy the cluster is and whether
+            autoscaling is on. The autoscaler dot turns green when the
+            chart's optional CAS Deployment is running. */}
+        <div style={{ borderTop: '1px solid #e5e4e7', paddingTop: '12px', marginTop: '12px' }}>
+          {clusterStatus ? (
+            <div style={{ padding: '0 8px', fontSize: '11px', color: '#6b6375' }}>
+              <div style={{ fontWeight: 600, marginBottom: '4px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                Cluster
+                <span title={clusterStatus.autoscalerEnabled ? 'Cluster Autoscaler running' : 'Fixed-size node group'}
+                  style={{
+                    width: 7, height: 7, borderRadius: '50%',
+                    background: clusterStatus.autoscalerEnabled ? '#22c55e' : '#9ca3af',
+                  }} />
+              </div>
+              <div>{clusterStatus.nodesReady} / {clusterStatus.nodes} nodes ready</div>
+              <div>{clusterStatus.sandboxPods} sandboxes, {clusterStatus.pods} pods</div>
+              {clusterStatus.headroomReady > 0 && (
+                <div>{clusterStatus.headroomReady} headroom spare</div>
+              )}
+            </div>
+          ) : (
+            <div style={{ padding: '0 8px', fontSize: '11px', color: '#9ca3af' }}>
+              Cluster: …
+            </div>
+          )}
         </div>
 
         {/* Warm pool status */}

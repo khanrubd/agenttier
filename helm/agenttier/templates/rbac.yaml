@@ -60,6 +60,15 @@ rules:
   - apiGroups: ["coordination.k8s.io"]
     resources: ["leases"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # Nodes — read-only. Used by the Router's /api/v1/cluster/status
+  # endpoint to surface ready/total node counts to the Web UI's left-nav
+  # glance widget. The ClusterAutoscaler Deployment has its own
+  # ClusterRole with broader node access (including update for cordon
+  # operations); this rule is the minimal read-only surface the rest of
+  # the platform needs.
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
   # Secrets — read-only for template file references, plus full lifecycle on
   # the per-sandbox runtime-token Secrets the controller creates as part of
   # the HTTP-exec rollout (Phase 3). Each Secret is owned by its Sandbox via
