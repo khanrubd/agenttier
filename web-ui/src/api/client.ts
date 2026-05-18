@@ -34,6 +34,14 @@ export async function fetchSandboxes(): Promise<Sandbox[]> {
   return (data.sandboxes || []).map(mapSandbox);
 }
 
+// fetchSandbox returns a single sandbox by ID. Used by the per-sandbox
+// settings page; the list endpoint already returns enough fields, so
+// this just delegates to GET /sandboxes/{id} and runs the same mapper.
+export async function fetchSandbox(id: string): Promise<Sandbox> {
+  const raw = await request<any>(`/sandboxes/${encodeURIComponent(id)}`);
+  return mapSandbox(raw);
+}
+
 export async function createSandbox(name: string, template: string): Promise<Sandbox> {
   const data = await request<any>('/sandboxes', {
     method: 'POST',
@@ -143,7 +151,28 @@ export async function fetchCurrentUser(): Promise<User> {
 
 // --- Warm Pool API ---
 
+// PoolConfig is one entry in the per-template warm pool. Multiple entries
+// run independently — adding or removing one never disturbs the others.
+export interface PoolConfig {
+  template: string;
+  desiredCount: number;
+}
+
+// PoolStatus is the live state of one per-template pool. Mirrors the
+// PoolConfig shape with extra observed-state fields.
+export interface PoolStatus {
+  template: string;
+  desiredCount: number;
+  readyCount: number;
+  pendingCount: number;
+}
+
+// WarmPoolStatus carries both the per-template `pools` array (the new
+// canonical shape) and the legacy single-template flat fields. The Web
+// UI uses `pools` as the source of truth; the legacy fields are only
+// populated when there's exactly one entry.
 export interface WarmPoolStatus {
+  pools?: PoolStatus[];
   desiredCount: number;
   readyCount: number;
   pendingCount: number;
@@ -154,10 +183,21 @@ export async function fetchWarmPoolStatus(): Promise<WarmPoolStatus> {
   return request<WarmPoolStatus>('/warmpool/status');
 }
 
+// Legacy single-template setter, retained for back-compat with any code
+// path that hasn't migrated yet. Internally calls setWarmPoolPools with
+// a one-entry array — keeps the wire format normalized.
 export async function setWarmPoolConfig(desiredCount: number, template: string): Promise<void> {
+  await setWarmPoolPools(desiredCount > 0 ? [{ template, desiredCount }] : []);
+}
+
+// setWarmPoolPools is the canonical setter. Takes the full target list
+// of per-template pools; the controller reconciles by adding entries
+// missing from the cluster, scaling existing ones, and dropping any
+// pools whose templates aren't in the array.
+export async function setWarmPoolPools(pools: PoolConfig[]): Promise<void> {
   await request('/warmpool/config', {
     method: 'PUT',
-    body: JSON.stringify({ desiredCount, template }),
+    body: JSON.stringify({ pools }),
   });
 }
 
@@ -176,6 +216,30 @@ export interface ClusterStatus {
 
 export async function fetchClusterStatus(): Promise<ClusterStatus> {
   return request<ClusterStatus>('/cluster/status');
+}
+
+// --- Headroom API ---
+//
+// Read/write the chart's optional spare-node pause-Pod Deployment so
+// operators can resize headroom from the Web UI. Admin-gated on the
+// server side for write; read works for any authenticated user.
+export interface HeadroomConfig {
+  enabled: boolean;
+  replicas: number;
+  cpu: string;
+  memory: string;
+  readyReplicas?: number;
+}
+
+export async function fetchHeadroomConfig(): Promise<HeadroomConfig> {
+  return request<HeadroomConfig>('/cluster/headroom');
+}
+
+export async function setHeadroomConfig(cfg: { replicas: number; cpu?: string; memory?: string }): Promise<HeadroomConfig> {
+  return request<HeadroomConfig>('/cluster/headroom', {
+    method: 'PUT',
+    body: JSON.stringify(cfg),
+  });
 }
 
 // --- Port Forwarding API ---
@@ -463,11 +527,20 @@ export async function fetchEffectiveGovernance(namespace: string): Promise<{ nam
 // --- Helpers ---
 
 function mapSandbox(raw: any): Sandbox {
+  // Mode + namespace fall back to sensible defaults when the backend
+  // response omits them. Older clusters that haven't updated to the
+  // mode-aware sandboxToJSON still render "code" / "default" instead of
+  // undefined — the UI treats those as "no mode badge" and "implicit
+  // namespace" respectively.
+  const rawMode = (raw.mode || 'code').toLowerCase();
+  const mode = rawMode === 'agent' ? 'agent' : 'code';
   return {
     id: raw.sandboxId || raw.id || raw.name,
     name: raw.name || raw.sandboxId,
     status: (raw.status || 'creating').toLowerCase() as Sandbox['status'],
     template: raw.templateRef || raw.template || '',
+    mode,
+    namespace: raw.namespace || 'default',
     error_message: raw.message || null,
     created_at: raw.createdAt || raw.created_at || '',
     last_accessed_at: raw.lastActivityAt || raw.last_accessed_at || null,

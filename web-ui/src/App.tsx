@@ -11,6 +11,7 @@ import Metrics from './pages/Metrics';
 import ActivityLog from './pages/ActivityLog';
 import Costs from './pages/Costs';
 import Settings from './pages/Settings';
+import SandboxSettings from './pages/SandboxSettings';
 import Terminal from './pages/Terminal';
 
 function App() {
@@ -23,6 +24,7 @@ function App() {
         <Route path="/activity" element={<ActivityLog />} />
         <Route path="/costs" element={<Costs />} />
         <Route path="/settings" element={<Settings />} />
+        <Route path="/sandbox/:id/settings" element={<SandboxSettings />} />
       </Route>
       <Route path="/sandbox/:id/terminal" element={<Terminal />} />
     </Routes>

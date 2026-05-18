@@ -7,50 +7,28 @@ import { useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import type { Sandbox } from '../types';
 import StatusBadge from './StatusBadge';
-import PortForwardsPanel from './PortForwardsPanel';
-import FilesPanel from './FilesPanel';
-import AgentPanel from './AgentPanel';
 
-// AdvancedPanel hides Port forwards + Files behind a single click so cards
-// stay compact by default. Only rendered when the sandbox is running — the
-// nested panels themselves no-op otherwise, but the collapsed header is
-// noise when there's nothing useful inside.
-function AdvancedPanel({ running, children }: { running: boolean; children: React.ReactNode }) {
-  const [open, setOpen] = useState(false);
-  if (!running) return null;
-  return (
-    <div data-testid="advanced-panel" style={{ marginTop: '12px' }}>
-      <button
-        data-testid="advanced-toggle"
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen(v => !v)}
-        style={{
-          width: '100%',
-          display: 'flex',
-          alignItems: 'center',
-          justifyContent: 'space-between',
-          padding: '6px 10px',
-          borderRadius: '6px',
-          border: '1px solid #e5e4e7',
-          background: '#fff',
-          color: '#4b4657',
-          fontSize: '12px',
-          fontWeight: 500,
-          cursor: 'pointer',
-        }}
-      >
-        <span>Advanced — ports, files, agent</span>
-        <span style={{ fontSize: '10px', color: '#6b6375' }}>{open ? '▾' : '▸'}</span>
-      </button>
-      {open && (
-        <div data-testid="advanced-body" style={{ display: 'flex', flexDirection: 'column', gap: '8px', marginTop: '8px' }}>
-          {children}
-        </div>
-      )}
-    </div>
-  );
-}
+// SandboxCard is the top-level entry on the Dashboard for one sandbox.
+// Layout (top to bottom):
+//
+//   ┌────────────────────────────────────────────────┐
+//   │ name  [status]  [mode]                  ⚙️     │  ← title row + gear
+//   │ error message (only on status === 'error')     │
+//   │ 👤 created_by_email                            │
+//   │ 📦 template (plain, above date)                │
+//   │ 📅 Created: …                                  │
+//   │ 🕐 Last accessed: …                            │
+//   │                                                │
+//   │ [Open Terminal] [Stop|Resume] [Delete]         │  ← actions
+//   └────────────────────────────────────────────────┘
+//
+// The previous card had an inline "Advanced — ports, files, agent"
+// expandable panel below the action buttons. That panel has been moved
+// to a dedicated full-page settings route at /sandbox/:id/settings,
+// reachable from the gear icon. The motivation: per-sandbox settings
+// are growing (governance, network, env vars, mode-specific knobs) and
+// stuffing all of them into a card-internal accordion was pushing the
+// list view into ergonomic territory better served by a dedicated page.
 
 interface SandboxCardProps {
   sandbox: Sandbox;
@@ -68,7 +46,7 @@ function formatDate(iso: string | null): string {
 export default function SandboxCard({ sandbox, busy = false, onStop, onResume, onDelete }: SandboxCardProps) {
   const navigate = useNavigate();
   const [hovered, setHovered] = useState(false);
-  const { id, name, status, error_message, template, created_at, last_accessed_at, created_by_email } = sandbox;
+  const { id, name, status, mode, error_message, template, created_at, last_accessed_at, created_by_email } = sandbox;
 
   const isTransitional = status === 'creating' || status === 'deleting' || busy;
   const canOpenTerminal = status === 'running';
@@ -92,24 +70,79 @@ export default function SandboxCard({ sandbox, busy = false, onStop, onResume, o
         transition: 'all 0.2s ease',
       }}
     >
+      {/* Spinner sits in the same top-right area as the gear, but is only
+          visible while transitional. Both are absolute-positioned so they
+          can't fight for layout space; while transitional we hide the
+          gear so the spinner is the unambiguous visual. */}
       {isTransitional && (
         <div data-testid="loading-spinner" style={{
-          position: 'absolute', top: 12, right: 12, width: 20, height: 20,
+          position: 'absolute', top: 16, right: 16, width: 20, height: 20,
           border: '2px solid #e5e4e7', borderTopColor: '#aa3bff', borderRadius: '50%',
           animation: 'spin 0.8s linear infinite',
         }} />
       )}
 
-      {/* Title + badges */}
-      <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '14px', flexWrap: 'wrap' }}>
+      {/* Gear icon: opens the per-sandbox settings page in a new tab.
+          New tab on purpose — operators usually keep the dashboard open
+          while inspecting a single sandbox's settings. The path
+          `/sandbox/:id/settings` is wired in App.tsx as a sibling of
+          the full-screen Terminal route. */}
+      {!isTransitional && (
+        <button
+          data-testid="btn-settings"
+          aria-label="Sandbox settings"
+          onClick={(e) => {
+            e.stopPropagation();
+            window.open(`/sandbox/${id}/settings`, '_blank', 'noopener');
+          }}
+          style={{
+            position: 'absolute',
+            top: 14,
+            right: 14,
+            width: 28,
+            height: 28,
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            background: 'transparent',
+            border: '1px solid transparent',
+            borderRadius: '6px',
+            color: '#6b6375',
+            fontSize: '16px',
+            cursor: 'pointer',
+            transition: 'all 0.15s',
+          }}
+          onMouseEnter={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = '#f3f0fa';
+            (e.currentTarget as HTMLButtonElement).style.borderColor = '#e5e4e7';
+            (e.currentTarget as HTMLButtonElement).style.color = '#aa3bff';
+          }}
+          onMouseLeave={(e) => {
+            (e.currentTarget as HTMLButtonElement).style.background = 'transparent';
+            (e.currentTarget as HTMLButtonElement).style.borderColor = 'transparent';
+            (e.currentTarget as HTMLButtonElement).style.color = '#6b6375';
+          }}
+          title="Open sandbox settings"
+        >
+          ⚙
+        </button>
+      )}
+
+      {/* Title row: name, status badge, mode badge.
+          Mode badge sits next to status on purpose — operators care
+          most about "is it up?" and "what kind?" at a glance. The
+          previous template chip moves out of this row to the metadata
+          block below the error so the row stays compact. */}
+      <div style={{
+        display: 'flex', alignItems: 'center', gap: '8px',
+        marginBottom: '14px', flexWrap: 'wrap',
+        // Reserve space on the right so the gear / spinner doesn't
+        // overlap a long sandbox name.
+        paddingRight: '36px',
+      }}>
         <h3 data-testid="sandbox-name" style={{ margin: 0, fontSize: '17px', fontWeight: 600, color: '#08060d' }}>{name}</h3>
         <StatusBadge status={status} />
-        {template && (
-          <span style={{ fontSize: '11px', padding: '2px 8px', borderRadius: '4px',
-            background: '#ede9fe', color: '#6d28d9', fontWeight: 500 }}>
-            📦 {template}
-          </span>
-        )}
+        <ModeBadge mode={mode} />
       </div>
 
       {/* Error message */}
@@ -119,9 +152,13 @@ export default function SandboxCard({ sandbox, busy = false, onStop, onResume, o
         </p>
       )}
 
-      {/* Metadata */}
+      {/* Metadata block. Template now sits as a plain line above the
+          Created date in the same color/weight as the date — the prior
+          highlighted purple chip in the title row drew attention away
+          from the status + mode badges, which are the scan-target. */}
       <div style={{ fontSize: '13px', color: '#6b6375', marginBottom: '16px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
         {created_by_email && <div>👤 {created_by_email}</div>}
+        {template && <div data-testid="template">📦 Template: {template}</div>}
         <div data-testid="created-at">📅 Created: {formatDate(created_at)}</div>
         <div data-testid="last-accessed">🕐 Last accessed: {formatDate(last_accessed_at)}</div>
       </div>
@@ -143,13 +180,39 @@ export default function SandboxCard({ sandbox, busy = false, onStop, onResume, o
         <button data-testid="btn-delete" disabled={!canDelete}
           onClick={() => onDelete(id)} style={btnStyle(canDelete, '#ef4444')}>Delete</button>
       </div>
-
-      <AdvancedPanel running={status === 'running'}>
-        <PortForwardsPanel sandboxId={id} running={status === 'running'} />
-        <FilesPanel sandboxId={id} running={status === 'running'} />
-        <AgentPanel sandboxId={id} running={status === 'running'} />
-      </AdvancedPanel>
     </div>
+  );
+}
+
+// ModeBadge renders a compact "Code" or "Agent" pill next to the status
+// badge. Using purple-tinted "Code" and a different green-tinted "Agent"
+// so the two states are distinguishable at a glance even before reading
+// the text. Lighter weight than StatusBadge on purpose — mode is
+// orthogonal to lifecycle, not a phase.
+function ModeBadge({ mode }: { mode: 'code' | 'agent' }) {
+  const isAgent = mode === 'agent';
+  const label = isAgent ? 'Agent' : 'Code';
+  // Agent uses a teal-green palette; Code uses neutral purple-tinted.
+  // Both stay visually subordinate to the StatusBadge.
+  const bg = isAgent ? '#dcfce7' : '#eef2ff';
+  const fg = isAgent ? '#15803d' : '#4338ca';
+  return (
+    <span
+      data-testid="sandbox-mode"
+      data-mode={mode}
+      style={{
+        fontSize: '11px',
+        fontWeight: 600,
+        padding: '3px 9px',
+        borderRadius: '999px',
+        background: bg,
+        color: fg,
+        textTransform: 'uppercase',
+        letterSpacing: '0.04em',
+      }}
+    >
+      {label}
+    </span>
   );
 }
 

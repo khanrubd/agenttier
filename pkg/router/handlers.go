@@ -1426,6 +1426,14 @@ func (s *Server) getSandboxWithAuthCheck(ctx context.Context, sandboxID string, 
 }
 
 func sandboxToJSON(sb *agenttierv1alpha1.Sandbox) map[string]interface{} {
+	// Default mode to "code" when the field is empty so older CRs that
+	// predate the agent-mode field still report a sensible value to the
+	// Web UI. The kubebuilder default in the CRD covers new sandboxes;
+	// this is the read-side defensive fallback for existing rows.
+	mode := string(sb.Spec.Mode)
+	if mode == "" {
+		mode = string(agenttierv1alpha1.SandboxModeCode)
+	}
 	result := map[string]interface{}{
 		"sandboxId":   sb.Name,
 		"name":        sb.Name,
@@ -1434,6 +1442,7 @@ func sandboxToJSON(sb *agenttierv1alpha1.Sandbox) map[string]interface{} {
 		"podName":     sb.Status.PodName,
 		"pvcName":     sb.Status.PVCName,
 		"templateRef": sb.Status.ResolvedTemplate,
+		"mode":        mode,
 		"createdAt":   sb.CreationTimestamp.Time.String(),
 		"message":     sb.Status.Message,
 	}

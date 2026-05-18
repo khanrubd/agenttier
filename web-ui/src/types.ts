@@ -8,6 +8,14 @@ export interface Sandbox {
   name: string;
   status: 'creating' | 'running' | 'stopped' | 'error' | 'deleting';
   template: string;
+  // Mode is "code" (interactive — humans drive via terminal) or "agent"
+  // (configured entrypoint invoked over /configure + /invoke). Defaults
+  // to "code" when the backend response omits the field, so older
+  // clusters running pre-mode-aware sandboxes still render sensibly.
+  mode: 'code' | 'agent';
+  // Kubernetes namespace the sandbox lives in. Surfaced in the UI for
+  // future multi-tenancy (per-namespace governance + RBAC).
+  namespace: string;
   error_message: string | null;
   created_at: string;
   last_accessed_at: string | null;

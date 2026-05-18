@@ -199,6 +199,12 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	// node + pod read verbs we need.
 	api.HandleFunc("/cluster/status", s.handleGetClusterStatus).Methods("GET")
 
+	// Cluster headroom (spare-capacity Deployment). Read-only for any
+	// authenticated user, write-gated to admins because changing the
+	// replica count is a cost decision and the cap is non-trivial.
+	api.HandleFunc("/cluster/headroom", s.handleGetHeadroomConfig).Methods("GET")
+	api.Handle("/cluster/headroom", s.requireAdmin(http.HandlerFunc(s.handleSetHeadroomConfig))).Methods("PUT")
+
 	// WebSocket terminal (auth handled inside handler)
 	r.HandleFunc("/ws/terminal/{sandboxId}", s.handleTerminalWebSocket)
 
