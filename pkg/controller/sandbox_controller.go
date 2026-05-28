@@ -19,6 +19,7 @@ package controller
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -41,6 +42,12 @@ const (
 	FinalizerName       = "agenttier.io/sandbox-cleanup"
 	DefaultRequeueDelay = 30 * time.Second
 	MaxRestartCount     = 5
+	// RestartCountResetWindow defines how long a pod must run stably
+	// (Ready + uptime ≥ window) before the restart counter resets to 0.
+	// Sized to outlast a typical node-flap recovery without being so
+	// long that long-uptime sandboxes lose the ability to self-heal
+	// from a fresh budget.
+	RestartCountResetWindow = 5 * time.Minute
 )
 
 // SandboxReconciler reconciles Sandbox objects.
@@ -358,8 +365,9 @@ func (r *SandboxReconciler) reconcileRunning(ctx context.Context, sandbox *agent
 	err := r.Get(ctx, client.ObjectKey{Namespace: sandbox.Namespace, Name: sandbox.Status.PodName}, pod)
 	if err != nil {
 		if errors.IsNotFound(err) {
-			// Pod disappeared — infrastructure failure
-			return r.handleInfrastructureFailure(ctx, sandbox, "Pod disappeared unexpectedly")
+			// Pod disappeared — infrastructure failure (no pod object,
+			// so isInfrastructureFailure(nil) → true).
+			return r.handleInfrastructureFailure(ctx, sandbox, "Pod disappeared unexpectedly", nil)
 		}
 		return ctrl.Result{}, err
 	}
@@ -367,7 +375,26 @@ func (r *SandboxReconciler) reconcileRunning(ctx context.Context, sandbox *agent
 	// Check pod failures
 	if pod.Status.Phase == corev1.PodFailed {
 		reason := getPodFailureReason(pod)
-		return r.handleInfrastructureFailure(ctx, sandbox, reason)
+		return r.handleInfrastructureFailure(ctx, sandbox, reason, pod)
+	}
+
+	// Reset RestartCount once the pod has been stably Running for the
+	// stability window. Without this, a sandbox that experiences five
+	// transient node failures over its lifetime would exhaust the
+	// restart budget and go terminal even though each individual failure
+	// fully recovered. The window is conservative (5 minutes) so we
+	// don't reset on a pod that's only briefly Ready before the next
+	// flap.
+	if sandbox.Status.RestartCount > 0 && sandbox.Status.StartedAt != nil {
+		uptime := time.Since(sandbox.Status.StartedAt.Time)
+		if uptime >= RestartCountResetWindow && isPodReady(pod) {
+			r.Recorder.Eventf(sandbox, corev1.EventTypeNormal, "RestartCountReset", "Pod stable for %s; resetting restart count from %d to 0", uptime.Round(time.Second), sandbox.Status.RestartCount)
+			sandbox.Status.RestartCount = 0
+			if err := r.Status().Update(ctx, sandbox); err != nil {
+				return ctrl.Result{}, err
+			}
+			return ctrl.Result{Requeue: true}, nil
+		}
 	}
 
 	// Check idle timeout
@@ -417,13 +444,52 @@ func (r *SandboxReconciler) reconcileStopped(ctx context.Context, sandbox *agent
 }
 
 // reconcileError handles error state with restart backoff.
+//
+// Two paths:
+//
+//   - Permanent error (RestartCount >= MaxRestartCount): nothing to do,
+//     stay in Error indefinitely. The user has to delete + recreate.
+//   - Transient error (handleInfrastructureFailure put us here with
+//     RestartCount < Max): wait for the exponential-backoff window to
+//     elapse, then transition back to Creating so the next reconcile
+//     rebuilds the pod. The window is gated on Status.Message
+//     containing "before restart attempt" so we don't infinite-loop on
+//     errors that aren't restart-eligible (e.g. terminal validation
+//     failures).
 func (r *SandboxReconciler) reconcileError(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox) (ctrl.Result, error) {
 	if sandbox.Status.RestartCount >= MaxRestartCount {
 		return ctrl.Result{}, nil // Stay in error permanently
 	}
 
+	// Only auto-rebuild when handleInfrastructureFailure put us here.
+	// Other paths (transitionToError from validation, template
+	// resolution failures, etc.) should not be auto-rebuilt — they need
+	// user intervention or a controller-side fix.
+	if !strings.Contains(sandbox.Status.Message, "before restart attempt") {
+		return ctrl.Result{RequeueAfter: DefaultRequeueDelay}, nil
+	}
+
 	backoff := calculateBackoffDelay(sandbox.Status.RestartCount)
-	return ctrl.Result{RequeueAfter: backoff}, nil
+
+	// startedAt of the last successful pod run is our "when did we last
+	// fail" reference. Without a more direct timestamp we approximate by
+	// using StartedAt; reconciler updates land in tight succession after
+	// handleInfrastructureFailure, so the gap is at most one requeue.
+	if sandbox.Status.StartedAt != nil {
+		elapsed := time.Since(sandbox.Status.StartedAt.Time)
+		if elapsed < backoff {
+			return ctrl.Result{RequeueAfter: backoff - elapsed}, nil
+		}
+	}
+
+	// Backoff elapsed — transition back to Creating to rebuild the pod.
+	r.Recorder.Eventf(sandbox, corev1.EventTypeNormal, "Restarting", "Backoff window elapsed (%s); restarting pod (attempt %d/%d)", backoff, sandbox.Status.RestartCount, MaxRestartCount)
+	sandbox.Status.Phase = agenttierv1alpha1.SandboxPhaseCreating
+	sandbox.Status.Message = ""
+	if err := r.Status().Update(ctx, sandbox); err != nil {
+		return ctrl.Result{}, err
+	}
+	return ctrl.Result{Requeue: true}, nil
 }
 
 // reconcileDelete cleans up all child resources.
@@ -491,7 +557,30 @@ func (r *SandboxReconciler) stopSandbox(ctx context.Context, sandbox *agenttierv
 }
 
 // handleInfrastructureFailure attempts auto-restart with backoff.
-func (r *SandboxReconciler) handleInfrastructureFailure(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox, reason string) (ctrl.Result, error) {
+//
+// Auto-restart is only triggered for failures that look like
+// infrastructure problems (OOMKilled, Evicted, NodeLost, pod
+// disappearance, CrashLoopBackOff). User-initiated failures (Completed
+// with non-zero exit, application errors in the entrypoint) go straight
+// to terminal Error so we don't pointlessly burn 5 restart attempts on
+// a CMD that's never going to succeed.
+//
+// Path on infra failure:
+//  1. Increment RestartCount.
+//  2. If RestartCount >= MaxRestartCount, transition to terminal Error.
+//  3. Otherwise transition to Error phase (not Creating directly) so
+//     reconcileError applies exponential backoff before recreating the
+//     pod. The backoff prevents thundering-herd on a flapping node.
+func (r *SandboxReconciler) handleInfrastructureFailure(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox, reason string, pod *corev1.Pod) (ctrl.Result, error) {
+	// User-error path: a CMD that exited non-zero (Completed reason) is
+	// almost always a config bug or an application crash that retrying
+	// won't fix. Restart-loop it once for the rare case where the user
+	// genuinely wants the container respawned, then go terminal.
+	if !isInfrastructureFailure(pod) {
+		r.Recorder.Eventf(sandbox, corev1.EventTypeWarning, "ApplicationError", "Pod failed with application error (no auto-restart): %s", reason)
+		return r.transitionToError(ctx, sandbox, fmt.Sprintf("Pod failed: %s", reason))
+	}
+
 	sandbox.Status.RestartCount++
 
 	// Use the same comparison as reconcileError so both paths agree on
@@ -504,11 +593,17 @@ func (r *SandboxReconciler) handleInfrastructureFailure(ctx context.Context, san
 		return r.transitionToError(ctx, sandbox, fmt.Sprintf("Restart limit exceeded (%d attempts): %s", MaxRestartCount, reason))
 	}
 
-	r.Recorder.Eventf(sandbox, corev1.EventTypeWarning, "AutoRestarted", "Pod failed (%s), restarting (attempt %d/%d)", reason, sandbox.Status.RestartCount, MaxRestartCount)
+	r.Recorder.Eventf(sandbox, corev1.EventTypeWarning, "AutoRestarted", "Pod failed (%s), restarting (attempt %d/%d) with %s backoff", reason, sandbox.Status.RestartCount, MaxRestartCount, calculateBackoffDelay(sandbox.Status.RestartCount))
 
-	// Go back to Creating to trigger pod recreation
-	sandbox.Status.Phase = agenttierv1alpha1.SandboxPhaseCreating
+	// Transition to Error first; reconcileError will apply the backoff
+	// requeue and then move us back to Creating once the delay elapses.
+	// This is a deliberate change from the previous "go back to Creating
+	// immediately" path: instant recreation under a flapping node would
+	// thrash the apiserver + scheduler. Exponential backoff gives the
+	// underlying infra time to stabilize (10s → 20s → 40s → 80s → 160s).
+	sandbox.Status.Phase = agenttierv1alpha1.SandboxPhaseError
 	sandbox.Status.PodName = ""
+	sandbox.Status.Message = fmt.Sprintf("Pod failed (%s), waiting %s before restart attempt %d/%d", reason, calculateBackoffDelay(sandbox.Status.RestartCount), sandbox.Status.RestartCount, MaxRestartCount)
 	if err := r.Status().Update(ctx, sandbox); err != nil {
 		return ctrl.Result{}, err
 	}

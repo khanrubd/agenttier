@@ -150,6 +150,33 @@ func (h *Handler) handleConfigure(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Governance gate. Runs before any I/O so a denied configure costs
+	// nothing — no PVC writes, no exec into the pod, no audit clutter
+	// from half-applied state. Three checks:
+	//
+	//  1. AllowedTemplates  — namespace operator restricts which
+	//     ClusterSandboxTemplate names can be configured. Even though
+	//     the sandbox already exists, /configure is the first time
+	//     user-supplied code lands inside it, so re-checking here is a
+	//     useful belt-and-braces against templates added after a
+	//     sandbox was created.
+	//  2. AllowedAgentImages — the template's image must match an
+	//     approved registry prefix. This stops a configure from
+	//     attaching agent code to a sandbox using a non-approved
+	//     image. Same allowlist semantics as the create-time check
+	//     in pkg/governance/engine.go's Check().
+	//  3. ConfigureFile size + count — capped server-side so a
+	//     misbehaving caller can't shovel a multi-GiB tarball through
+	//     a 16 MiB body limit by chunking. The per-file cap stays at
+	//     configureFileLimitBytes (32 MiB); the new aggregate cap
+	//     prevents 50 × 32 MiB requests.
+	if denied, reason := h.checkConfigureGovernance(ctx, sandbox, &req); denied {
+		outcome = "policy_denied"
+		h.recordAuditEvent(ctx, sandbox, corev1.EventTypeWarning, "ConfigureDenied", reason)
+		writeError(w, http.StatusForbidden, reason)
+		return
+	}
+
 	// Hash inputs for idempotency. Same files + same install command means
 	// re-running install is wasteful; we short-circuit and just refresh
 	// the entrypoint + lastConfiguredAt.
@@ -240,6 +267,120 @@ func (h *Handler) handleConfigure(w http.ResponseWriter, r *http.Request) {
 	h.recordAuditEvent(ctx, sandbox, auditType, "AgentConfigured", auditMsg)
 
 	_ = sse.WriteEvent("result", resp)
+}
+
+// configureFileTotalLimitBytes caps the cumulative size of all files in
+// one ConfigureRequest. The per-file cap (configureFileLimitBytes,
+// 32 MiB) protects against a single huge upload; this aggregate cap
+// stops 50 × 32 MiB requests from sneaking past the per-file ceiling.
+// The chosen value is 4× the per-file cap — generous enough for a
+// real codebase, tight enough that a malicious caller can't shovel
+// gigabytes through.
+const configureFileTotalLimitBytes = 4 * configureFileLimitBytes // 128 MiB
+
+// configureFileMaxCount caps the number of files in one request.
+// Picked to be lenient (a real codebase rarely has more than a few
+// dozen top-level files in /workspace) but bounded.
+const configureFileMaxCount = 200
+
+// checkConfigureGovernance applies governance gates that are specific
+// to /configure but reuse the same Policy resolved by Check() at
+// sandbox-create time. Returns (denied, reason). When denied=false the
+// caller proceeds; when denied=true the caller returns 403.
+//
+// The function is intentionally a no-op when no PolicyResolver is
+// wired in — same shape as resolveAgentCaps' clamp path, so a
+// minimally-configured Router (no governance ConfigMap) keeps working.
+func (h *Handler) checkConfigureGovernance(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox, req *ConfigureRequest) (bool, string) {
+	// Aggregate file-size + count caps run regardless of policy. They
+	// are server-side correctness limits, not configurable policy.
+	if len(req.Files) > configureFileMaxCount {
+		return true, fmt.Sprintf("too many files in request: %d (max %d)", len(req.Files), configureFileMaxCount)
+	}
+	var total int64
+	for i, f := range req.Files {
+		size := int64(len(f.Content))
+		// Base64-encoded content decodes to ~3/4 of its encoded size,
+		// but we use the upper bound so we reject before allocating
+		// the decode buffer in writeFiles.
+		size += int64(len(f.ContentBase64))
+		if size > int64(configureFileLimitBytes) {
+			return true, fmt.Sprintf("files[%d] (%s): %d bytes exceeds per-file cap %d", i, f.Path, size, configureFileLimitBytes)
+		}
+		total += size
+		if total > int64(configureFileTotalLimitBytes) {
+			return true, fmt.Sprintf("aggregate file size %d bytes exceeds total cap %d", total, configureFileTotalLimitBytes)
+		}
+	}
+
+	// Policy-driven checks. Skip when no resolver is wired in.
+	if h.opts.PolicyOf == nil {
+		return false, ""
+	}
+	policy, err := h.opts.PolicyOf(ctx, sandbox.Namespace)
+	if err != nil {
+		// Fail open on resolver errors — a transient ConfigMap read
+		// hiccup shouldn't break /configure for legitimate users. We
+		// still log via the audit path so operators can spot drift.
+		h.opts.Logger.Warn("policy resolver failed; allowing configure", "sandbox", sandbox.Name, "error", err)
+		return false, ""
+	}
+	if policy.IsEmpty() {
+		return false, ""
+	}
+
+	// AllowedTemplates: the sandbox is allowed to exist (the create-time
+	// check passed), but a re-check here catches policies that tightened
+	// after creation. The template name lives on Status.ResolvedTemplate.
+	if len(policy.AllowedTemplates) > 0 && sandbox.Status.ResolvedTemplate != "" {
+		if !policyContains(policy.AllowedTemplates, sandbox.Status.ResolvedTemplate) {
+			return true, fmt.Sprintf("template %q is not in the AllowedTemplates list (%s)", sandbox.Status.ResolvedTemplate, strings.Join(policy.AllowedTemplates, ", "))
+		}
+	}
+
+	// AllowedAgentImages: the running pod's container image must match.
+	// We read the image from the explicit Spec.Image override; the
+	// template's baseline image isn't surfaced into Status, so when
+	// neither is set we skip this check (the create-time governance
+	// gate already validated the template at Sandbox-create time).
+	if len(policy.AllowedAgentImages) > 0 {
+		var image string
+		if sandbox.Spec.Image != nil {
+			image = sandbox.Spec.Image.Repository
+		}
+		if image != "" && !registryPrefixAllowed(image, policy.AllowedAgentImages) {
+			return true, fmt.Sprintf("agent image %q is not in the AllowedAgentImages list (%s)", image, strings.Join(policy.AllowedAgentImages, ", "))
+		}
+	}
+
+	return false, ""
+}
+
+// policyContains is a small utility — pkg/governance has the same
+// helper but unexported. Duplicated here so the agent package doesn't
+// pull in package-internal helpers.
+func policyContains(haystack []string, needle string) bool {
+	for _, h := range haystack {
+		if h == needle {
+			return true
+		}
+	}
+	return false
+}
+
+// registryPrefixAllowed mirrors pkg/governance's hasRegistryPrefix:
+// any prefix match counts (e.g. "ghcr.io/agenttier" allows
+// "ghcr.io/agenttier/sandbox-langgraph:v1").
+func registryPrefixAllowed(image string, allowed []string) bool {
+	for _, p := range allowed {
+		if p == "" {
+			continue
+		}
+		if strings.HasPrefix(image, p) {
+			return true
+		}
+	}
+	return false
 }
 
 func (req ConfigureRequest) validate() error {

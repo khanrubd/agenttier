@@ -46,6 +46,14 @@ jobs:
             # Repo-root context — see sandbox-general note above.
             context: .
             dockerfile: images/claude-code/Dockerfile
+          - name: sandbox-openclaw
+            # Repo-root context — see sandbox-general note above.
+            context: .
+            dockerfile: images/openclaw/Dockerfile
+          - name: sandbox-strands-bedrock
+            # Repo-root context — see sandbox-general note above.
+            context: .
+            dockerfile: images/strands-bedrock/Dockerfile
           - name: sandbox-minimal
             context: .
             dockerfile: images/minimal/Dockerfile
@@ -427,6 +435,8 @@ jobs:
           ghcr.io/agenttier/web-ui:${VERSION}
           ghcr.io/agenttier/sandbox-general:${VERSION}
           ghcr.io/agenttier/sandbox-claude-code:${VERSION}
+          ghcr.io/agenttier/sandbox-openclaw:${VERSION}
+          ghcr.io/agenttier/sandbox-strands-bedrock:${VERSION}
           ghcr.io/agenttier/sandbox-minimal:${VERSION}
           ghcr.io/agenttier/sandbox-langgraph:${VERSION}
           \`\`\`

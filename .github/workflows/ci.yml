@@ -288,6 +288,52 @@ jobs:
           category: trivy-sandbox-claude-code
         continue-on-error: true
 
+      - name: Build sandbox-openclaw image for scanning
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker build -t agenttier-sandbox-openclaw:scan -f images/openclaw/Dockerfile .
+
+      - name: Trivy image scan (sandbox-openclaw)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "agenttier-sandbox-openclaw:scan"
+          format: "sarif"
+          output: "trivy-sandbox-openclaw.sarif"
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+        continue-on-error: true
+
+      - name: Upload Trivy sandbox-openclaw SARIF
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-sandbox-openclaw.sarif
+          category: trivy-sandbox-openclaw
+        continue-on-error: true
+
+      - name: Build sandbox-strands-bedrock image for scanning
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker build -t agenttier-sandbox-strands-bedrock:scan -f images/strands-bedrock/Dockerfile .
+
+      - name: Trivy image scan (sandbox-strands-bedrock)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "agenttier-sandbox-strands-bedrock:scan"
+          format: "sarif"
+          output: "trivy-sandbox-strands-bedrock.sarif"
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+        continue-on-error: true
+
+      - name: Upload Trivy sandbox-strands-bedrock SARIF
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-sandbox-strands-bedrock.sarif
+          category: trivy-sandbox-strands-bedrock
+        continue-on-error: true
+
       - name: Build sandbox-minimal image for scanning
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: docker build -t agenttier-sandbox-minimal:scan -f images/minimal/Dockerfile .

@@ -88,6 +88,101 @@ spec:
       value: "us-east-1"
   timeout: 24h
   idleTimeout: 2h
+{{- if .Values.defaults.openclaw }}
+apiVersion: agenttier.io/v1alpha1
+kind: ClusterSandboxTemplate
+metadata:
+  name: openclaw-bedrock
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+spec:
+  description: "AI coding agent with the OpenClaw CLI powered by AWS Bedrock"
+  image:
+    repository: {{ .Values.defaults.openclaw.image | default "ghcr.io/agenttier/sandbox-openclaw:latest" }}
+  resources:
+    requests:
+      cpu: "1"
+      memory: 2Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  storage:
+    size: 20Gi
+    mountPath: /workspace
+  network:
+    allowInternet: true
+  harness:
+    shell: /bin/bash
+    workingDir: /workspace
+    # HTTP-exec opt-in. Same rationale as claude-code-bedrock above —
+    # openclaw-bedrock ships the in-pod runtime, so /exec, /files, and
+    # /invoke route via HTTP with SPDY fallback.
+    useHTTPExec: true
+    tools:
+      - name: openclaw
+        verifyCommand: "openclaw --version"
+      - name: node
+        verifyCommand: "node --version"
+      - name: python3
+        verifyCommand: "python3 --version"
+      - name: git
+        verifyCommand: "git --version"
+      - name: aws
+        verifyCommand: "aws --version"
+    hooks:
+      onStart: "echo 'OpenClaw sandbox ready — Bedrock credentials injected via IRSA'"
+  env:
+    - name: AWS_DEFAULT_REGION
+      value: "us-east-1"
+  timeout: 24h
+  idleTimeout: 2h
+{{- end }}
+---
+{{- if .Values.defaults.strandsBedrock }}
+apiVersion: agenttier.io/v1alpha1
+kind: ClusterSandboxTemplate
+metadata:
+  name: strands-bedrock
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+spec:
+  description: "AWS Strands Agents SDK preinstalled, talking to Amazon Bedrock"
+  image:
+    repository: {{ .Values.defaults.strandsBedrock.image | default "ghcr.io/agenttier/sandbox-strands-bedrock:latest" }}
+  resources:
+    requests:
+      cpu: 500m
+      memory: 1Gi
+    limits:
+      cpu: "2"
+      memory: 4Gi
+  storage:
+    size: 10Gi
+    mountPath: /workspace
+  network:
+    allowInternet: true
+  harness:
+    shell: /bin/bash
+    workingDir: /workspace
+    # HTTP-exec opt-in. The image bakes the in-pod runtime, so /exec,
+    # /files, and /invoke route via HTTP with SPDY fallback.
+    useHTTPExec: true
+    tools:
+      - name: python3
+        verifyCommand: "python3 --version"
+      - name: aws
+        verifyCommand: "aws --version"
+      - name: strands
+        # No CLI; verify the SDK loads.
+        verifyCommand: "python3 -c 'import importlib.metadata; print(importlib.metadata.version(\"strands-agents\"))'"
+    hooks:
+      onStart: "echo 'Strands sandbox ready — Bedrock credentials via IRSA. Try: python /opt/agenttier/examples/agent.py'"
+  env:
+    - name: AWS_DEFAULT_REGION
+      value: "us-east-1"
+  timeout: 24h
+  idleTimeout: 2h
+{{- end }}
 ---
 apiVersion: agenttier.io/v1alpha1
 kind: ClusterSandboxTemplate

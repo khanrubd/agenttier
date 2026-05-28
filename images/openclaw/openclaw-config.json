@@ -1,0 +1,33 @@
+{
+  "plugins": {
+    "allow": ["amazon-bedrock"],
+    "entries": {
+      "amazon-bedrock": {
+        "enabled": true,
+        "config": {
+          "discovery": {
+            "enabled": true,
+            "region": "us-east-1",
+            "refreshInterval": 3600
+          }
+        }
+      }
+    }
+  },
+  "models": {
+    "providers": {
+      "amazon-bedrock": {
+        "baseUrl": "https://bedrock-runtime.us-east-1.amazonaws.com",
+        "api": "bedrock-converse-stream",
+        "auth": "aws-sdk"
+      }
+    }
+  },
+  "agents": {
+    "defaults": {
+      "model": {
+        "primary": "amazon-bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+      }
+    }
+  }
+}

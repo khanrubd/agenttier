@@ -59,9 +59,13 @@ func TestHandleInfrastructureFailure_RestartLimit(t *testing.T) {
 		wantRestartCount int
 	}{
 		{
-			name:             "below limit promotes to one more restart",
+			// Below limit: handleInfrastructureFailure now transitions to
+			// Error phase (not Creating directly) so reconcileError can
+			// apply the exponential-backoff window before the next
+			// recreation attempt. RestartCount still increments.
+			name:             "below limit transitions to Error for backoff",
 			startCount:       MaxRestartCount - 2, // 3 → ++ → 4, still below 5
-			wantPhase:        agenttierv1alpha1.SandboxPhaseCreating,
+			wantPhase:        agenttierv1alpha1.SandboxPhaseError,
 			wantRestartCount: MaxRestartCount - 1,
 		},
 		{
@@ -103,7 +107,7 @@ func TestHandleInfrastructureFailure_RestartLimit(t *testing.T) {
 				Recorder: record.NewFakeRecorder(10),
 			}
 
-			if _, err := r.handleInfrastructureFailure(context.Background(), sandbox, "fake failure"); err != nil {
+			if _, err := r.handleInfrastructureFailure(context.Background(), sandbox, "fake failure", nil); err != nil {
 				t.Fatalf("handleInfrastructureFailure: %v", err)
 			}
 

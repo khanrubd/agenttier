@@ -166,8 +166,6 @@ func calculateBackoffDelay(restartCount int) time.Duration {
 
 // isInfrastructureFailure determines if a pod termination was caused by infrastructure
 // (OOM, eviction, node failure) vs user-initiated stop.
-//
-//nolint:unused // retained for task 13.10 (self-healing and restart backoff)
 func isInfrastructureFailure(pod *corev1.Pod) bool {
 	if pod == nil {
 		return true // Pod disappeared entirely — infrastructure failure

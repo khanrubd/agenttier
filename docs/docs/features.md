@@ -22,7 +22,7 @@ What AgentTier ships today, grouped by what you probably need first.
 - **Harness config** — tell AgentTier which shell, tools, system prompt, and hooks to run. Hooks fire on start / idle / stop / resume.
 - **Init scripts** — run cluster-approved setup commands before the container becomes Running (install extra tooling, clone a repo, wait for a service).
 - **Embedded files** — templates can seed files into the workspace (e.g. a default `.tmux.conf`, a README, a code-of-conduct).
-- **Reference images** — `general-coding` (Ubuntu + Node + Python + Go), `claude-code-bedrock` (Claude Code CLI wired to AWS Bedrock via IRSA), `minimal-shell` (Alpine + bash + git + curl). All published on `ghcr.io/agenttier/sandbox-*`.
+- **Reference images** — `general-coding` (Ubuntu + Node + Python + Go), `claude-code-bedrock` (Claude Code CLI wired to AWS Bedrock via IRSA), `openclaw-bedrock` (OpenClaw CLI wired to AWS Bedrock via IRSA), `strands-bedrock` (Strands Agents Python SDK wired to AWS Bedrock via IRSA), `minimal-shell` (Alpine + bash + git + curl), and `langgraph-agent` (Python + LangGraph + LangChain for `mode: agent`). All published on `ghcr.io/agenttier/sandbox-*`.
 
 ## Security and isolation
 
@@ -80,7 +80,7 @@ What AgentTier ships today, grouped by what you probably need first.
 
 ## What is not here yet
 
-Roadmap items that are *not* shipped in v0.4.1 and will return real errors or missing features if you rely on them:
+Roadmap items that are *not* shipped in v0.5.0 and will return real errors or missing features if you rely on them:
 
 - Sharing and collaboration (viewer/collaborator roles, expiring share links) — planned for 0.2.x.
 - File transfer API — planned for 0.2.x.

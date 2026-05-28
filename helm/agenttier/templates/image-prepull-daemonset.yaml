@@ -33,6 +33,12 @@ Scope:
 {{- if .Values.defaults.claudeCode.image }}
 {{- $images = append $images .Values.defaults.claudeCode.image }}
 {{- end }}
+{{- if and .Values.defaults.openclaw .Values.defaults.openclaw.image }}
+{{- $images = append $images .Values.defaults.openclaw.image }}
+{{- end }}
+{{- if and .Values.defaults.strandsBedrock .Values.defaults.strandsBedrock.image }}
+{{- $images = append $images .Values.defaults.strandsBedrock.image }}
+{{- end }}
 {{- range .Values.optional.imagePrepull.extraImages }}
 {{- $images = append $images . }}
 {{- end }}

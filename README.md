@@ -57,7 +57,7 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 ### Templates and agent harnesses
 
 - **Compose templates from other templates** with field-level merge and per-sandbox overrides; the harness block defines the shell, tools, system prompt, hooks, and init scripts.
-- **Reference images out of the box** — general coding, Claude Code on AWS Bedrock (with cloud-native credential injection), minimal shell, and a LangGraph agent-mode image.
+- **Reference images out of the box** — general coding, Claude Code on AWS Bedrock (with cloud-native credential injection), OpenClaw on AWS Bedrock (turnkey IRSA-driven config), Strands Agents on AWS Bedrock (Python SDK with IRSA), minimal shell, and a LangGraph agent-mode image.
 
 ### Agent mode
 
@@ -81,7 +81,7 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 ### Multi-tenancy and governance
 
 - **Plug into any OIDC provider** — Cognito, Okta, Azure AD, or anything OIDC-compliant, plus API keys stored as SHA-256 hashes with LRU caching.
-- **Hierarchical governance policies** — cluster and per-namespace caps on sandbox counts, CPU / memory / storage, idle and max-runtime timeouts, agent-mode concurrency, allowed templates, and approved image registries; violations return a structured response so UIs can pinpoint the failing field.
+- **Hierarchical governance policies** — cluster and per-namespace caps on sandbox counts, CPU / memory / storage, idle and max-runtime timeouts, agent-mode concurrency, allowed templates, and approved image registries; violations return a structured response so UIs can pinpoint the failing field. Same policy is re-checked at agent `/configure` time so a policy that tightens after sandbox creation still gates code uploads.
 - **Per-IP and per-user rate limiting** — opt-in token-bucket throttling on Router endpoints, with health checks and WebSocket terminals exempt; 429 responses carry `Retry-After`.
 - **Built-in audit trail** — every lifecycle, terminal, credential, share, clone, and port-forward event is recorded as a Kubernetes event (and optionally a row in a SQL backend for long-term retention).
 
@@ -205,9 +205,9 @@ Templates define reusable sandbox configurations:
 apiVersion: agenttier.io/v1alpha1
 kind: ClusterSandboxTemplate
 metadata:
-  name: claude-code-developer
+  name: claude-code-bedrock
 spec:
-  description: "AI coding environment with Claude Code CLI"
+  description: "AI coding environment with Claude Code CLI on Bedrock"
   image:
     repository: ghcr.io/agenttier/sandbox-claude-code:latest
   resources:
@@ -228,7 +228,7 @@ spec:
   idleTimeout: 2h
 ```
 
-Built-in templates: `general-coding`, `claude-code-developer`, `minimal-shell`, `security-scanner`, `data-analysis`.
+Built-in templates: `general-coding`, `claude-code-bedrock` (Claude Code on Bedrock via IRSA), `openclaw-bedrock` (OpenClaw CLI on Bedrock via IRSA), `strands-bedrock` (Strands Agents Python SDK on Bedrock via IRSA), `langgraph-agent` (`mode: agent` reference), and `minimal-shell`.
 
 ## Python SDK
 

@@ -42,6 +42,22 @@ The last three rows above only apply to `mode: agent` sandboxes. They were added
 - `allowedAgentImages` is checked only when an agent-mode sandbox overrides the template image. The template's own image is trusted (it was vetted at template-creation time). Distinct from `approvedRegistries` because agent code typically warrants stricter supply-chain controls than interactive dev environments.
 - `maxConcurrentInvokesPerSandbox` clamps at admission time. A sandbox spec asking for more is silently lowered to the ceiling; the resolved value lands on `status.agentConfigure.maxConcurrentInvokes` so `/invoke` reads the already-clamped number.
 
+## Re-checked at agent /configure
+
+Three of the policy fields are also evaluated when an agent-mode sandbox calls `POST /api/v1/sandboxes/{id}/configure`. The sandbox already exists (a create-time policy passed), but `/configure` is the first time user-supplied code lands on the PVC, so a re-check guards against policies that tightened after creation:
+
+- **`allowedTemplates`** — re-checked against `status.resolvedTemplate`. If the template fell out of the allowlist after the sandbox was created, the configure is denied (403) before any files are written.
+- **`allowedAgentImages`** — re-checked against the sandbox's `spec.image.repository` (only when the sandbox overrides the template image). Same prefix-match semantics as the create-time check.
+- **`maxConcurrentInvokesPerSandbox`** — clamped via `governance.ClampConcurrency` at configure time, with the resolved value persisted on `status.agentConfigure.maxConcurrentInvokes` so `/invoke` enforces it without re-resolving the policy on every request.
+
+Independent of the policy, `/configure` enforces server-side correctness limits that protect the Router from a misbehaving caller:
+
+- Per-file size cap of 32 MiB (`configureFileLimitBytes`).
+- Aggregate size cap of 128 MiB across all files in one request (`configureFileTotalLimitBytes`).
+- Maximum 200 files per request (`configureFileMaxCount`).
+
+A request that violates any of these returns HTTP 403 with the same `policy_violation` shape and a `ConfigureDenied` Kubernetes event on the sandbox CR. The audit trail makes it easy to see who attempted what and when.
+
 ## Violations
 
 When a create request is rejected the response is HTTP 403 with a structured body:

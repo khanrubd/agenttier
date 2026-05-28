@@ -32,6 +32,10 @@ phases:
       - docker build -t $REPO_URI/$ECR_NAMESPACE/sandbox-general:$IMAGE_TAG -f images/general-coding/Dockerfile .
       - echo "Building sandbox-claude-code (with in-pod runtime)..."
       - docker build -t $REPO_URI/$ECR_NAMESPACE/sandbox-claude-code:$IMAGE_TAG -f images/claude-code/Dockerfile . || true
+      - echo "Building sandbox-openclaw (with in-pod runtime)..."
+      - docker build -t $REPO_URI/$ECR_NAMESPACE/sandbox-openclaw:$IMAGE_TAG -f images/openclaw/Dockerfile . || true
+      - echo "Building sandbox-strands-bedrock (with in-pod runtime)..."
+      - docker build -t $REPO_URI/$ECR_NAMESPACE/sandbox-strands-bedrock:$IMAGE_TAG -f images/strands-bedrock/Dockerfile . || true
       - echo "Building sandbox-langgraph (agent-mode reference)..."
       - docker build -t $REPO_URI/$ECR_NAMESPACE/sandbox-langgraph:$IMAGE_TAG -f images/langgraph/Dockerfile .
   post_build:
@@ -42,5 +46,7 @@ phases:
       - docker push $REPO_URI/$ECR_NAMESPACE/web-ui:$IMAGE_TAG
       - docker push $REPO_URI/$ECR_NAMESPACE/sandbox-general:$IMAGE_TAG
       - docker push $REPO_URI/$ECR_NAMESPACE/sandbox-claude-code:$IMAGE_TAG || true
+      - docker push $REPO_URI/$ECR_NAMESPACE/sandbox-openclaw:$IMAGE_TAG || true
+      - docker push $REPO_URI/$ECR_NAMESPACE/sandbox-strands-bedrock:$IMAGE_TAG || true
       - docker push $REPO_URI/$ECR_NAMESPACE/sandbox-langgraph:$IMAGE_TAG
       - echo "Build complete. Tagged $IMAGE_TAG in $ECR_NAMESPACE/* on $REPO_URI."

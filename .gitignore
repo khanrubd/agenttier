@@ -26,7 +26,11 @@ coverage.html
 *~
 .DS_Store
 
-# Kiro (internal development tooling)
+# Kiro (internal development tooling) — entire folder is gitignored.
+# Backups for recovery live in macOS at:
+#   ~/Library/Application Support/Kiro/User/globalStorage/kiro.kiroagent/
+#     */74a08cf8613c7dec4db7b264470db812/<hash>/.kiro/steering/project.md
+# Sort by mtime to find the latest if the working copy is lost.
 .kiro/
 
 # Local working todo (not shipped)
