@@ -51,19 +51,21 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 ### Sandbox lifecycle
 
 - **Create, stop, resume, delete** — sandboxes spin up from a template; stopping preserves the workspace, packages, and git state on a persistent volume; resume reattaches the same volume in seconds; idle and max-runtime caps auto-stop with grace.
+- **Clone any sandbox via VolumeSnapshot** — `POST /api/v1/sandboxes/{id}/clone` takes a CSI VolumeSnapshot of the source PVC and provisions a new sandbox whose workspace is byte-identical to the source. Clones inherit the source's spec (template, env, ports, agent harness) so a fork is one HTTP call away. SDK + CLI surfaces; works on any CSI driver with snapshot support (EBS, GCE PD, Azure Disk, etc).
 - **Sub-second cold starts** — per-template warm pools, optional immediate PVC binding, and an opt-in image pre-pull DaemonSet take creation from ~10 s down to ~800 ms.
 - **Self-healing** — bounded retries on infrastructure failures with structured Kubernetes events for every transition; clean Error state once the retry budget is exhausted.
 
 ### Templates and agent harnesses
 
 - **Compose templates from other templates** with field-level merge and per-sandbox overrides; the harness block defines the shell, tools, system prompt, hooks, and init scripts.
-- **Reference images out of the box** — general coding, Claude Code on AWS Bedrock (with cloud-native credential injection), OpenClaw on AWS Bedrock (turnkey IRSA-driven config), Strands Agents on AWS Bedrock (Python SDK with IRSA), minimal shell, and a LangGraph agent-mode image.
+- **Reference images out of the box** — general coding, Claude Code on AWS Bedrock (with cloud-native credential injection), OpenClaw on AWS Bedrock (turnkey IRSA-driven config), Strands Agents on AWS Bedrock (Python SDK with IRSA), a LangGraph agent-mode image, an `rl-rollout` image (PyTorch + Ray RLlib + Gymnasium + Stable-Baselines3 with self-contained PPO and `/invoke`-shaped rollout examples), and minimal shell.
 
 ### Agent mode
 
 - **Run an agent on demand** — configure a sandbox once with your code and install command, then call `/invoke` to run it; output streams back as Server-Sent Events and closing the connection cancels the in-pod process.
 - **Bring your own framework or harness** — the LangGraph reference template ships in the box; the same shape works for Strands Agents, AutoGen, OpenHands, OpenClaw, or any pip-installable agent library. The framework owns the loop; AgentTier owns lifecycle, auth, transport, audit, and governance.
 - **Throttle, time out, and audit every invoke** — per-sandbox concurrency caps return a clean 429 with `Retry-After`; default 30-minute per-invoke timeout with a cluster ceiling; OpenTelemetry spans, Prometheus metrics, and Kubernetes events emitted on every configure and invoke.
+- **Install logs persisted out-of-band** — the trailing bytes of every `/configure` install command land in a per-sandbox ConfigMap rather than inline on the Sandbox CR, so etcd object size stays small at scale and `kubectl describe sandbox` stays clean. A lazy GET endpoint serves the log on demand.
 - **Optional local memory** — Helm flag adds a `mem0` sidecar next to the agent. Bring-your-own memory (PVC-local, Pinecone, Postgres + pgvector, AgentCore Memory) is fully supported and documented.
 
 ### Security and isolation
@@ -76,6 +78,7 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 ### Interactive access
 
 - **Browser terminal that survives drops** — full PTY over WebSocket with reconnect, plus an in-pod terminal endpoint (`/pty` on each sandbox) that bypasses the Kubernetes API server so long sessions survive load-balancer and apiserver-side timeouts; a tmux wrap keeps the same shell across reconnects, and tmux's alt-screen capability is stripped so fullscreen TUIs (Claude Code, vim, less) write into the browser scrollback instead of swallowing history.
+- **Bottom-pinned during fast TUI redraws** — when an agent (Claude Code, vim, htop) is producing dense output the viewport stays pinned to the bottom so the input prompt stays visible. If you scroll up to read history, your scroll position is preserved — output keeps landing below without yanking you back to the prompt.
 - **Run commands programmatically** — fire-and-forget or request-response exec, file upload/download/list, and port forwarding with authenticated previews through the Router; ports also surface as Ingress URLs when a preview domain is configured.
 
 ### Multi-tenancy and governance
@@ -102,7 +105,8 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 ### Performance and observability
 
 - **Tracking and pre-warming** — per-sandbox startup duration in logs and events for regression tracking; optional warm pool, immediate PVC binding, and image pre-pull eliminate cold-start latency.
-- **OpenTelemetry traces and Prometheus metrics** — distributed traces across controller and router with trace context in structured JSON logs; `/metrics` exposes sandbox counts, startup histograms, queue depth, error counters, terminal stats, and the agent-mode invoke / configure / throttle metrics.
+- **OpenTelemetry traces and Prometheus metrics** — distributed traces across controller and router with **trace IDs auto-injected into structured JSON log lines** (one trace ID pivots between an OTel UI and `kubectl logs` in either direction). Spans cover every HTTP request (`router.<method>`), agent `/configure`, and `/invoke`. Bucketed `actor_hash` instead of raw OIDC subjects so traces shipped to third-party stores don't carry PII. `/metrics` exposes sandbox counts, startup histograms, queue depth, error counters, terminal stats, and the agent-mode invoke / configure / throttle metrics.
+- **OTel Collector bundled with the chart** — opt-in `observability.otelCollector.enabled=true` flag renders a Deployment + ConfigMap + Service running `otel/opentelemetry-collector-contrib` in your install namespace; deployments auto-point at it. Default exporter is `debug` so you can tail the collector's container logs to verify spans without provisioning external infra; replace the exporter to ship to Honeycomb / Datadog / Tempo / Jaeger / your existing collector.
 - **Continuous CVE scanning** — every sandbox base image is scanned with Trivy on every push; findings land in the GitHub Security tab as SARIF.
 
 ### Deployment and operations
@@ -113,10 +117,11 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 - **Highly available** — multi-replica controllers with leader election; multi-replica router with HTTP-routed exec, files, and invoke so any replica can serve any request.
 - **Cluster autoscaling out of the box** — opt-in upstream Cluster Autoscaler installs cloud-neutral via Helm (works on EKS, GKE, AKS, OpenStack, Cluster API). Pair it with the `headroom` Deployment to keep N+1 spare-node capacity warm: pause Pods at negative priority squat on a spare node, real sandboxes preempt them instantly, the evicted Pods trigger CAS to add the next spare in the background. Sandboxes never wait on a cold ASG round-trip.
 - **Container images you can verify** — every image is multi-arch, cosign-signed via GitHub Actions OIDC, and ships SPDX + CycloneDX SBOMs as OCI attestations.
+- **Automated post-release retention** — every release run prunes container manifests + GitHub Releases older than the latest 3 GA tags (older Releases demoted to pre-release, deep links preserved); git tags, PyPI versions, and active cosign signatures are never pruned.
 
 ### On the roadmap
 
-These are tracked but not yet shipped: Terraform module for EKS, sharing and collaboration UX, webhook / email / Slack notifications, sandbox cloning via VolumeSnapshot, inter-sandbox networking, optional SQL backend for state, validating admission webhook, and additional reference images (Strands Agents on Bedrock, OpenHands, OpenClaw, RL training).
+These are tracked but not yet shipped: Terraform module for EKS, sharing and collaboration UX, webhook / email / Slack notifications, inter-sandbox networking, optional SQL backend for state, validating admission webhook, validating CRD admission for several spec fields that are currently spec-only, HPA + multi-replica Router, and additional reference images (OpenHands).
 
 ## Architecture
 
