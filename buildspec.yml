@@ -38,6 +38,8 @@ phases:
       - docker build -t $REPO_URI/$ECR_NAMESPACE/sandbox-strands-bedrock:$IMAGE_TAG -f images/strands-bedrock/Dockerfile . || true
       - echo "Building sandbox-langgraph (agent-mode reference)..."
       - docker build -t $REPO_URI/$ECR_NAMESPACE/sandbox-langgraph:$IMAGE_TAG -f images/langgraph/Dockerfile .
+      - echo "Building sandbox-rl (RL rollout reference)..."
+      - docker build -t $REPO_URI/$ECR_NAMESPACE/sandbox-rl:$IMAGE_TAG -f images/rl/Dockerfile . || true
   post_build:
     commands:
       - echo "Pushing images..."
@@ -49,4 +51,5 @@ phases:
       - docker push $REPO_URI/$ECR_NAMESPACE/sandbox-openclaw:$IMAGE_TAG || true
       - docker push $REPO_URI/$ECR_NAMESPACE/sandbox-strands-bedrock:$IMAGE_TAG || true
       - docker push $REPO_URI/$ECR_NAMESPACE/sandbox-langgraph:$IMAGE_TAG
+      - docker push $REPO_URI/$ECR_NAMESPACE/sandbox-rl:$IMAGE_TAG || true
       - echo "Build complete. Tagged $IMAGE_TAG in $ECR_NAMESPACE/* on $REPO_URI."

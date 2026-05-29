@@ -379,3 +379,26 @@ jobs:
           sarif_file: trivy-sandbox-langgraph.sarif
           category: trivy-sandbox-langgraph
         continue-on-error: true
+
+      - name: Build sandbox-rl image for scanning
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: docker build -t agenttier-sandbox-rl:scan -f images/rl/Dockerfile .
+
+      - name: Trivy image scan (sandbox-rl)
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: "agenttier-sandbox-rl:scan"
+          format: "sarif"
+          output: "trivy-sandbox-rl.sarif"
+          severity: "CRITICAL,HIGH"
+          ignore-unfixed: true
+        continue-on-error: true
+
+      - name: Upload Trivy sandbox-rl SARIF
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: github/codeql-action/upload-sarif@v4
+        with:
+          sarif_file: trivy-sandbox-rl.sarif
+          category: trivy-sandbox-rl
+        continue-on-error: true

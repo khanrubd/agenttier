@@ -7,6 +7,7 @@ What AgentTier ships today, grouped by what you probably need first.
 - **Kubernetes CRDs** — `Sandbox` (namespace-scoped), `SandboxTemplate` (namespace-scoped), `ClusterSandboxTemplate` (cluster-scoped). Manage sandboxes with `kubectl`, GitOps (Argo CD / Flux), or through the REST API, SDK, or Web UI.
 - **State machine** — Creating → Running → Stopped → Running → Deleting, with an Error sink and Kubernetes Events at every transition so `kubectl describe sandbox` tells the full story.
 - **Stop and resume** — Stop deletes the Pod while preserving the PVC. Resume re-attaches the same volume in about two seconds. Workspace contents, installed packages, and git state are exactly as left.
+- **Cloning via VolumeSnapshot** — `POST /api/v1/sandboxes/{id}/clone` takes a CSI VolumeSnapshot of the source PVC, then creates a new sandbox whose PVC is hydrated from that snapshot. The clone inherits the source's spec (template, env, ports, agent harness) and its workspace contents byte-for-byte. See [Cloning](cloning.md).
 - **Idle and max-runtime timeouts** — per-sandbox via `spec.idleTimeout` / `spec.timeout`, or per-namespace via governance caps. A configurable grace window notifies connected terminal sessions before auto-stop.
 - **Self-healing** — restart on transient pod failures (OOM, preemption) with 10s / 20s / 40s / 80s / 160s exponential backoff. Permanent failure modes (image pull forever, config error) are surfaced on the sandbox `status.conditions`.
 
@@ -64,8 +65,9 @@ What AgentTier ships today, grouped by what you probably need first.
 
 ## Observability
 
-- **OpenTelemetry** — distributed traces across controller + router with trace context in structured JSON logs. OTLP exporter wires to any collector; the Helm chart can optionally deploy one as a sidecar.
-- **Prometheus** — `/metrics` exposes sandbox counts by status/template, startup-duration histograms, reconciliation queue depth, error counters, terminal session stats. Optional `ServiceMonitor` for Prometheus Operator.
+- **OpenTelemetry** — distributed traces across the router and controller. Every HTTP request gets a server span (`router.GET`, `router.POST`); agent-mode `/configure` and `/invoke` get bounded-cardinality spans (`agenttier.configure`, `agenttier.invoke`) with `template`, `outcome`, and a non-reversible `actor_hash`. Wires to any OTLP collector; the chart ships an opt-in collector for clusters without one. See [Observability](observability.md) for setup and backend integration.
+- **Trace-correlated logs** — slog JSON output stamps `trace_id` and `span_id` on every log line written under an active span context, so a single trace ID pivots between OTel UI and `kubectl logs` without any extra setup.
+- **Prometheus** — `/metrics` exposes invoke + configure counters and histograms partitioned by template and outcome, plus rate-limit and throttling counters. Optional `ServiceMonitor` for Prometheus Operator (`observability.prometheus.serviceMonitor=true`).
 - **Kubernetes Events** — every lifecycle transition emits a typed Event on the Sandbox resource so `kubectl describe sandbox` is a first-class debugging surface.
 - **Startup logging** — `startupDurationMs` is logged per creation and recorded on an Event for regression tracking.
 
@@ -84,7 +86,6 @@ Roadmap items that are *not* shipped in v0.5.0 and will return real errors or mi
 
 - Sharing and collaboration (viewer/collaborator roles, expiring share links) — planned for 0.2.x.
 - File transfer API — planned for 0.2.x.
-- Sandbox cloning via `VolumeSnapshot` — planned for 0.2.x.
 - Notifications (webhook / email / Slack) — planned for 0.2.x.
 - WebSocket ping frames + ALB migration — planned for 0.2.x; sessions through AWS Classic ELBs may still need manual reconnection every 60 minutes without the `connection-idle-timeout` annotation tweak.
 - Optional SQL backend for audit + analytics long-term retention — planned for 0.3.x.

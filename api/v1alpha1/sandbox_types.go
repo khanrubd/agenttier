@@ -146,6 +146,20 @@ type SandboxSpec struct {
 	// Sharing defines access permissions for other users.
 	// +optional
 	Sharing *SharingSpec `json:"sharing,omitempty"`
+
+	// CloneFromSnapshot, when set, instructs the controller to provision
+	// this sandbox's PVC from the named VolumeSnapshot rather than as
+	// an empty volume. Used internally by POST /sandboxes/{id}/clone — the
+	// Router takes a VolumeSnapshot of the source sandbox's PVC and stamps
+	// the snapshot's name here on the cloned Sandbox CR before creating
+	// it. The reconciler's PVC builder reads the field and emits a PVC
+	// with `dataSource: VolumeSnapshot{name: ...}` so the EBS CSI driver
+	// hydrates the new volume from the snapshot at provision time.
+	//
+	// The named VolumeSnapshot MUST live in the same namespace as the
+	// Sandbox; cross-namespace clones are rejected at create time.
+	// +optional
+	CloneFromSnapshot string `json:"cloneFromSnapshot,omitempty"`
 }
 
 // SandboxStatus defines the observed state of a Sandbox.
@@ -238,10 +252,20 @@ type AgentConfigureStatus struct {
 	// +optional
 	InstallExitCode int `json:"installExitCode,omitempty"`
 
-	// InstallLog holds the trailing 200 lines of the install command output
-	// for surface in the Web UI.
+	// InstallLogConfigMapRef points at the ConfigMap that holds the trailing
+	// install-log bytes for this configure run. The ConfigMap lives in the
+	// same namespace as the Sandbox and is owner-referenced so it's
+	// garbage-collected when the Sandbox is deleted. The Router writes it
+	// after every /configure run; the Web UI / SDK fetch the log on demand
+	// via GET /api/v1/sandboxes/{id}/configure/install-log.
+	//
+	// We persist the log out-of-band (rather than inline on the CR status)
+	// to keep Sandbox objects small. Writing 8 KiB of install log into
+	// every Sandbox's status block bloats etcd, multiplies watch churn
+	// across every controller / Router replica, and dumps unrelated noise
+	// into `kubectl describe sandbox` output.
 	// +optional
-	InstallLog string `json:"installLog,omitempty"`
+	InstallLogConfigMapRef *LocalObjectReference `json:"installLogConfigMapRef,omitempty"`
 
 	// MaxConcurrentInvokes mirrors the resolved template / governance cap
 	// at /configure time so the /invoke handler can enforce it without
@@ -253,6 +277,15 @@ type AgentConfigureStatus struct {
 	// in seconds. Zero means "use the Router default" (30 minutes today).
 	// +optional
 	DefaultInvokeTimeoutSeconds int32 `json:"defaultInvokeTimeoutSeconds,omitempty"`
+}
+
+// LocalObjectReference points at a Kubernetes object in the same namespace
+// as the referrer. We define our own (rather than reusing
+// `corev1.LocalObjectReference`) to keep the v1alpha1 surface free of
+// transitive corev1 imports — clients reading our CRDs only need our types.
+type LocalObjectReference struct {
+	// Name of the referenced object.
+	Name string `json:"name"`
 }
 
 // TemplateReference identifies a SandboxTemplate or ClusterSandboxTemplate.

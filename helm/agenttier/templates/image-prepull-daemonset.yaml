@@ -39,6 +39,9 @@ Scope:
 {{- if and .Values.defaults.strandsBedrock .Values.defaults.strandsBedrock.image }}
 {{- $images = append $images .Values.defaults.strandsBedrock.image }}
 {{- end }}
+{{- if and .Values.defaults.rl .Values.defaults.rl.image }}
+{{- $images = append $images .Values.defaults.rl.image }}
+{{- end }}
 {{- range .Values.optional.imagePrepull.extraImages }}
 {{- $images = append $images . }}
 {{- end }}

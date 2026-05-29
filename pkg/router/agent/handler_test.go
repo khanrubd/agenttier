@@ -201,8 +201,20 @@ func TestConfigure_FilesAndInstallPersistsStatus(t *testing.T) {
 	if got := sb.Status.AgentConfigure.Entrypoint; len(got) != 2 || got[0] != "python" {
 		t.Errorf("expected entrypoint persisted, got %v", got)
 	}
-	if !strings.Contains(sb.Status.AgentConfigure.InstallLog, "mem0") {
-		t.Errorf("expected install log tail to contain stdout, got %q", sb.Status.AgentConfigure.InstallLog)
+	// Install log moved to a separate ConfigMap (see InstallLogConfigMapRef
+	// docs on AgentConfigureStatus). Fetch + assert there instead of the CR.
+	if sb.Status.AgentConfigure.InstallLogConfigMapRef == nil {
+		t.Fatalf("expected installLogConfigMapRef set on status")
+	}
+	cm := &corev1.ConfigMap{}
+	if err := c.Get(context.Background(), client.ObjectKey{
+		Namespace: sb.Namespace,
+		Name:      sb.Status.AgentConfigure.InstallLogConfigMapRef.Name,
+	}, cm); err != nil {
+		t.Fatalf("install log ConfigMap missing: %v", err)
+	}
+	if !strings.Contains(cm.Data["log"], "mem0") {
+		t.Errorf("expected install log tail to contain stdout, got %q", cm.Data["log"])
 	}
 }
 
@@ -258,5 +270,62 @@ func TestConfigure_ValidatesAbsolutePath(t *testing.T) {
 	}
 	if !strings.Contains(rec.Body.String(), "absolute") {
 		t.Errorf("expected error to mention absolute path, got %q", rec.Body.String())
+	}
+}
+
+// TestGetInstallLog_404WhenAbsent confirms the lazy-load endpoint returns
+// 404 when no /configure has run (no ConfigMap exists yet) — the SDK and
+// Web UI use the 404 to mean "no log to show," distinct from an actual
+// error.
+func TestGetInstallLog_404WhenAbsent(t *testing.T) {
+	sandbox := newAgentSandbox()
+	h, _ := buildHandler(t, sandbox, &stubBridge{})
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/sandboxes/sbx-agent/configure/install-log", nil)
+	rec := httptest.NewRecorder()
+	r := mux.NewRouter()
+	api := r.PathPrefix("/api/v1").Subrouter()
+	h.RegisterRoutes(api)
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// TestGetInstallLog_ReturnsRecordedLog confirms a successful /configure
+// followed by a GET surfaces the log payload from the ConfigMap.
+func TestGetInstallLog_ReturnsRecordedLog(t *testing.T) {
+	sandbox := newAgentSandbox()
+	bridge := &stubBridge{stdout: []byte("Successfully installed widget==1.0.0\n"), exit: 0}
+	h, _ := buildHandler(t, sandbox, bridge)
+
+	rec := doConfigure(h, ConfigureRequest{
+		Files:          []ConfigureFile{{Path: "/workspace/agent.py", Content: "print('hi')\n"}},
+		InstallCommand: []string{"pip", "install", "widget"},
+		Entrypoint:     []string{"python", "/workspace/agent.py"},
+	})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("configure failed: %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/api/v1/sandboxes/sbx-agent/configure/install-log", nil)
+	getRec := httptest.NewRecorder()
+	r := mux.NewRouter()
+	api := r.PathPrefix("/api/v1").Subrouter()
+	h.RegisterRoutes(api)
+	r.ServeHTTP(getRec, getReq)
+
+	if getRec.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d body=%s", getRec.Code, getRec.Body.String())
+	}
+	var resp struct {
+		Log string `json:"log"`
+	}
+	if err := json.Unmarshal(getRec.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("invalid JSON: %v body=%s", err, getRec.Body.String())
+	}
+	if !strings.Contains(resp.Log, "widget==1.0.0") {
+		t.Errorf("expected log to contain installed package line, got %q", resp.Log)
 	}
 }

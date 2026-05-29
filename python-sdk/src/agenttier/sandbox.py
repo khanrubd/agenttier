@@ -10,7 +10,7 @@ to obtain instances — don't construct :class:`Sandbox` directly.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 from agenttier._http import raise_for_status
 from agenttier.exceptions import SandboxErrorState, SandboxTimeoutError
@@ -98,6 +98,53 @@ class Sandbox:
 
     # Alias kept for consistency with the REST name.
     delete = terminate
+
+    def clone(
+        self,
+        *,
+        name: Optional[str] = None,
+        snapshot_class: Optional[str] = None,
+    ) -> "Sandbox":
+        """Clone this sandbox via VolumeSnapshot.
+
+        Returns a new ``Sandbox`` proxy for the cloned sandbox in ``Pending``
+        state. The clone enters ``Creating`` while the CSI driver hydrates
+        the PVC from the snapshot (typically 30-90s on EBS); poll
+        :meth:`refresh` or use :meth:`AgentTierClient.wait_until_running`
+        until the phase reaches ``Running``.
+
+        Parameters
+        ----------
+        name:
+            Name for the new sandbox. Auto-generated as
+            ``<source>-clone-<unix-ts>`` when omitted. Must satisfy RFC 1123
+            label rules (lowercase alphanumeric or ``-``, max 63 chars).
+        snapshot_class:
+            Override for the cluster's default ``VolumeSnapshotClass``. Most
+            callers leave this empty.
+
+        Cluster prerequisites: see ``docs/docs/cloning.md``. The cluster
+        must have the external-snapshotter CRDs + controller installed and
+        a default ``VolumeSnapshotClass`` configured for the source PVC's
+        storage driver. Without those, the request returns 500.
+        """
+        body: Dict[str, str] = {}
+        if name is not None:
+            body["name"] = name
+        if snapshot_class is not None:
+            body["snapshotClass"] = snapshot_class
+        resp = self._http.post(f"/sandboxes/{self.id}/clone", json=body)
+        raise_for_status(resp)
+        payload = resp.json()
+        # Build a Sandbox proxy for the new id. The server returns 202
+        # Accepted with the snapshot + clone metadata; we only need the
+        # name to bind the proxy.
+        return Sandbox(
+            http=self._http,
+            sandbox_id=payload["name"],
+            name=payload["name"],
+            namespace=payload.get("namespace", self.namespace),
+        )
 
     # ------- execution ---------------------------------------------------
 

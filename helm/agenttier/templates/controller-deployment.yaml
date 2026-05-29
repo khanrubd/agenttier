@@ -41,7 +41,14 @@ spec:
                   fieldPath: metadata.namespace
             {{- if .Values.observability.otlp.endpoint }}
             - name: OTEL_EXPORTER_OTLP_ENDPOINT
-              value: {{ .Values.observability.otlp.endpoint }}
+              value: {{ .Values.observability.otlp.endpoint | quote }}
+            - name: OTEL_EXPORTER_OTLP_INSECURE
+              value: {{ .Values.observability.otlp.insecure | default true | quote }}
+            {{- else if .Values.observability.otelCollector.enabled }}
+            - name: OTEL_EXPORTER_OTLP_ENDPOINT
+              value: "{{ include "agenttier.fullname" . }}-otel-collector.{{ .Release.Namespace }}.svc.cluster.local:4317"
+            - name: OTEL_EXPORTER_OTLP_INSECURE
+              value: "true"
             {{- end }}
           ports:
             - name: metrics

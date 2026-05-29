@@ -25,14 +25,17 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
+	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	"github.com/agenttier/agenttier/pkg/governance"
+	agentotel "github.com/agenttier/agenttier/pkg/otel"
 	"github.com/agenttier/agenttier/pkg/router/agent"
 	"github.com/agenttier/agenttier/pkg/router/portforward"
 	"github.com/agenttier/agenttier/pkg/router/terminal"
@@ -79,9 +82,14 @@ type Server struct {
 
 // NewServer creates a new Router server with all routes registered.
 func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge) *Server {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
+	// Wrap the JSON handler in the OTel slog handler so trace_id and
+	// span_id automatically appear in any log line written via
+	// LogAttrs(ctx, ...). When the process boots without an OTLP
+	// exporter the wrapper is a near-zero-cost noop, so this is safe
+	// to keep on unconditionally.
+	logger := slog.New(agentotel.NewSlogContextHandler(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
 		Level: slog.LevelInfo,
-	}))
+	})))
 
 	r := mux.NewRouter()
 	s := &Server{
@@ -236,9 +244,30 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	})
 	agentHandler.RegisterRoutes(api)
 
+	// Wrap the mux with OTel HTTP instrumentation. otelhttp.NewHandler
+	// extracts incoming W3C Trace Context headers, starts a server span
+	// for each request, and propagates the resulting context down to
+	// handlers via r.Context(). Healthz / readyz / metrics are excluded
+	// to keep span volume sane — kubelet hits readyz every couple of
+	// seconds and Prometheus hits metrics on its scrape cadence.
+	//
+	// SpanNameFormatter follows the steering rule for span naming
+	// (`service.operation`): "router.GET" / "router.POST" etc. The mux
+	// route template (e.g. /api/v1/sandboxes/{id}) shows up as a span
+	// attribute via otelhttp's `http.route` semconv, so we don't
+	// embed dynamic IDs in the span name.
+	otelHandler := otelhttp.NewHandler(r, "router",
+		otelhttp.WithFilter(func(req *http.Request) bool {
+			return !isOTelExempt(req.URL.Path)
+		}),
+		otelhttp.WithSpanNameFormatter(func(_ string, req *http.Request) string {
+			return "router." + req.Method
+		}),
+	)
+
 	s.httpServer = &http.Server{
 		Addr:    config.ListenAddr,
-		Handler: r,
+		Handler: otelHandler,
 		// ReadTimeout: 0 is required so WebSocket upgrades can hold a
 		// connection open beyond any HTTP read deadline. But a global
 		// zero ReadTimeout exposes every endpoint (REST, SSE, file
@@ -336,4 +365,16 @@ func (s *Server) agentSandboxOf(ctx context.Context, sandboxID string, ac *agent
 	}
 	rc := &Claims{Sub: ac.Sub, Email: ac.Email, Name: ac.Name, IsAdmin: ac.IsAdmin}
 	return s.getSandboxWithAuthCheck(ctx, sandboxID, rc)
+}
+
+// isOTelExempt reports whether the path should NOT produce a server span.
+// We skip kubelet probes, the Prometheus scrape, and WebSocket upgrades
+// (long-lived connections that would generate a single multi-hour span
+// containing every keystroke event — which is not what tracing is for).
+func isOTelExempt(path string) bool {
+	switch path {
+	case "/healthz", "/readyz", "/metrics":
+		return true
+	}
+	return strings.HasPrefix(path, "/ws/")
 }

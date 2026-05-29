@@ -173,6 +173,7 @@ func New(opts Options) *Handler {
 // Caller is expected to have applied authentication middleware already.
 func (h *Handler) RegisterRoutes(api *mux.Router) {
 	api.HandleFunc("/sandboxes/{id}/configure", h.handleConfigure).Methods("POST")
+	api.HandleFunc("/sandboxes/{id}/configure/install-log", h.handleGetInstallLog).Methods("GET")
 	api.HandleFunc("/sandboxes/{id}/invoke", h.handleInvoke).Methods("POST")
 	api.HandleFunc("/sandboxes/{id}/invoke/cancel", h.handleInvokeCancel).Methods("POST")
 }

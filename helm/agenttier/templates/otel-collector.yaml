@@ -1,0 +1,213 @@
+{{- /*
+OpenTelemetry Collector — opt-in, namespace-local trace ingest.
+
+When `observability.otelCollector.enabled` is true the chart ships a
+Deployment + ConfigMap + Service that runs `otel/opentelemetry-collector-contrib`.
+The default config receives OTLP gRPC on :4317 and OTLP HTTP on :4318
+and exports to a single `debug` exporter — meaning you can install it
+empty-handed, exec into the pod, and see spans arrive in the container
+logs without provisioning external infra. Operators replace the exporter
+config to ship to their actual backend (Honeycomb, Datadog, Tempo,
+Jaeger, etc).
+
+The chart points the controller + router at this Service automatically:
+when `observability.otelCollector.enabled=true` and `observability.otlp.endpoint`
+is empty, the rendered router/controller deployments substitute the
+in-cluster Service DNS name for OTEL_EXPORTER_OTLP_ENDPOINT.
+
+Why namespace-local instead of cluster-singleton:
+- Keeps the install path one-Helm-chart-deep. No cluster admin needed.
+- Each AgentTier install is independently traceable. Two AgentTier
+  installs in the same cluster don't fight over a shared exporter pipe.
+- Operators with an existing cluster-wide collector simply set
+  `observability.otelCollector.enabled=false` and point
+  `observability.otlp.endpoint` at their existing host:4317.
+*/ -}}
+{{- if .Values.observability.otelCollector.enabled }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "agenttier.fullname" . }}-otel-collector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-collector
+data:
+  config.yaml: |
+    extensions:
+      # health_check exposes /:13133 for kubelet liveness/readiness.
+      # Without this extension the collector starts cleanly but the
+      # default probes 404, which kubelet (correctly) interprets as
+      # not-ready and CrashLoopBackOff loops the pod.
+      health_check:
+        endpoint: 0.0.0.0:13133
+
+    receivers:
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+
+    processors:
+      batch:
+        # 5s timeout keeps p99 ingest latency low while still amortizing
+        # exporter cost. 1024 max batch size matches typical backend limits.
+        timeout: 5s
+        send_batch_size: 1024
+      memory_limiter:
+        check_interval: 5s
+        limit_percentage: 75
+        spike_limit_percentage: 25
+
+    exporters:
+      # Default exporter is debug-only so a fresh install works without
+      # external infra. Operators replace this block to ship to their
+      # actual backend. Examples in docs/docs/observability.md.
+      debug:
+        verbosity: basic
+        sampling_initial: 5
+        sampling_thereafter: 200
+
+    service:
+      extensions: [health_check]
+      telemetry:
+        logs:
+          level: info
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug]
+        metrics:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug]
+        logs:
+          receivers: [otlp]
+          processors: [memory_limiter, batch]
+          exporters: [debug]
+{{- with .Values.observability.otelCollector.extraConfig }}
+    {{ . | nindent 4 }}
+{{- end }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "agenttier.fullname" . }}-otel-collector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-collector
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "agenttier.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: otel-collector
+  template:
+    metadata:
+      labels:
+        {{- include "agenttier.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: otel-collector
+      annotations:
+        # Roll the deployment when the config changes. Hashing the
+        # collector-relevant slice of values is enough — using
+        # `include` on the same file recurses.
+        checksum/config: {{ .Values.observability.otelCollector | toYaml | sha256sum }}
+    spec:
+      serviceAccountName: default
+      containers:
+        - name: otel-collector
+          image: {{ .Values.observability.otelCollector.image | quote }}
+          imagePullPolicy: {{ .Values.observability.otelCollector.imagePullPolicy | default "IfNotPresent" }}
+          args:
+            - --config=/etc/otel-collector/config.yaml
+          ports:
+            - name: otlp-grpc
+              containerPort: 4317
+              protocol: TCP
+            - name: otlp-http
+              containerPort: 4318
+              protocol: TCP
+            - name: metrics
+              containerPort: 8888
+              protocol: TCP
+          resources:
+            {{- toYaml .Values.observability.otelCollector.resources | nindent 12 }}
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 13133
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          volumeMounts:
+            - name: config
+              mountPath: /etc/otel-collector
+              readOnly: true
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            runAsNonRoot: true
+            runAsUser: 10001
+            capabilities:
+              drop: ["ALL"]
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "agenttier.fullname" . }}-otel-collector
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agenttier.fullname" . }}-otel-collector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-collector
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "agenttier.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-collector
+  ports:
+    - name: otlp-grpc
+      port: 4317
+      targetPort: otlp-grpc
+      protocol: TCP
+    - name: otlp-http
+      port: 4318
+      targetPort: otlp-http
+      protocol: TCP
+{{- if .Values.observability.prometheus.serviceMonitor }}
+---
+# Collector self-metrics — useful when debugging the trace pipeline
+# itself (e.g. "are spans being dropped at the batch processor"). Gated
+# on `observability.prometheus.serviceMonitor` so installs without the
+# Prometheus Operator don't hit a missing-CRD error.
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "agenttier.fullname" . }}-otel-collector
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+    app.kubernetes.io/component: otel-collector
+spec:
+  selector:
+    matchLabels:
+      {{- include "agenttier.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: otel-collector
+  endpoints:
+    - port: metrics
+      interval: 30s
+{{- end }}
+{{- end }}

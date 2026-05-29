@@ -6,7 +6,7 @@
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, Dict, Optional
 
 from agenttier._http import raise_for_status
 from agenttier.exceptions import SandboxErrorState, SandboxTimeoutError
@@ -74,6 +74,28 @@ class AsyncSandbox:
         raise_for_status(resp)
 
     delete = terminate
+
+    async def clone(
+        self,
+        *,
+        name: Optional[str] = None,
+        snapshot_class: Optional[str] = None,
+    ) -> "AsyncSandbox":
+        """Clone this sandbox via VolumeSnapshot. See ``Sandbox.clone``."""
+        body: Dict[str, str] = {}
+        if name is not None:
+            body["name"] = name
+        if snapshot_class is not None:
+            body["snapshotClass"] = snapshot_class
+        resp = await self._http.post(f"/sandboxes/{self.id}/clone", json=body)
+        raise_for_status(resp)
+        payload = resp.json()
+        return AsyncSandbox(
+            http=self._http,
+            sandbox_id=payload["name"],
+            name=payload["name"],
+            namespace=payload.get("namespace", self.namespace),
+        )
 
     async def exec(self, command: str, timeout: int = 30) -> CommandResult:
         if not command:

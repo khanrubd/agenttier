@@ -22,13 +22,17 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"path"
+	"regexp"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/gorilla/mux"
 	"github.com/gorilla/websocket"
+	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -44,6 +48,12 @@ import (
 var upgrader = websocket.Upgrader{
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
+
+// validSandboxName matches RFC 1123 label rules — what Kubernetes requires
+// for resource names. Lowercase alphanumeric + dash, start/end alphanumeric,
+// max 63 chars. Used to validate user-supplied clone names before we
+// attempt to create the new Sandbox.
+var validSandboxName = regexp.MustCompile(`^[a-z0-9]([-a-z0-9]{0,61}[a-z0-9])?$`)
 
 // --- Sandbox CRUD Handlers ---
 
@@ -312,7 +322,122 @@ func (s *Server) handleResumeSandbox(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) handleCloneSandbox(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "cloning not yet implemented")
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	sourceID := mux.Vars(r)["id"]
+	source, err := s.getSandboxWithAuthCheck(r.Context(), sourceID, claims)
+	if err != nil {
+		respondError(w, http.StatusNotFound, err.Error())
+		return
+	}
+	if source.Status.PVCName == "" {
+		respondError(w, http.StatusBadRequest, fmt.Sprintf("sandbox %s has no PVC to clone (phase=%s)", source.Name, source.Status.Phase))
+		return
+	}
+
+	// Body shape: { "name": "<new-sandbox-id>", "snapshotClass": "<optional>" }.
+	// Both fields optional — name auto-generated as "<source>-clone-<ts>" if
+	// empty; snapshotClass falls back to the cluster's default
+	// VolumeSnapshotClass when empty.
+	var req struct {
+		Name          string `json:"name,omitempty"`
+		SnapshotClass string `json:"snapshotClass,omitempty"`
+	}
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+			return
+		}
+	}
+
+	cloneName := strings.TrimSpace(req.Name)
+	if cloneName == "" {
+		cloneName = fmt.Sprintf("%s-clone-%d", source.Name, time.Now().Unix())
+	}
+	if !validSandboxName.MatchString(cloneName) {
+		respondError(w, http.StatusBadRequest, "name must match RFC 1123 label rules: lowercase alphanumeric or '-', start/end alphanumeric, max 63 chars")
+		return
+	}
+
+	// Step 1: take a VolumeSnapshot of the source PVC. Snapshot lives in
+	// the same namespace as the source sandbox; the EBS CSI driver
+	// (or any other CSI snapshotter) hydrates it asynchronously.
+	snapName := fmt.Sprintf("%s-snap-%d", source.Name, time.Now().Unix())
+	snap := &snapshotv1.VolumeSnapshot{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      snapName,
+			Namespace: source.Namespace,
+			Labels: map[string]string{
+				"agenttier.io/source-sandbox": source.Name,
+				"agenttier.io/clone-target":   cloneName,
+			},
+		},
+		Spec: snapshotv1.VolumeSnapshotSpec{
+			Source: snapshotv1.VolumeSnapshotSource{
+				PersistentVolumeClaimName: &source.Status.PVCName,
+			},
+		},
+	}
+	if req.SnapshotClass != "" {
+		snap.Spec.VolumeSnapshotClassName = &req.SnapshotClass
+	}
+	if err := s.k8sClient.Create(r.Context(), snap); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to create VolumeSnapshot: "+err.Error())
+		return
+	}
+
+	// Step 2: build the cloned Sandbox CR. Copy the source's spec as a
+	// baseline so the clone inherits template, image, env, ports, etc.
+	// CreatedBy is re-stamped from the caller; CloneFromSnapshot is what
+	// tells the controller this is a hydrated PVC.
+	cloneSpec := *source.Spec.DeepCopy()
+	cloneSpec.CloneFromSnapshot = snapName
+	cloneSpec.CreatedBy = &agenttierv1alpha1.UserIdentity{
+		Email:       claims.Email,
+		DisplayName: claims.Name,
+	}
+
+	clone := &agenttierv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      cloneName,
+			Namespace: source.Namespace,
+			Labels: map[string]string{
+				"agenttier.io/cloned-from": source.Name,
+			},
+		},
+		Spec: cloneSpec,
+	}
+	if err := s.k8sClient.Create(r.Context(), clone); err != nil {
+		// Clean up the orphan snapshot — no point keeping it without
+		// a target sandbox.
+		_ = s.k8sClient.Delete(r.Context(), snap)
+		respondError(w, http.StatusInternalServerError, "failed to create cloned sandbox: "+err.Error())
+		return
+	}
+
+	// Step 3: stamp clonedFrom on the new Sandbox status. Best-effort —
+	// the field's purpose is auditability, not correctness, so a status
+	// update failure here doesn't fail the clone operation.
+	clone.Status.ClonedFrom = source.Name
+	if err := s.k8sClient.Status().Update(r.Context(), clone); err != nil {
+		s.logger.LogAttrs(r.Context(), slog.LevelWarn, "clone created but ClonedFrom status update failed",
+			slog.String("source", source.Name),
+			slog.String("clone", clone.Name),
+			slog.String("error", err.Error()),
+		)
+	}
+
+	respondJSON(w, http.StatusAccepted, map[string]any{
+		"name":       cloneName,
+		"namespace":  clone.Namespace,
+		"snapshot":   snapName,
+		"clonedFrom": source.Name,
+		"phase":      "Pending",
+		"message":    "Clone in progress. Poll GET /api/v1/sandboxes/" + cloneName + " for status; PVC provisioning waits on the VolumeSnapshot becoming readyToUse (typically 30-90 seconds on EBS).",
+	})
 }
 
 // --- Command Execution ---

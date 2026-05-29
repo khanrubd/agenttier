@@ -22,7 +22,9 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"time"
 
+	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -35,6 +37,7 @@ import (
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
 	"github.com/agenttier/agenttier/pkg/controller"
 	"github.com/agenttier/agenttier/pkg/controller/warmpool"
+	agentotel "github.com/agenttier/agenttier/pkg/otel"
 	"github.com/agenttier/agenttier/pkg/version"
 )
 
@@ -46,6 +49,10 @@ var (
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(agenttierv1alpha1.AddToScheme(scheme))
+	// VolumeSnapshot CRDs from external-snapshotter so the controller
+	// can read VolumeSnapshot objects (created by the Router on
+	// /sandboxes/{id}/clone) and provision PVCs from them.
+	utilruntime.Must(snapshotv1.AddToScheme(scheme))
 }
 
 func main() {
@@ -91,6 +98,31 @@ func main() {
 		"commit", version.GitCommit,
 	)
 
+	// Initialize OpenTelemetry. Same pattern as the router — env-driven,
+	// no-export when OTEL_EXPORTER_OTLP_ENDPOINT is empty. The warm-pool
+	// reconciler logger below picks up the trace-context handler so any
+	// spans threaded into reconcile contexts (future task; controller-side
+	// reconcile spans are not in scope for this commit) auto-correlate.
+	bootLogger := slog.New(agentotel.NewSlogContextHandler(
+		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}),
+	))
+	otelShutdownCtx, otelShutdownCancel := context.WithCancel(context.Background())
+	defer otelShutdownCancel()
+	otelShutdown, err := agentotel.Setup(otelShutdownCtx,
+		agentotel.LoadConfigFromEnv("agenttier-controller", version.Version),
+		bootLogger)
+	if err != nil {
+		setupLog.Error(err, "OpenTelemetry setup failed")
+		os.Exit(1)
+	}
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := otelShutdown(ctx); err != nil {
+			bootLogger.Warn("OTel shutdown returned an error", "err", err)
+		}
+	}()
+
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
@@ -132,8 +164,7 @@ func main() {
 	}
 
 	// Start warm pool reconciler (runs only on the leader, respects leader election)
-	wpLogger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
-	wpReconciler := warmpool.NewReconciler(mgr.GetClient(), wpLogger, namespace)
+	wpReconciler := warmpool.NewReconciler(mgr.GetClient(), bootLogger, namespace)
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		wpReconciler.RunLoop(ctx)
 		return nil

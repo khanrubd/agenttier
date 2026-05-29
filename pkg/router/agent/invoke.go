@@ -149,13 +149,18 @@ func (h *Handler) handleInvoke(w http.ResponseWriter, r *http.Request) {
 	entrypoint := append([]string(nil), sandbox.Status.AgentConfigure.Entrypoint...)
 
 	// One OTel span per invoke. Attributes follow the steering rule (no
-	// per-user IDs in label values; bucket by template instead).
+	// per-user IDs in label values; bucket by template instead). The
+	// actor is hashed via agentotel.HashActor so the raw OIDC subject
+	// (which is PII in third-party trace stores like Datadog/Honeycomb)
+	// never leaves the process — operators can still correlate within
+	// a single investigation window using the 8-char digest, but cannot
+	// re-derive the original identity.
 	tracer := agentotel.Tracer("agenttier-router/agent")
 	ctx, span := tracer.Start(r.Context(), "agenttier.invoke")
 	span.SetAttributes(
 		attribute.String("sandbox", sandbox.Name),
 		attribute.String("template", sandbox.Status.ResolvedTemplate),
-		attribute.String("actor", claims.Sub),
+		attribute.String("actor_hash", agentotel.HashActor(claims.Sub)),
 	)
 	defer span.End()
 	tmplLabel := templateLabel(sandbox.Status.ResolvedTemplate)

@@ -34,6 +34,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
 	"github.com/agenttier/agenttier/pkg/governance"
@@ -118,7 +119,9 @@ func (h *Handler) handleConfigure(w http.ResponseWriter, r *http.Request) {
 
 	// One OTel span per /configure. Span name follows the steering rule:
 	// "service.operation" → "agenttier.configure". Attributes are bounded
-	// (template, actor sub, hash) so cardinality stays sane.
+	// (template, actor hash) so cardinality stays sane and no raw OIDC
+	// sub claim leaks into third-party trace stores. See
+	// agentotel.HashActor for the digest contract.
 	tracer := agentotel.Tracer("agenttier-router/agent")
 	ctx, span := tracer.Start(r.Context(), "agenttier.configure") // nb: WithAttributes accepts a variadic slice; we add some now and
 	// fill in install_command_hash and outcome below.
@@ -126,7 +129,7 @@ func (h *Handler) handleConfigure(w http.ResponseWriter, r *http.Request) {
 	span.SetAttributes(
 		attribute.String("sandbox", sandbox.Name),
 		attribute.String("template", sandbox.Status.ResolvedTemplate),
-		attribute.String("actor", claims.Sub),
+		attribute.String("actor_hash", agentotel.HashActor(claims.Sub)),
 	)
 	defer span.End()
 	startedAt := time.Now()
@@ -512,7 +515,24 @@ func (h *Handler) runInstall(ctx context.Context, sse *sseWriter, sandbox *agent
 // persistStatus writes the configure result into Sandbox.status.agentConfigure.
 // We use a 3x retry loop to absorb the optimistic-concurrency conflicts that
 // happen when the controller updates status concurrently.
+//
+// The install log is stored out-of-band in a per-sandbox ConfigMap (see
+// writeInstallLog) so the Sandbox CR stays small. Status holds only a
+// reference to that ConfigMap; the Web UI / SDK fetch the log on demand.
 func (h *Handler) persistStatus(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox, resp *ConfigureResponse, installLog string, maxConcurrent int32, defaultTimeout time.Duration) error {
+	// Write the install log ConfigMap first. If this fails we still want
+	// the status update to land — the configure itself succeeded; the
+	// log is debug data. So we log + continue, leaving InstallLogConfigMapRef
+	// nil so a subsequent GET returns 404.
+	var installLogRef *agenttierv1alpha1.LocalObjectReference
+	cmName, err := h.writeInstallLog(ctx, sandbox, installLog)
+	if err != nil {
+		h.opts.Logger.Warn("failed to write install log ConfigMap; status will omit reference",
+			"sandbox", sandbox.Name, "error", err)
+	} else if cmName != "" {
+		installLogRef = &agenttierv1alpha1.LocalObjectReference{Name: cmName}
+	}
+
 	var lastErr error
 	for i := 0; i < 3; i++ {
 		// Re-fetch so we always patch the latest resourceVersion.
@@ -526,7 +546,7 @@ func (h *Handler) persistStatus(ctx context.Context, sandbox *agenttierv1alpha1.
 			InstallCommandHash:          resp.InstallCommandHash,
 			Entrypoint:                  resp.Entrypoint,
 			InstallExitCode:             resp.InstallExitCode,
-			InstallLog:                  installLog,
+			InstallLogConfigMapRef:      installLogRef,
 			MaxConcurrentInvokes:        maxConcurrent,
 			DefaultInvokeTimeoutSeconds: int32(defaultTimeout.Seconds()),
 		}
@@ -540,6 +560,94 @@ func (h *Handler) persistStatus(ctx context.Context, sandbox *agenttierv1alpha1.
 		return nil
 	}
 	return lastErr
+}
+
+// installLogConfigMapName returns the canonical ConfigMap name for a
+// sandbox's install log. We use a stable name (rather than a random
+// suffix) so re-configures overwrite cleanly without leaving orphan
+// ConfigMaps to garbage-collect.
+func installLogConfigMapName(sandboxName string) string {
+	return sandboxName + "-install-log"
+}
+
+// writeInstallLog upserts a per-sandbox ConfigMap holding the trailing
+// installLogTailBytes of stdout/stderr from the most recent install run.
+// The ConfigMap is owner-referenced to the Sandbox so it gets garbage-
+// collected when the Sandbox is deleted — no stale logs left behind.
+//
+// Empty input means "no install command ran"; in that case we delete any
+// stale ConfigMap from a prior run (so the UI doesn't surface a log that
+// no longer corresponds to the resolved configuration) and return
+// ("", nil).
+func (h *Handler) writeInstallLog(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox, log string) (string, error) {
+	cmName := installLogConfigMapName(sandbox.Name)
+	cm := &corev1.ConfigMap{}
+	getErr := h.opts.K8sClient.Get(ctx, client.ObjectKey{Namespace: sandbox.Namespace, Name: cmName}, cm)
+
+	if log == "" {
+		// No log to persist — clean up any stale CM so the UI doesn't
+		// keep showing an old install run's output.
+		if errors.IsNotFound(getErr) {
+			return "", nil
+		}
+		if getErr != nil {
+			return "", getErr
+		}
+		if err := h.opts.K8sClient.Delete(ctx, cm); err != nil && !errors.IsNotFound(err) {
+			return "", err
+		}
+		return "", nil
+	}
+
+	// Owner reference back to the Sandbox so this CM is GC'd when the
+	// sandbox is deleted. Controller is true so the CM is treated as a
+	// dependent the sandbox owns.
+	t := true
+	owner := metav1.OwnerReference{
+		APIVersion:         agenttierv1alpha1.GroupVersion.String(),
+		Kind:               "Sandbox",
+		Name:               sandbox.Name,
+		UID:                sandbox.UID,
+		Controller:         &t,
+		BlockOwnerDeletion: &t,
+	}
+
+	if errors.IsNotFound(getErr) {
+		newCM := &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:            cmName,
+				Namespace:       sandbox.Namespace,
+				OwnerReferences: []metav1.OwnerReference{owner},
+				Labels: map[string]string{
+					"agenttier.io/sandbox": sandbox.Name,
+					"agenttier.io/kind":    "install-log",
+				},
+			},
+			Data: map[string]string{"log": log},
+		}
+		if err := h.opts.K8sClient.Create(ctx, newCM); err != nil {
+			return "", err
+		}
+		return cmName, nil
+	}
+	if getErr != nil {
+		return "", getErr
+	}
+
+	// Update existing — overwrite the log payload, refresh the owner
+	// reference (in case the sandbox UID rotated through a delete + recreate
+	// with the same name).
+	cm.Data = map[string]string{"log": log}
+	cm.OwnerReferences = []metav1.OwnerReference{owner}
+	if cm.Labels == nil {
+		cm.Labels = map[string]string{}
+	}
+	cm.Labels["agenttier.io/sandbox"] = sandbox.Name
+	cm.Labels["agenttier.io/kind"] = "install-log"
+	if err := h.opts.K8sClient.Update(ctx, cm); err != nil {
+		return "", err
+	}
+	return cmName, nil
 }
 
 // resolveAgentCaps returns (maxConcurrentInvokes, defaultInvokeTimeout) for
@@ -683,4 +791,39 @@ func envValuesByName(env []corev1.EnvVar) map[string]string {
 		out[e.Name] = e.Value
 	}
 	return out
+}
+
+// handleGetInstallLog serves the install-log ConfigMap that
+// persistStatus wrote during the most recent /configure run. Lazy-loaded
+// from a separate ConfigMap (rather than inline on Sandbox.status) so
+// the CR stays small at scale — see the InstallLogConfigMapRef field
+// docs on AgentConfigureStatus.
+//
+// Response shape mirrors the body persisted: `{"log": "<bytes>"}`. When
+// no log exists (sandbox never configured, or the most recent configure
+// had nothing to install), returns 404 — consistent with "the install
+// log doesn't exist" rather than "the sandbox doesn't exist."
+func (h *Handler) handleGetInstallLog(w http.ResponseWriter, r *http.Request) {
+	sandbox, _, ok := h.loadSandbox(w, r)
+	if !ok {
+		return
+	}
+
+	cmName := installLogConfigMapName(sandbox.Name)
+	cm := &corev1.ConfigMap{}
+	if err := h.opts.K8sClient.Get(r.Context(), client.ObjectKey{
+		Namespace: sandbox.Namespace,
+		Name:      cmName,
+	}, cm); err != nil {
+		if errors.IsNotFound(err) {
+			writeError(w, http.StatusNotFound, "no install log available for this sandbox")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to read install log: "+err.Error())
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	_, _ = fmt.Fprintf(w, `{"log": %q}`, cm.Data["log"])
 }

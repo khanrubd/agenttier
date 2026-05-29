@@ -8,4 +8,4 @@ import it without circular dependencies. Release tooling reads this file when
 bumping versions; keep the identifier named ``__version__``.
 """
 
-__version__ = "0.5.0"
+__version__ = "0.5.5"

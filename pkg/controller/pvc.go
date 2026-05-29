@@ -98,6 +98,26 @@ func (b *PVCBuilder) Build(sandbox *agenttierv1alpha1.Sandbox, storageSpec *agen
 		pvc.Spec.StorageClassName = &storageClass
 	}
 
+	// Clone path: when the Sandbox spec carries a CloneFromSnapshot, set
+	// the dataSource so the CSI driver hydrates the volume from the
+	// VolumeSnapshot at provision time. We use DataSource (not
+	// DataSourceRef) for compatibility with EBS CSI versions that
+	// haven't enabled the AnyVolumeDataSource feature gate; both fields
+	// accept the same TypedLocalObjectReference shape and the driver
+	// reconciles them identically for VolumeSnapshot sources. Group is
+	// "snapshot.storage.k8s.io" — the standard external-snapshotter API
+	// group every CSI driver uses.
+	if sandbox.Spec.CloneFromSnapshot != "" {
+		apiGroup := "snapshot.storage.k8s.io"
+		pvc.Spec.DataSource = &corev1.TypedLocalObjectReference{
+			APIGroup: &apiGroup,
+			Kind:     "VolumeSnapshot",
+			Name:     sandbox.Spec.CloneFromSnapshot,
+		}
+		// Also stamp a label so the operator can grep cloned PVCs.
+		pvc.Labels["agenttier.io/cloned-from-snapshot"] = sandbox.Spec.CloneFromSnapshot
+	}
+
 	return pvc
 }
 

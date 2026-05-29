@@ -17,12 +17,15 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
 	"log/slog"
 	"os"
+	"time"
 
+	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	utilruntime "k8s.io/apimachinery/pkg/util/runtime"
 	"k8s.io/client-go/kubernetes"
@@ -32,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
+	agentotel "github.com/agenttier/agenttier/pkg/otel"
 	"github.com/agenttier/agenttier/pkg/router"
 	"github.com/agenttier/agenttier/pkg/router/terminal"
 	"github.com/agenttier/agenttier/pkg/version"
@@ -42,6 +46,10 @@ var scheme = runtime.NewScheme()
 func init() {
 	utilruntime.Must(clientgoscheme.AddToScheme(scheme))
 	utilruntime.Must(agenttierv1alpha1.AddToScheme(scheme))
+	// VolumeSnapshot CRDs from external-snapshotter — needed so the
+	// Router can create + read VolumeSnapshot objects when cloning a
+	// sandbox (POST /sandboxes/{id}/clone).
+	utilruntime.Must(snapshotv1.AddToScheme(scheme))
 }
 
 func main() {
@@ -89,8 +97,34 @@ func main() {
 		os.Exit(0)
 	}
 
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	logger := slog.New(agentotel.NewSlogContextHandler(
+		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}),
+	))
 	logger.Info("starting AgentTier Router", "version", version.Version)
+
+	// Initialize OpenTelemetry. Reads OTEL_EXPORTER_OTLP_ENDPOINT from
+	// the environment (Helm chart sets it when observability.otlp.endpoint
+	// is non-empty). When the env var is unset, Setup installs a NeverSample
+	// provider — cheap, no exports, and trace context still propagates so
+	// later turns of the export knob don't require a restart-and-redeploy
+	// to verify.
+	otelShutdownCtx, otelShutdownCancel := context.WithCancel(context.Background())
+	defer otelShutdownCancel()
+	otelShutdown, err := agentotel.Setup(otelShutdownCtx,
+		agentotel.LoadConfigFromEnv("agenttier-router", version.Version),
+		logger)
+	if err != nil {
+		log.Fatalf("OpenTelemetry setup failed: %v", err)
+	}
+	defer func() {
+		// 5s is more than enough for the BatchSpanProcessor to drain
+		// — and bounded so a stuck collector can't pin shutdown.
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := otelShutdown(ctx); err != nil {
+			logger.Warn("OTel shutdown returned an error", "err", err)
+		}
+	}()
 
 	// Initialize Kubernetes client
 	restConfig, err := rest.InClusterConfig()

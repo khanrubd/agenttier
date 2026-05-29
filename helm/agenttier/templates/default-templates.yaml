@@ -231,3 +231,61 @@ spec:
       defaultInvokeTimeout: 30m
   timeout: 24h
   idleTimeout: 4h
+---
+# rl-rollout — reference template for reinforcement-learning workloads.
+# Pairs with the sandbox-rl image (images/rl/Dockerfile). See
+# docs/docs/features.md and the bundled README at
+# /opt/agenttier/examples/README.md inside the image for the canonical
+# patterns (rollout worker / self-contained PPO loop / RL-driven agent).
+apiVersion: agenttier.io/v1alpha1
+kind: ClusterSandboxTemplate
+metadata:
+  name: rl-rollout
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+spec:
+  description: "RL rollout worker preloaded with PyTorch (CPU), Ray RLlib, Gymnasium, and Stable-Baselines3"
+  mode: agent
+  image:
+    repository: {{ .Values.defaults.rl.image | default "ghcr.io/agenttier/sandbox-rl:latest" }}
+  resources:
+    # Sized for a typical PPO worker. Bump per-sandbox if your env is
+    # heavier; clamped per-namespace by governance.
+    requests:
+      cpu: "2"
+      memory: 4Gi
+    limits:
+      cpu: "4"
+      memory: 8Gi
+  storage:
+    # 20 GiB so checkpoints + replay buffers + the PyTorch cache fit
+    # comfortably across a long curriculum run. Bump per-sandbox when
+    # training a model that checkpoints in 1-2 GB increments.
+    size: 20Gi
+    mountPath: /workspace
+  network:
+    # Most RL rollouts need outbound access either to a Ray head node or
+    # to an experiment-tracking server (Weights & Biases, MLflow). Lock
+    # this down with allowedDomains in a child template if your security
+    # posture requires it.
+    allowInternet: true
+  harness:
+    shell: /bin/bash
+    workingDir: /workspace
+    # HTTP-exec opt-in. The runtime binary is baked into the image so
+    # /invoke streams via HTTP and cross-replica cancel works.
+    useHTTPExec: true
+    agent:
+      # Default entrypoint runs /workspace/agent.py — drop your rollout
+      # script at that path or replace via /configure. The bundled
+      # example at /opt/agenttier/examples/agent.py reads JSON on stdin
+      # and prints {episode_reward, episode_length} on stdout.
+      entrypoint:
+        - python
+        - /workspace/agent.py
+      workingDir: /workspace
+      # Single rollout finishes well under a minute; bump this if your
+      # episode budget grows.
+      defaultInvokeTimeout: 10m
+  timeout: 24h
+  idleTimeout: 1h

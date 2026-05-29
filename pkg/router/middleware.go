@@ -22,6 +22,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"log/slog"
 	"net"
 	"net/http"
 	"strings"
@@ -86,6 +87,12 @@ func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 }
 
 // loggingMiddleware logs each request with duration and status.
+//
+// We log via slog.LogAttrs(r.Context(), ...) so the request's trace
+// context (set upstream by the otelhttp wrapper) flows through the
+// SlogContextHandler and gets stamped with trace_id + span_id. That
+// gives an operator a single grep-by-trace-id query that hits both
+// log lines and OTLP traces.
 func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
@@ -94,13 +101,13 @@ func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(wrapped, r)
 
 		duration := time.Since(start)
-		s.logger.Info("request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", wrapped.statusCode,
-			"duration_ms", duration.Milliseconds(),
-			"remote_addr", r.RemoteAddr,
-			"user_agent", r.UserAgent(),
+		s.logger.LogAttrs(r.Context(), slog.LevelInfo, "request",
+			slog.String("method", r.Method),
+			slog.String("path", r.URL.Path),
+			slog.Int("status", wrapped.statusCode),
+			slog.Int64("duration_ms", duration.Milliseconds()),
+			slog.String("remote_addr", r.RemoteAddr),
+			slog.String("user_agent", r.UserAgent()),
 		)
 	})
 }

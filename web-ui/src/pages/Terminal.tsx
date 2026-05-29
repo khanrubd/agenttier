@@ -92,21 +92,47 @@ export default function Terminal() {
     };
 
     ws.onmessage = (event) => {
+      // Bottom-pinning helper: write to the terminal only after capturing
+      // whether the user was already at the bottom of the buffer. If they
+      // were, we re-snap to the bottom after the write so new output
+      // doesn't push the input prompt off-screen during fast TUI redraws
+      // (Claude Code parallel work, vim, htop, anything alt-screen-y).
+      // If the user has manually scrolled up to read history, we leave
+      // the viewport alone — they keep their place while output continues
+      // to land below.
+      //
+      // viewportY === baseY is the canonical "is the user at the bottom"
+      // check exposed by xterm.js. After a write, requestAnimationFrame
+      // batches the scrollToBottom() call into the next paint cycle so
+      // it's visually atomic with the write itself.
+      const writeWithPin = (data: string) => {
+        const term = xtermRef.current;
+        if (!term) return;
+        const wasAtBottom =
+          term.buffer.active.viewportY === term.buffer.active.baseY;
+        term.write(data, () => {
+          if (wasAtBottom) {
+            requestAnimationFrame(() => {
+              xtermRef.current?.scrollToBottom();
+            });
+          }
+        });
+      };
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === 'output') {
-          xtermRef.current?.write(msg.data);
+          writeWithPin(msg.data);
         } else if (msg.type === 'error') {
-          xtermRef.current?.write(`\r\n\x1b[31mError: ${msg.message}\x1b[0m\r\n`);
+          writeWithPin(`\r\n\x1b[31mError: ${msg.message}\x1b[0m\r\n`);
         } else if (msg.type === 'close') {
-          xtermRef.current?.write(`\r\n\x1b[33m[Session closed: ${msg.reason}]\x1b[0m\r\n`);
+          writeWithPin(`\r\n\x1b[33m[Session closed: ${msg.reason}]\x1b[0m\r\n`);
           setConnectionState('lost');
         } else if (msg.type === 'heartbeat' || msg.type === 'pong') {
           // Reset the staleness timer on any server-originated liveness signal.
           lastHeartbeatRef.current = Date.now();
         }
       } catch {
-        xtermRef.current?.write(event.data);
+        writeWithPin(event.data);
       }
     };
 

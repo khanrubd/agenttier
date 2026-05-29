@@ -292,6 +292,26 @@ def cmd_sandbox_delete(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_sandbox_clone(args: argparse.Namespace) -> int:
+    """Clone an existing sandbox via VolumeSnapshot."""
+    with _client(args) as client:
+        source = client.get_sandbox(args.sandbox_id)
+        clone = source.clone(
+            name=args.name,
+            snapshot_class=args.snapshot_class,
+        )
+        if args.output == "json":
+            _print_json({
+                "name": clone.name,
+                "namespace": clone.namespace,
+                "clonedFrom": source.id,
+            })
+        else:
+            sys.stdout.write(f"clone {clone.name} created from {source.id}\n")
+            sys.stdout.write(f"poll: agenttier sandbox get {clone.name}\n")
+    return 0
+
+
 def cmd_sandbox_exec(args: argparse.Namespace) -> int:
     if not args.command:
         _err("exec requires a command after `--`")
@@ -644,6 +664,17 @@ def build_parser() -> argparse.ArgumentParser:
     _add_global_flags(p_delete)
     p_delete.add_argument("sandbox_id")
     p_delete.set_defaults(func=cmd_sandbox_delete)
+
+    p_clone = sub_sandbox.add_parser("clone", help="Clone a sandbox via VolumeSnapshot")
+    _add_global_flags(p_clone)
+    p_clone.add_argument("sandbox_id", help="ID of the source sandbox")
+    p_clone.add_argument("--name", help="Name for the cloned sandbox (default: <source>-clone-<ts>)")
+    p_clone.add_argument(
+        "--snapshot-class",
+        dest="snapshot_class",
+        help="Override the cluster's default VolumeSnapshotClass (advanced)",
+    )
+    p_clone.set_defaults(func=cmd_sandbox_clone)
 
     p_exec = sub_sandbox.add_parser(
         "exec",

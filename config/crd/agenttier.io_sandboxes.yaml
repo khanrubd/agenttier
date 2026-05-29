@@ -54,6 +54,20 @@ spec:
                 description: AutoResume automatically resumes a stopped sandbox when
                   an exec session is requested.
                 type: boolean
+              cloneFromSnapshot:
+                description: |-
+                  CloneFromSnapshot, when set, instructs the controller to provision
+                  this sandbox's PVC from the named VolumeSnapshot rather than as
+                  an empty volume. Used internally by POST /sandboxes/{id}/clone — the
+                  Router takes a VolumeSnapshot of the source sandbox's PVC and stamps
+                  the snapshot's name here on the cloned Sandbox CR before creating
+                  it. The reconciler's PVC builder reads the field and emits a PVC
+                  with `dataSource: VolumeSnapshot{name: ...}` so the EBS CSI driver
+                  hydrates the new volume from the snapshot at provision time.
+
+                  The named VolumeSnapshot MUST live in the same namespace as the
+                  Sandbox; cross-namespace clones are rejected at create time.
+                type: string
               createdBy:
                 description: CreatedBy stores the authenticated user identity. Set
                   by the admission webhook.
@@ -3499,11 +3513,27 @@ spec:
                       0 indicates success; non-zero means the install failed and /invoke will
                       likely fail the same way.
                     type: integer
-                  installLog:
+                  installLogConfigMapRef:
                     description: |-
-                      InstallLog holds the trailing 200 lines of the install command output
-                      for surface in the Web UI.
-                    type: string
+                      InstallLogConfigMapRef points at the ConfigMap that holds the trailing
+                      install-log bytes for this configure run. The ConfigMap lives in the
+                      same namespace as the Sandbox and is owner-referenced so it's
+                      garbage-collected when the Sandbox is deleted. The Router writes it
+                      after every /configure run; the Web UI / SDK fetch the log on demand
+                      via GET /api/v1/sandboxes/{id}/configure/install-log.
+
+                      We persist the log out-of-band (rather than inline on the CR status)
+                      to keep Sandbox objects small. Writing 8 KiB of install log into
+                      every Sandbox's status block bloats etcd, multiplies watch churn
+                      across every controller / Router replica, and dumps unrelated noise
+                      into `kubectl describe sandbox` output.
+                    properties:
+                      name:
+                        description: Name of the referenced object.
+                        type: string
+                    required:
+                    - name
+                    type: object
                   lastConfiguredAt:
                     description: LastConfiguredAt is when /configure last completed
                       successfully.
