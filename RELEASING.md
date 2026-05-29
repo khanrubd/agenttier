@@ -38,7 +38,7 @@ before you push the tag.
 ### Docs
 
 - [ ] `cd docs && mkdocs build --strict` — no broken nav or missing pages
-- [ ] New or changed features from this release have docs pages or README blurbs
+- [ ] New or changed features have a corresponding `docs/docs/` page (deeper coverage than the README one-liner). The README features audit below covers the README-side check separately.
 
 ### Versioning (all four must match)
 
@@ -50,7 +50,12 @@ before you push the tag.
 ### Changelog and README
 
 - [ ] `CHANGELOG.md` — `[Unreleased]` rolled into a new `[vX.Y.Z] - YYYY-MM-DD` section; empty `[Unreleased]` stays on top
-- [ ] `README.md` — feature descriptions reflect what actually ships; install commands still valid
+- [ ] **`README.md` features audit (release blocker for major features)** — walk every commit since the last release tag with `git log <last-tag>..HEAD --format="%h %s"`. For each commit, classify as:
+  - **Major feature (MUST be in README's `## Features` section):** new user-visible capability, new endpoint surface, new reference image, new top-level Helm flag, new SDK / CLI command, new architectural primitive (cloning, observability pipeline, retention policy, etc), or any item that just flipped from Open to Done on the GitHub Project board.
+  - **Minor change (skips README):** bug fixes, internal refactors, dep bumps, test-only changes, lint / CI tweaks, doc-only edits.
+  
+  For every major-feature commit, grep `README.md` for a phrase that names the capability. Add a bullet to the right Features subsection if missing — match the existing prose style. Then trim anything from the **`### On the roadmap`** block that just shipped this cycle (stale roadmap entries make the project look stuck).
+- [ ] `README.md` install commands still valid (helm repo URL, image tags, pip install)
 - [ ] `todo.md` — relevant tasks marked `[x]` or `[~]` with a note on what shipped
 
 ### Secrets and repo settings
