@@ -19,7 +19,9 @@ package auth
 
 import (
 	"context"
+	"crypto"
 	"crypto/rsa"
+	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -373,11 +375,27 @@ func parseRSAPublicKey(nStr, eStr string) (*rsa.PublicKey, error) {
 	}, nil
 }
 
+// verifyRS256Signature verifies a JWT's RS256 signature: the signing input
+// (header.payload) is SHA-256 hashed and checked against the base64url
+// signature using RSASSA-PKCS1-v1_5, the algorithm OIDC providers use for
+// `alg: RS256`.
+//
+// This previously returned nil unconditionally — accepting ANY signature,
+// including forged tokens. That was the P0 auth hole. Do not "simplify" this
+// back to a no-op.
 func verifyRS256Signature(signingInput, signatureB64 string, key *rsa.PublicKey) error {
-	// TODO: Implement RS256 signature verification using crypto/rsa
-	// For now, this is a placeholder — in production use a proper JWT library
-	_ = signingInput
-	_ = signatureB64
-	_ = key
+	if key == nil {
+		return fmt.Errorf("no public key provided")
+	}
+
+	sig, err := base64URLDecode(signatureB64)
+	if err != nil {
+		return fmt.Errorf("failed to decode signature: %w", err)
+	}
+
+	hashed := sha256.Sum256([]byte(signingInput))
+	if err := rsa.VerifyPKCS1v15(key, crypto.SHA256, hashed[:], sig); err != nil {
+		return fmt.Errorf("RS256 signature invalid: %w", err)
+	}
 	return nil
 }

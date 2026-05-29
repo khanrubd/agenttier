@@ -64,6 +64,7 @@ func main() {
 		namespace        string
 		rateLimitPerIP   float64
 		rateLimitPerUser float64
+		devAuth          bool
 		showVersion      bool
 	)
 
@@ -89,6 +90,12 @@ func main() {
 		"Steady-state per-client-IP request rate (req/sec). 0 disables IP-level rate limiting.")
 	flag.Float64Var(&rateLimitPerUser, "ratelimit-per-user-rate", 0,
 		"Steady-state per-authenticated-user request rate (req/sec). 0 disables user-level rate limiting.")
+	// Dev-auth — explicit opt-in to bypass authentication and treat every
+	// request as admin. OFF by default so a prod install that forgot to set
+	// an OIDC issuer fails closed (401) rather than open. Also honors
+	// AGENTTIER_DEV_AUTH=true for convenience in docker-compose / kind.
+	flag.BoolVar(&devAuth, "dev-auth", os.Getenv("AGENTTIER_DEV_AUTH") == "true",
+		"DANGER: bypass authentication and treat every request as admin. Local development only — never set in production.")
 	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
 	flag.Parse()
 
@@ -163,6 +170,7 @@ func main() {
 		PreviewDomain:    previewDomain,
 		IngressClassName: ingressClassName,
 		InstallNamespace: namespace,
+		DevAuth:          devAuth,
 		RateLimit:        rateLimitCfg,
 	}
 

@@ -32,6 +32,9 @@ spec:
             - --oidc-client-id={{ .Values.auth.oidc.clientId }}
             - --admin-group={{ .Values.auth.oidc.adminGroup }}
             - --group-claim={{ .Values.auth.oidc.groupClaim }}
+            {{- if .Values.auth.devAuth }}
+            - --dev-auth
+            {{- end }}
             - --preview-domain={{ .Values.networking.previewDomain }}
             - --ingress-class-name={{ .Values.networking.portForwardIngressClass }}
             {{- with .Values.router.rateLimit }}

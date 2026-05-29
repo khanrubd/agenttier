@@ -27,6 +27,8 @@ import (
 	"net/http"
 	"strings"
 	"time"
+
+	"github.com/agenttier/agenttier/pkg/router/auth"
 )
 
 // contextKey is a custom type for context keys to avoid collisions.
@@ -118,8 +120,12 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 		var claims *Claims
 		var err error
 
-		// Dev mode: if no OIDC issuer configured, allow unauthenticated access with a default identity
-		if s.config.OIDCIssuerURL == "" {
+		// Dev-auth mode: bypass authentication and stamp a default admin
+		// identity. Gated behind an EXPLICIT --dev-auth flag (config.DevAuth)
+		// so a production install that simply forgot to set an OIDC issuer
+		// fails closed (401 below) instead of silently granting blanket
+		// admin. NewServer logs a loud warning when this is active.
+		if s.config.DevAuth {
 			claims = &Claims{
 				Sub:     "dev-user",
 				Email:   "dev@agenttier.local",
@@ -167,22 +173,49 @@ func (s *Server) authMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// validateJWT validates an OIDC JWT token and returns claims.
+// validateJWT validates an OIDC JWT bearer token against the configured
+// issuer's JWKS and returns the mapped claims. Fails closed: if no OIDC
+// validator is configured (issuer unset or its boot-time init failed), every
+// token is rejected rather than allowed through.
 func (s *Server) validateJWT(ctx context.Context, token string) (*Claims, error) {
-	// TODO: Implement full OIDC JWT validation with JWKS caching
-	// For now, return a placeholder implementation
-	// In production: parse JWT, validate signature against JWKS, check exp/iss/aud
-	_ = ctx
-	_ = token
-	return nil, fmt.Errorf("OIDC validation not yet implemented")
+	if s.oidcValidator == nil {
+		return nil, fmt.Errorf("OIDC authentication is not configured on this server")
+	}
+	ac, err := s.oidcValidator.ValidateToken(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	return claimsFromAuth(ac), nil
 }
 
-// validateAPIKey validates an API key.
+// validateAPIKey validates an X-API-Key value against Secret-backed storage
+// with an LRU cache, returning the mapped claims.
 func (s *Server) validateAPIKey(ctx context.Context, key string) (*Claims, error) {
-	// TODO: Implement API key validation against a future SQL datastore + LRU cache
-	_ = ctx
-	_ = key
-	return nil, fmt.Errorf("API key validation not yet implemented")
+	if s.apiKeyValidator == nil {
+		return nil, fmt.Errorf("API key authentication is not configured on this server")
+	}
+	ac, err := s.apiKeyValidator.ValidateKey(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	return claimsFromAuth(ac), nil
+}
+
+// claimsFromAuth converts the auth package's Claims (the validators' return
+// type) into the router package's Claims (what handlers read from context).
+// The two structs are intentionally separate so the auth package has no
+// dependency on the router package.
+func claimsFromAuth(ac *auth.Claims) *Claims {
+	if ac == nil {
+		return nil
+	}
+	return &Claims{
+		Sub:     ac.Sub,
+		Email:   ac.Email,
+		Name:    ac.Name,
+		Groups:  ac.Groups,
+		IsAdmin: ac.IsAdmin,
+	}
 }
 
 // responseWriter wraps http.ResponseWriter to capture the status code.

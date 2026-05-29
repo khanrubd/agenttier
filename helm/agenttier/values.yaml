@@ -79,6 +79,15 @@ webui:
 
 # --- Authentication ---
 auth:
+  # devAuth bypasses ALL authentication and treats every request as admin.
+  # It exists for local development and quick demos only. It is OFF by
+  # default: a production install that forgets to configure an OIDC issuer
+  # fails closed (every API call returns 401) rather than silently granting
+  # blanket admin access to anyone who can reach the Router. The Router logs
+  # a loud warning at startup when this is enabled.
+  #
+  # NEVER set this to true in a cluster reachable by untrusted users.
+  devAuth: false
   oidc:
     issuerUrl: ""
     clientId: ""

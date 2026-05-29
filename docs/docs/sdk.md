@@ -40,7 +40,8 @@ The SDK auto-detects credentials in priority order:
 1. `AGENTTIER_API_KEY` env var → sent as `X-API-Key`.
 2. `AGENTTIER_TOKEN` env var → sent as `Authorization: Bearer <token>` (OIDC JWT).
 3. In-cluster ServiceAccount token at `/var/run/secrets/kubernetes.io/serviceaccount/token`.
-4. Unauthenticated — accepted only in the Router's dev mode.
+
+4. Unauthenticated — accepted only when the Router is explicitly run with `--dev-auth` (Helm `auth.devAuth: true`). A Router with no OIDC issuer and no dev-auth rejects unauthenticated calls with 401.
 
 Or pass an explicit provider:
 

@@ -60,7 +60,7 @@ func buildTestServer(t *testing.T) (*Server, client.Client) {
 		WithStatusSubresource(&agenttierv1alpha1.Sandbox{}).
 		Build()
 
-	s := NewServer(&Config{ListenAddr: ":0"}, c, nil)
+	s := NewServer(&Config{ListenAddr: ":0", DevAuth: true}, c, nil)
 	return s, c
 }
 

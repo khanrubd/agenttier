@@ -43,7 +43,7 @@ What AgentTier ships today, grouped by what you probably need first.
 
 ## Multi-tenancy and governance
 
-- **OIDC + API keys** — Cognito, Okta, Azure AD, Auth0, Google — anything with a JWKS endpoint works. API keys are stored as SHA-256 hashes with an LRU cache. Dev mode (no OIDC configured) grants anonymous admin for local development.
+- **OIDC + API keys** — Cognito, Okta, Azure AD, Auth0, Google — anything with a JWKS endpoint works. JWTs are verified against the provider's JWKS (RS256 signature, issuer, audience, expiry). API keys are minted on demand, stored as SHA-256 hashes with an LRU cache, and returned in plaintext exactly once. Auth fails closed: with no OIDC issuer configured, every API request is rejected with 401 unless the operator explicitly opts into `auth.devAuth: true` (local development only, never production).
 - **Governance policies** — cluster-wide default + per-namespace overrides with field-level merge. Enforced synchronously at sandbox creation; violations return a structured `policy_violation` body with stable machine codes so UIs pinpoint the failing field. See [Governance](governance.md) for the full rule list.
 - **Admin-gated editor** — `Settings → Governance` in the Web UI renders the active policies; only users with the admin claim can edit.
 - **Audit trail** — lifecycle, terminal, credential, share, clone, and port-forward events recorded as Kubernetes Events. The Activity Log page filters on action, user, and time range. An optional SQL backend (phase 7.13) is planned for long-term retention.

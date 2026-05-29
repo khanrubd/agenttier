@@ -95,5 +95,7 @@ the rejection.
 
 In production, the `PUT`/`DELETE` governance endpoints require the `isAdmin`
 claim, derived from OIDC group membership (`auth.oidc.adminGroup` in Helm
-values). Dev mode — no OIDC configured — auto-grants admin, so the full
-editing flow is exercised locally without extra setup.
+values). For local development, set `auth.devAuth: true` to auto-grant admin
+so the full editing flow is exercised without an OIDC provider. Without
+either an OIDC issuer or `devAuth`, the endpoints reject all requests with
+401 (fail-closed) — a missing issuer no longer silently grants admin.

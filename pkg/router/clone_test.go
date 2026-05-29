@@ -53,7 +53,7 @@ func cloneFixture(t *testing.T, objs ...client.Object) (*Server, client.Client) 
 		WithObjects(objs...).
 		WithStatusSubresource(&agenttierv1alpha1.Sandbox{}).
 		Build()
-	s := NewServer(&Config{ListenAddr: ":0"}, c, nil)
+	s := NewServer(&Config{ListenAddr: ":0", DevAuth: true}, c, nil)
 	return s, c
 }
 

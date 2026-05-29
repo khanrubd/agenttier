@@ -7,6 +7,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Security
+
+- **Router authentication is now real and fails closed (P0 fix).** The Router previously shipped a complete OIDC validator that nothing called, while the wired path was a stub: `verifyRS256Signature` returned `nil` for any input (accepting forged tokens) and `validateJWT`/`validateAPIKey` returned "not implemented". In effect, dev installs granted blanket admin to every request and prod installs 401'd everything. This change:
+  - Implements real RS256 verification (`crypto/rsa` `VerifyPKCS1v15` + SHA-256) in `pkg/router/auth/oidc.go` — no new dependency, no Go-toolchain bump. Added regression tests that reject forged-signature and tampered-payload tokens.
+  - Wires the real `auth.OIDCValidator` into the Router and calls it from `authMiddleware`; JWTs are verified against the issuer's JWKS (signature, issuer, audience, expiry) with admin-group → `isAdmin` mapping.
+  - Implements API-key authentication end to end: `POST /user/api-keys` mints a key (returned in plaintext exactly once), stored as a SHA-256 hash in a per-install-namespace Secret; `GET` lists metadata only; `DELETE` revokes (ownership-checked). Validation goes through the existing LRU-cached `APIKeyValidator`. These three endpoints were previously `501 not implemented`.
+  - **Fails closed.** Dev-mode blanket-admin is now gated behind an explicit `--dev-auth` flag (Helm `auth.devAuth: true`, default `false`). A production install that simply forgot to set an OIDC issuer now rejects every request with 401 instead of silently granting admin. The Router logs a loud warning when dev-auth is active and a warning when neither auth path is configured.
+  - Added the first tests for `pkg/router/auth` (previously zero) covering signature rejection, expiry, issuer/audience mismatch, unknown-kid, admin-group mapping, and the API-key validator's hit/miss/expiry/caching behavior.
+
 ## [v0.5.5] — 2026-05-28
 
 ### Added

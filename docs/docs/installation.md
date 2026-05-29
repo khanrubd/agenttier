@@ -123,11 +123,12 @@ All values are documented inline in [`helm/agenttier/values.yaml`](https://githu
 
 | Value | Purpose |
 | --- | --- |
-| `auth.oidc.issuerUrl` | OIDC issuer URL. Empty = dev mode (every request is anonymous admin). |
+| `auth.devAuth` | DANGER. When `true`, bypasses all auth and treats every request as admin. Local dev only. Default `false` — a missing OIDC issuer fails closed (401), it does NOT grant anonymous admin. |
+| `auth.oidc.issuerUrl` | OIDC issuer URL. Empty + `devAuth: false` = every API request is rejected with 401. |
 | `auth.oidc.clientId` | OIDC client ID. |
 | `auth.oidc.adminGroup` | Group name that receives the `isAdmin` claim. |
 | `auth.oidc.groupClaim` | JWT claim that carries the user's groups (default `groups`). |
-| `auth.apiKeys` | List of accepted API keys (SHA-256 hashed on disk). |
+| `auth.apiKeys.enabled` | Enable X-API-Key authentication. Keys are minted via `POST /user/api-keys`, stored as SHA-256 hashes in Secrets, returned in plaintext exactly once. |
 
 ### Networking
 

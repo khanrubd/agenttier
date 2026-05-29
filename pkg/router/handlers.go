@@ -1470,15 +1470,6 @@ func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 		"isAdmin": claims.IsAdmin,
 	})
 }
-func (s *Server) handleListAPIKeys(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]interface{}{"keys": []interface{}{}})
-}
-func (s *Server) handleCreateAPIKey(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "not yet implemented")
-}
-func (s *Server) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "not yet implemented")
-}
 
 // --- Warm Pool Handlers ---
 

@@ -37,6 +37,7 @@ import (
 	"github.com/agenttier/agenttier/pkg/governance"
 	agentotel "github.com/agenttier/agenttier/pkg/otel"
 	"github.com/agenttier/agenttier/pkg/router/agent"
+	"github.com/agenttier/agenttier/pkg/router/auth"
 	"github.com/agenttier/agenttier/pkg/router/portforward"
 	"github.com/agenttier/agenttier/pkg/router/terminal"
 
@@ -59,6 +60,14 @@ type Config struct {
 	// the warm pool ConfigMap, pool Pods, and pool PVCs live). Set from
 	// POD_NAMESPACE in the router deployment.
 	InstallNamespace string
+	// DevAuth, when true, bypasses authentication and stamps every request
+	// with a default admin identity. This is the local-development
+	// convenience path. It is OFF by default so a misconfigured production
+	// install fails closed (401) instead of open (blanket admin). The
+	// router main only sets this from an explicit --dev-auth flag /
+	// AGENTTIER_DEV_AUTH env var, and logs a loud warning at startup when
+	// it's active.
+	DevAuth bool
 	// RateLimit configures per-IP and per-user request throttling. The
 	// zero value disables rate limiting entirely (today's behavior); set
 	// to DefaultRateLimitConfig() or a customized variant to enforce
@@ -78,6 +87,14 @@ type Server struct {
 	governanceStore governance.Store
 	portForward     *portforward.Manager
 	rateLimiter     *rateLimiter
+	// oidcValidator validates OIDC JWT bearer tokens. Nil when no OIDC
+	// issuer is configured (dev-auth mode) — authMiddleware checks for nil
+	// and only reaches the validator on the authenticated path.
+	oidcValidator *auth.OIDCValidator
+	// apiKeyValidator validates X-API-Key headers against Secret-backed
+	// storage with an LRU cache. Always constructed; the store is the
+	// Kubernetes Secret store.
+	apiKeyValidator *auth.APIKeyValidator
 }
 
 // NewServer creates a new Router server with all routes registered.
@@ -110,6 +127,42 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	// the cmd/router main flag parser threads through.
 	if config.RateLimit.PerIPRate > 0 || config.RateLimit.PerUserRate > 0 {
 		s.rateLimiter = newRateLimiter(config.RateLimit)
+	}
+
+	// API-key validator: always constructed, backed by Kubernetes Secrets
+	// in the install namespace. Cache 1024 keys for 5 minutes so a hot key
+	// doesn't hit the apiserver on every request.
+	s.apiKeyValidator = auth.NewAPIKeyValidator(
+		newSecretAPIKeyStore(k8sClient, config.InstallNamespace),
+		1024, 5*time.Minute,
+	)
+
+	// OIDC validator: constructed only when an issuer is configured. The
+	// constructor does network I/O (discovery + initial JWKS fetch); if
+	// that fails at boot we log and leave the validator nil. authMiddleware
+	// treats a nil validator on the JWT path as a hard 401 (fail closed) —
+	// a misconfigured or unreachable issuer must never silently fall back
+	// to allowing requests.
+	if config.OIDCIssuerURL != "" {
+		v, err := auth.NewOIDCValidator(auth.OIDCConfig{
+			IssuerURL:  config.OIDCIssuerURL,
+			ClientID:   config.OIDCClientID,
+			AdminGroup: config.AdminGroup,
+			GroupClaim: config.GroupClaim,
+		})
+		if err != nil {
+			logger.Error("OIDC validator initialization failed; JWT auth will reject all tokens until the issuer is reachable and the Router restarts",
+				"issuer", config.OIDCIssuerURL, "error", err)
+		} else {
+			s.oidcValidator = v
+			logger.Info("OIDC validator initialized", "issuer", config.OIDCIssuerURL)
+		}
+	}
+
+	if config.DevAuth {
+		logger.Warn("DEV AUTH ENABLED — all requests are stamped with a default admin identity and authentication is bypassed. Never run this in production.")
+	} else if config.OIDCIssuerURL == "" {
+		logger.Warn("no OIDC issuer configured and --dev-auth is off — all API requests will be rejected with 401. Set auth.oidc.issuerUrl (prod) or --dev-auth (local dev).")
 	}
 
 	// Register middleware

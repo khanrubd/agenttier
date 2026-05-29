@@ -83,7 +83,7 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 
 ### Multi-tenancy and governance
 
-- **Plug into any OIDC provider** — Cognito, Okta, Azure AD, or anything OIDC-compliant, plus API keys stored as SHA-256 hashes with LRU caching.
+- **Plug into any OIDC provider** — Cognito, Okta, Azure AD, or anything OIDC-compliant. JWTs are verified against the provider's JWKS (RS256 signature + issuer + audience + expiry), plus API keys minted on demand and stored as SHA-256 hashes with LRU caching. Auth fails closed: with no OIDC issuer configured the Router rejects every request with 401 unless an operator explicitly sets `auth.devAuth: true` for local development.
 - **Hierarchical governance policies** — cluster and per-namespace caps on sandbox counts, CPU / memory / storage, idle and max-runtime timeouts, agent-mode concurrency, allowed templates, and approved image registries; violations return a structured response so UIs can pinpoint the failing field. Same policy is re-checked at agent `/configure` time so a policy that tightens after sandbox creation still gates code uploads.
 - **Per-IP and per-user rate limiting** — opt-in token-bucket throttling on Router endpoints, with health checks and WebSocket terminals exempt; 429 responses carry `Retry-After`.
 - **Built-in audit trail** — every lifecycle, terminal, credential, share, clone, and port-forward event is recorded as a Kubernetes event (and optionally a row in a SQL backend for long-term retention).
