@@ -85,6 +85,7 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 
 - **Plug into any OIDC provider** — Cognito, Okta, Azure AD, or anything OIDC-compliant. JWTs are verified against the provider's JWKS (RS256 signature + issuer + audience + expiry), plus API keys minted on demand and stored as SHA-256 hashes with LRU caching. Auth fails closed: with no OIDC issuer configured the Router rejects every request with 401 unless an operator explicitly sets `auth.devAuth: true` for local development.
 - **Hierarchical governance policies** — cluster and per-namespace caps on sandbox counts, CPU / memory / storage, idle and max-runtime timeouts, agent-mode concurrency, allowed templates, and approved image registries; violations return a structured response so UIs can pinpoint the failing field. Same policy is re-checked at agent `/configure` time so a policy that tightens after sandbox creation still gates code uploads.
+- **Admission webhook closes the kubectl-bypass** — an opt-in mutating admission webhook (requires cert-manager) enforces governance and stamps `spec.createdBy` from the authenticated user at admission time, so direct `kubectl apply` / GitOps writes can't forge ownership or skip the policy checks that otherwise run only in the Router. Fail-closed by default.
 - **Per-IP and per-user rate limiting** — opt-in token-bucket throttling on Router endpoints, with health checks and WebSocket terminals exempt; 429 responses carry `Retry-After`.
 - **Built-in audit trail** — every lifecycle, terminal, credential, share, clone, and port-forward event is recorded as a Kubernetes event (and optionally a row in a SQL backend for long-term retention).
 
@@ -121,7 +122,7 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 
 ### On the roadmap
 
-These are tracked but not yet shipped: Terraform module for EKS, sharing and collaboration UX, webhook / email / Slack notifications, inter-sandbox networking, optional SQL backend for state, validating admission webhook, validating CRD admission for several spec fields that are currently spec-only, HPA + multi-replica Router, and additional reference images (OpenHands).
+These are tracked but not yet shipped: Terraform module for EKS, sharing and collaboration UX, webhook / email / Slack notifications, inter-sandbox networking, optional SQL backend for state, validating CRD admission for several spec fields that are currently spec-only, HPA + multi-replica Router, and additional reference images (OpenHands).
 
 ## Architecture
 

@@ -33,10 +33,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
+	"sigs.k8s.io/controller-runtime/pkg/webhook"
+	"sigs.k8s.io/controller-runtime/pkg/webhook/admission"
 
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
 	"github.com/agenttier/agenttier/pkg/controller"
 	"github.com/agenttier/agenttier/pkg/controller/warmpool"
+	agenttierwebhook "github.com/agenttier/agenttier/pkg/controller/webhook"
+	"github.com/agenttier/agenttier/pkg/governance"
 	agentotel "github.com/agenttier/agenttier/pkg/otel"
 	"github.com/agenttier/agenttier/pkg/version"
 )
@@ -66,6 +70,7 @@ func main() {
 		defaultMountPath        string
 		agentMemorySidecarImage string
 		namespace               string
+		enableWebhook           bool
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8081", "The address the metrics endpoint binds to.")
@@ -86,6 +91,8 @@ func main() {
 	// namespace.
 	flag.StringVar(&namespace, "namespace", os.Getenv("POD_NAMESPACE"),
 		"Namespace where AgentTier is installed. Defaults to POD_NAMESPACE env var.")
+	flag.BoolVar(&enableWebhook, "enable-webhook", false,
+		"Serve the Sandbox validating/mutating admission webhook. Requires a serving certificate mounted at the webhook server cert dir (provided by cert-manager via the Helm chart).")
 
 	opts := zap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
@@ -151,6 +158,23 @@ func main() {
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Sandbox")
 		os.Exit(1)
+	}
+
+	// Register the validating/mutating admission webhook for Sandbox
+	// resources when enabled. It stamps spec.createdBy from the
+	// authenticated user and runs governance Check at admission time,
+	// closing the kubectl-bypass. Gated behind --enable-webhook because it
+	// requires a serving certificate (mounted by cert-manager via the Helm
+	// chart); installs without cert infra leave it off and rely on the
+	// Router-side enforcement.
+	if enableWebhook {
+		decoder := admission.NewDecoder(mgr.GetScheme())
+		store := governance.NewConfigMapStore(mgr.GetClient())
+		mgr.GetWebhookServer().Register("/validate-sandbox",
+			&webhook.Admission{
+				Handler: agenttierwebhook.NewSandboxValidator(mgr.GetClient(), store, decoder),
+			})
+		setupLog.Info("Sandbox admission webhook registered", "path", "/validate-sandbox")
 	}
 
 	// Health and readiness probes

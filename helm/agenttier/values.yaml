@@ -221,6 +221,29 @@ observability:
 
 # --- Optional Components ---
 optional:
+  # Validating admission webhook for Sandbox resources.
+  #
+  # When enabled, the controller serves an admission webhook that (1) stamps
+  # spec.createdBy from the authenticated Kubernetes user — so a forged
+  # createdBy in a `kubectl apply` body is overwritten — and (2) runs the
+  # same governance Check the Router runs, rejecting over-quota /
+  # disallowed-template / disallowed-image creates. This closes the bypass
+  # where direct cluster access (kubectl, GitOps, scripts) could skip the
+  # governance that otherwise only runs in the Router.
+  #
+  # REQUIRES cert-manager (https://cert-manager.io) installed in the cluster:
+  # the chart provisions a self-signed Issuer + Certificate and relies on
+  # cert-manager's CA injector to populate the webhook caBundle. If you don't
+  # run cert-manager, leave this disabled — Router-side governance still
+  # applies to every create that goes through the API.
+  admissionWebhook:
+    enabled: false
+    # failurePolicy controls what happens when the webhook is unreachable.
+    # "Fail" (default) rejects the write — safest, closes the bypass even
+    # during a controller outage. "Ignore" lets writes through when the
+    # webhook is down — higher availability, but reopens the bypass window.
+    failurePolicy: Fail
+
   # Image pre-pull DaemonSet
   #
   # When enabled the chart creates a DaemonSet that pre-pulls sandbox images

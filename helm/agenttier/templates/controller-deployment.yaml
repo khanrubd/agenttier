@@ -34,6 +34,9 @@ spec:
             {{- if and .Values.optional.agentMemorySidecar .Values.optional.agentMemorySidecar.enabled }}
             - --agent-memory-sidecar-image={{ .Values.optional.agentMemorySidecar.image }}
             {{- end }}
+            {{- if .Values.optional.admissionWebhook.enabled }}
+            - --enable-webhook
+            {{- end }}
           env:
             - name: POD_NAMESPACE
               valueFrom:
@@ -57,6 +60,11 @@ spec:
             - name: health
               containerPort: 8082
               protocol: TCP
+            {{- if .Values.optional.admissionWebhook.enabled }}
+            - name: webhook
+              containerPort: 9443
+              protocol: TCP
+            {{- end }}
           livenessProbe:
             httpGet:
               path: /healthz
@@ -71,6 +79,18 @@ spec:
             periodSeconds: 10
           resources:
             {{- toYaml .Values.controller.resources | nindent 12 }}
+          {{- if .Values.optional.admissionWebhook.enabled }}
+          volumeMounts:
+            - name: webhook-certs
+              mountPath: /tmp/k8s-webhook-server/serving-certs
+              readOnly: true
+          {{- end }}
+      {{- if .Values.optional.admissionWebhook.enabled }}
+      volumes:
+        - name: webhook-certs
+          secret:
+            secretName: {{ include "agenttier.fullname" . }}-webhook-cert
+      {{- end }}
       {{- with .Values.nodeSelector }}
       nodeSelector:
         {{- toYaml . | nindent 8 }}

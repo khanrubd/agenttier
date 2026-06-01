@@ -1,0 +1,96 @@
+{{- /*
+Validating/mutating admission webhook for Sandbox resources.
+
+Opt-in via optional.admissionWebhook.enabled. It stamps spec.createdBy from
+the authenticated user and runs the governance Check at admission time,
+closing the kubectl-bypass where a direct `kubectl apply` could forge
+ownership or skip governance (which otherwise only runs in the Router).
+
+Serving certs are issued by cert-manager. We use a self-signed Issuer +
+Certificate by default so the chart works on any cluster that has
+cert-manager installed, without an external CA. cert-manager's CA injector
+populates the webhook's caBundle from the Certificate's secret via the
+cert-manager.io/inject-ca-from annotation.
+
+REQUIRES cert-manager (https://cert-manager.io) to be installed in the
+cluster. If you don't run cert-manager, leave this disabled and rely on the
+Router-side governance enforcement.
+*/ -}}
+{{- if .Values.optional.admissionWebhook.enabled }}
+---
+apiVersion: cert-manager.io/v1
+kind: Issuer
+metadata:
+  name: {{ include "agenttier.fullname" . }}-webhook-selfsign
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+spec:
+  selfSigned: {}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ include "agenttier.fullname" . }}-webhook-cert
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+spec:
+  secretName: {{ include "agenttier.fullname" . }}-webhook-cert
+  dnsNames:
+    - {{ include "agenttier.fullname" . }}-webhook.{{ .Release.Namespace }}.svc
+    - {{ include "agenttier.fullname" . }}-webhook.{{ .Release.Namespace }}.svc.cluster.local
+  issuerRef:
+    name: {{ include "agenttier.fullname" . }}-webhook-selfsign
+    kind: Issuer
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "agenttier.fullname" . }}-webhook
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+spec:
+  selector:
+    {{- include "agenttier.selectorLabels" . | nindent 4 }}
+    app.kubernetes.io/component: controller
+  ports:
+    - port: 443
+      targetPort: webhook
+      protocol: TCP
+---
+apiVersion: admissionregistration.k8s.io/v1
+kind: MutatingWebhookConfiguration
+metadata:
+  name: {{ include "agenttier.fullname" . }}-sandbox
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+  annotations:
+    # cert-manager injects the CA bundle from the Certificate's Secret.
+    cert-manager.io/inject-ca-from: {{ .Release.Namespace }}/{{ include "agenttier.fullname" . }}-webhook-cert
+webhooks:
+  - name: msandbox.agenttier.io
+    admissionReviewVersions: ["v1"]
+    sideEffects: None
+    reinvocationPolicy: Never
+    # Fail-closed by default: if the webhook is unreachable, reject the write.
+    # Operators on flaky control planes can set failurePolicy: Ignore via the
+    # value below, accepting the kubectl-bypass risk in exchange for
+    # availability.
+    failurePolicy: {{ .Values.optional.admissionWebhook.failurePolicy | default "Fail" }}
+    timeoutSeconds: 10
+    clientConfig:
+      service:
+        name: {{ include "agenttier.fullname" . }}-webhook
+        namespace: {{ .Release.Namespace }}
+        path: /validate-sandbox
+        port: 443
+    rules:
+      - apiGroups: ["agenttier.io"]
+        apiVersions: ["v1alpha1"]
+        operations: ["CREATE", "UPDATE"]
+        resources: ["sandboxes"]
+        scope: "Namespaced"
+{{- end }}

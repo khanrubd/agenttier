@@ -58,6 +58,28 @@ Independent of the policy, `/configure` enforces server-side correctness limits 
 
 A request that violates any of these returns HTTP 403 with the same `policy_violation` shape and a `ConfigureDenied` Kubernetes event on the sandbox CR. The audit trail makes it easy to see who attempted what and when.
 
+## Enforcement everywhere: the admission webhook
+
+By default, governance runs in the Router's `POST /sandboxes` handler. That covers every create that goes through the API — Web UI, SDK, CLI — but **not** a direct `kubectl apply` of a Sandbox CR by someone with cluster credentials. A direct write would skip the governance check entirely and could even forge `spec.createdBy` to impersonate another user.
+
+The opt-in admission webhook closes that gap. Enable it with:
+
+```yaml
+optional:
+  admissionWebhook:
+    enabled: true
+    failurePolicy: Fail   # fail-closed; "Ignore" trades the bypass guarantee for availability
+```
+
+When enabled, the controller serves a `MutatingWebhookConfiguration` that intercepts every Sandbox CREATE and UPDATE — regardless of who issues it. On create it:
+
+- **Overwrites `spec.createdBy`** from the authenticated Kubernetes user in the AdmissionReview, so a forged `createdBy` in a `kubectl apply` body is replaced with the real caller's identity.
+- **Runs the same `governance.Check`** the Router runs, denying over-quota / disallowed-template / disallowed-image creates at admission with a structured message.
+
+On update it rejects changes to immutable fields (`mode`, `templateRef`, `cloneFromSnapshot`) and to `createdBy`.
+
+**Requires [cert-manager](https://cert-manager.io).** The chart provisions a self-signed Issuer + Certificate and relies on cert-manager's CA injector to populate the webhook's caBundle. If you don't run cert-manager, leave the webhook disabled — Router-side governance still applies to every create that goes through the API; you only lose enforcement on direct `kubectl`/GitOps writes.
+
 ## Violations
 
 When a create request is rejected the response is HTTP 403 with a structured body:
