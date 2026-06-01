@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.6.0] — 2026-06-01
+
 ### Security
 
 - **Router authentication is now real and fails closed (P0 fix).** The Router previously shipped a complete OIDC validator that nothing called, while the wired path was a stub: `verifyRS256Signature` returned `nil` for any input (accepting forged tokens) and `validateJWT`/`validateAPIKey` returned "not implemented". In effect, dev installs granted blanket admin to every request and prod installs 401'd everything. This change:
