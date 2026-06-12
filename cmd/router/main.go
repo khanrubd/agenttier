@@ -35,6 +35,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
+	"github.com/agenttier/agenttier/pkg/controller/warmpool"
 	agentotel "github.com/agenttier/agenttier/pkg/otel"
 	"github.com/agenttier/agenttier/pkg/router"
 	"github.com/agenttier/agenttier/pkg/router/terminal"
@@ -62,6 +63,7 @@ func main() {
 		previewDomain    string
 		ingressClassName string
 		namespace        string
+		sandboxNamespace string
 		rateLimitPerIP   float64
 		rateLimitPerUser float64
 		devAuth          bool
@@ -81,6 +83,11 @@ func main() {
 	// chart). Empty falls back to the warm pool's DefaultNamespace.
 	flag.StringVar(&namespace, "namespace", os.Getenv("POD_NAMESPACE"),
 		"Namespace where AgentTier is installed. Defaults to POD_NAMESPACE env var.")
+	// Sandbox namespace — where Sandboxes (and warm pool Pods) live. Used to
+	// report warm pool status from the correct namespace. Defaults to the
+	// SANDBOX_NAMESPACE env var, then "default".
+	flag.StringVar(&sandboxNamespace, "sandbox-namespace", os.Getenv("SANDBOX_NAMESPACE"),
+		"Namespace where Sandboxes (and warm pool Pods) live. Defaults to SANDBOX_NAMESPACE env var, then \"default\".")
 	// Rate limiting — zero disables. Defaults match the Helm values that
 	// chart authors most likely want when they enable it (60 req/min/IP,
 	// 600 req/min/user). Values are set explicitly via flags rather than
@@ -98,6 +105,12 @@ func main() {
 		"DANGER: bypass authentication and treat every request as admin. Local development only — never set in production.")
 	flag.BoolVar(&showVersion, "version", false, "Print version and exit")
 	flag.Parse()
+
+	// Default the sandbox namespace to where Sandboxes are created
+	// ("default") when neither the flag nor SANDBOX_NAMESPACE env is set.
+	if sandboxNamespace == "" {
+		sandboxNamespace = warmpool.DefaultSandboxNamespace
+	}
 
 	if showVersion {
 		fmt.Printf("AgentTier Router %s (%s)\n", version.Version, version.GitCommit)
@@ -170,6 +183,7 @@ func main() {
 		PreviewDomain:    previewDomain,
 		IngressClassName: ingressClassName,
 		InstallNamespace: namespace,
+		SandboxNamespace: sandboxNamespace,
 		DevAuth:          devAuth,
 		RateLimit:        rateLimitCfg,
 	}

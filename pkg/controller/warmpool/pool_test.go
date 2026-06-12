@@ -109,7 +109,7 @@ func TestNamespacePlumbing(t *testing.T) {
 			t.Fatalf("ConfigMap leaked into default namespace — namespace plumbing is broken")
 		}
 
-		status, err := GetStatus(ctx, c, installNS)
+		status, err := GetStatus(ctx, c, installNS, "")
 		if err != nil {
 			t.Fatalf("GetStatus: %v", err)
 		}
@@ -160,7 +160,7 @@ func TestNamespacePlumbing(t *testing.T) {
 // TestNewReconciler_DefaultNamespace verifies that an empty namespace falls
 // back to the documented default ("agenttier"), not "" or "default".
 func TestNewReconciler_DefaultNamespace(t *testing.T) {
-	r := NewReconciler(nil, nil, "")
+	r := NewReconciler(nil, nil, "", "")
 	if r.Namespace() != DefaultNamespace {
 		t.Errorf("NewReconciler(\"\") namespace = %q, want %q", r.Namespace(), DefaultNamespace)
 	}
@@ -382,7 +382,7 @@ func TestReconcile_PerTemplatePoolsConvergeIndependently(t *testing.T) {
 		t.Fatalf("SetConfig: %v", err)
 	}
 
-	r := NewReconciler(c, slogDiscard(), ns)
+	r := NewReconciler(c, slogDiscard(), ns, "")
 
 	// Run two reconcile cycles — the controller creates one pool pod
 	// per template per cycle so two cycles get both pools to size.
@@ -441,7 +441,7 @@ func TestReconcile_DroppingTemplateCleansUpOrphans(t *testing.T) {
 		t.Fatalf("SetConfig: %v", err)
 	}
 
-	r := NewReconciler(c, slogDiscard(), ns)
+	r := NewReconciler(c, slogDiscard(), ns, "")
 	if err := r.Reconcile(context.Background()); err != nil {
 		t.Fatalf("Reconcile: %v", err)
 	}
@@ -466,6 +466,87 @@ func poolsEqual(a, b []PoolConfig) bool {
 		}
 	}
 	return true
+}
+
+// TestNamespaceSplit_PoolPodsLiveInSandboxNamespace verifies the
+// config/sandbox namespace split: the warm pool ConfigMap is read from the
+// install namespace, but pool Pods + PVCs are provisioned in (and claimed
+// from) the sandbox namespace. Regression coverage for the bug where pool
+// Pods sat in the install namespace while Sandboxes were created in
+// "default", so claims never matched and every sandbox cold-started.
+func TestNamespaceSplit_PoolPodsLiveInSandboxNamespace(t *testing.T) {
+	scheme := newScheme(t)
+	const (
+		installNS = "agenttier"
+		sandboxNS = "default"
+	)
+
+	tmpl := &agenttierv1alpha1.ClusterSandboxTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "claude-code"},
+		Spec: agenttierv1alpha1.SandboxTemplateSpec{
+			Image: &agenttierv1alpha1.ImageSpec{Repository: "ghcr.io/agenttier/sandbox-claude-code:test"},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tmpl).Build()
+	ctx := context.Background()
+
+	// Config lands in the install namespace (where the Router writes it).
+	if err := SetConfig(ctx, c, installNS, Config{Pools: []PoolConfig{
+		{Template: "claude-code", DesiredCount: 1},
+	}}); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+
+	// Reconciler reads config from installNS, provisions pods in sandboxNS.
+	r := NewReconciler(c, slogDiscard(), installNS, sandboxNS)
+	if err := r.Reconcile(ctx); err != nil {
+		t.Fatalf("Reconcile: %v", err)
+	}
+
+	// Pool pod must be created in the sandbox namespace, not the install ns.
+	sandboxPods := &corev1.PodList{}
+	if err := c.List(ctx, sandboxPods, client.InNamespace(sandboxNS),
+		client.MatchingLabels{LabelPooled: "true"}); err != nil {
+		t.Fatalf("list sandboxNS pods: %v", err)
+	}
+	if len(sandboxPods.Items) != 1 {
+		t.Fatalf("expected 1 pool pod in %s, got %d", sandboxNS, len(sandboxPods.Items))
+	}
+
+	installPods := &corev1.PodList{}
+	if err := c.List(ctx, installPods, client.InNamespace(installNS),
+		client.MatchingLabels{LabelPooled: "true"}); err != nil {
+		t.Fatalf("list installNS pods: %v", err)
+	}
+	if len(installPods.Items) != 0 {
+		t.Errorf("expected 0 pool pods in install ns %s, got %d (pods leaked into the wrong namespace)", installNS, len(installPods.Items))
+	}
+
+	// Mark the pod Ready so GetStatus/Claim can see it.
+	pod := &sandboxPods.Items[0]
+	pod.Status.Phase = corev1.PodRunning
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: corev1.ConditionTrue}}
+	if err := c.Status().Update(ctx, pod); err != nil {
+		t.Fatalf("mark pod ready: %v", err)
+	}
+
+	// GetStatus: config from installNS, pods from sandboxNS.
+	status, err := GetStatus(ctx, c, installNS, sandboxNS)
+	if err != nil {
+		t.Fatalf("GetStatus: %v", err)
+	}
+	if len(status.Pools) != 1 || status.Pools[0].ReadyCount != 1 {
+		t.Errorf("GetStatus: expected 1 pool with ReadyCount=1, got %+v", status.Pools)
+	}
+
+	// Claim must find the pod in the sandbox namespace.
+	podName, pvcName, err := Claim(ctx, c, sandboxNS, "claude-code")
+	if err != nil {
+		t.Fatalf("Claim: %v", err)
+	}
+	if podName == "" || pvcName == "" {
+		t.Errorf("Claim returned empty (pod=%q pvc=%q); the ready pool pod in %s was not claimable", podName, pvcName, sandboxNS)
+	}
 }
 
 func slogDiscard() *slog.Logger {

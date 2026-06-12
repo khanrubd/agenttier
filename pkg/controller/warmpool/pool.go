@@ -24,10 +24,13 @@ limitations under the License.
 //   - The Router API reads/writes the ConfigMap (stateless)
 //   - Uses gp3-immediate StorageClass for pre-provisioned EBS volumes
 //
-// Namespace is plumbed through every operation. The pool ConfigMap, the pool
-// Pods, and the pool PVCs all live in the same namespace as the AgentTier
-// install. Sandboxes from any namespace can claim from the pool — the
-// controller relabels the claimed Pod to belong to the requesting Sandbox.
+// Namespaces: the pool ConfigMap lives in the install namespace (where the
+// controller + router run). The pool Pods + PVCs, however, live in the
+// *sandbox* namespace — the namespace the Router creates Sandboxes in
+// (DefaultSandboxNamespace, "default"). They must match because a claimed
+// pool Pod is reused in place by the Sandbox, and Kubernetes can't move a
+// Pod across namespaces. When the two namespaces are the same (single-
+// namespace installs) the split collapses and everything lives together.
 package warmpool
 
 import (
@@ -60,6 +63,16 @@ const (
 	// namespace is provided. New installs should always pass a namespace
 	// explicitly via the controller's POD_NAMESPACE env var.
 	DefaultNamespace = "agenttier"
+
+	// DefaultSandboxNamespace is where pool Pods + PVCs are provisioned
+	// when no explicit sandbox namespace is configured. It MUST match the
+	// namespace the Router creates Sandboxes in (the Router defaults new
+	// Sandboxes to "default"), because a claimed pool Pod is handed to a
+	// Sandbox as-is — Kubernetes can't move a Pod across namespaces, so a
+	// pool Pod is only claimable by a Sandbox that lives in the same
+	// namespace. Override via the controller/router SANDBOX_NAMESPACE env
+	// var if you change where Sandboxes are created.
+	DefaultSandboxNamespace = "default"
 
 	// StorageClass for warm pool PVCs (Immediate binding)
 	PoolStorageClass = "gp3-immediate"
@@ -157,22 +170,37 @@ type PoolStatus struct {
 type Reconciler struct {
 	client client.Client
 	logger *slog.Logger
-	// Namespace is where the warm pool lives — pool ConfigMap, pool Pods,
-	// pool PVCs. Set from POD_NAMESPACE in the controller deployment.
+	// namespace is the config (install) namespace — where the warm pool
+	// ConfigMap lives. Set from POD_NAMESPACE in the controller deployment.
 	namespace string
+	// sandboxNamespace is where pool Pods + PVCs are provisioned. It must
+	// match the namespace the Router creates Sandboxes in, because a
+	// claimed pool Pod is reused in place (Pods can't move namespaces).
+	// Defaults to the config namespace when empty (single-namespace
+	// installs), but production typically sets it to DefaultSandboxNamespace
+	// ("default") via the SANDBOX_NAMESPACE env var.
+	sandboxNamespace string
 }
 
-// NewReconciler creates a warm pool reconciler. Namespace defaults to
-// DefaultNamespace ("agenttier") when empty, but production installs should
-// always pass the install namespace explicitly via POD_NAMESPACE.
-func NewReconciler(k8sClient client.Client, logger *slog.Logger, namespace string) *Reconciler {
+// NewReconciler creates a warm pool reconciler. The config namespace
+// defaults to DefaultNamespace ("agenttier") when empty; production installs
+// should always pass the install namespace explicitly via POD_NAMESPACE. The
+// sandboxNamespace (where pool Pods live) falls back to the config namespace
+// when empty so single-namespace callers and tests behave as before; pass
+// it explicitly (typically "default") to warm a namespace distinct from the
+// install namespace.
+func NewReconciler(k8sClient client.Client, logger *slog.Logger, namespace, sandboxNamespace string) *Reconciler {
 	if namespace == "" {
 		namespace = DefaultNamespace
 	}
+	if sandboxNamespace == "" {
+		sandboxNamespace = namespace
+	}
 	return &Reconciler{
-		client:    k8sClient,
-		logger:    logger,
-		namespace: namespace,
+		client:           k8sClient,
+		logger:           logger,
+		namespace:        namespace,
+		sandboxNamespace: sandboxNamespace,
 	}
 }
 
@@ -180,6 +208,10 @@ func NewReconciler(k8sClient client.Client, logger *slog.Logger, namespace strin
 // callers (router handlers) that need to read/write the pool ConfigMap from
 // the same namespace.
 func (r *Reconciler) Namespace() string { return r.namespace }
+
+// SandboxNamespace returns the namespace where pool Pods + PVCs are
+// provisioned (and therefore where claimable pods live).
+func (r *Reconciler) SandboxNamespace() string { return r.sandboxNamespace }
 
 // RunLoop starts the reconcile loop. Call this from the controller's main goroutine.
 func (r *Reconciler) RunLoop(ctx context.Context) {
@@ -274,7 +306,7 @@ func (r *Reconciler) reconcilePool(ctx context.Context, pool PoolConfig) error {
 func (r *Reconciler) cleanupOrphanedPools(ctx context.Context, configured map[string]bool) error {
 	allPods := &corev1.PodList{}
 	if err := r.client.List(ctx, allPods,
-		client.InNamespace(r.namespace),
+		client.InNamespace(r.sandboxNamespace),
 		client.MatchingLabels{LabelPooled: "true"},
 	); err != nil {
 		return err
@@ -354,16 +386,24 @@ func (c *Config) Normalize() {
 // (DesiredCount/ReadyCount/PendingCount/Template) populated from Pools[0]
 // when there's exactly one entry — keeping the old API shape valid for
 // existing consumers during the deprecation window.
-func GetStatus(ctx context.Context, k8sClient client.Client, namespace string) (*Status, error) {
-	if namespace == "" {
-		namespace = DefaultNamespace
+//
+// configNamespace is where the warm pool ConfigMap lives (the install
+// namespace). podNamespace is where pool Pods are provisioned (the sandbox
+// namespace); when empty it falls back to configNamespace, preserving the
+// single-namespace behavior for callers that don't split the two.
+func GetStatus(ctx context.Context, k8sClient client.Client, configNamespace, podNamespace string) (*Status, error) {
+	if configNamespace == "" {
+		configNamespace = DefaultNamespace
+	}
+	if podNamespace == "" {
+		podNamespace = configNamespace
 	}
 	// Read config
 	cm := &corev1.ConfigMap{}
 	cfg := &Config{}
 	if err := k8sClient.Get(ctx, client.ObjectKey{
 		Name:      ConfigMapName,
-		Namespace: namespace,
+		Namespace: configNamespace,
 	}, cm); err == nil {
 		if data, ok := cm.Data["config"]; ok {
 			_ = json.Unmarshal([]byte(data), cfg)
@@ -374,7 +414,7 @@ func GetStatus(ctx context.Context, k8sClient client.Client, namespace string) (
 	// One List for everything labeled as pool. Group by template.
 	allPods := &corev1.PodList{}
 	if err := k8sClient.List(ctx, allPods,
-		client.InNamespace(namespace),
+		client.InNamespace(podNamespace),
 		client.MatchingLabels{LabelPooled: "true"},
 	); err != nil {
 		// Best-effort: still return the configured shape so the UI can
@@ -477,9 +517,12 @@ func SetConfig(ctx context.Context, k8sClient client.Client, namespace string, c
 // Claim finds a ready pool pod and removes it from the pool (marks it as claimed).
 // Returns pod name and PVC name, or empty strings if no pod available.
 //
-// The pool itself lives in `namespace` (where AgentTier is installed). After
-// claiming, the controller relabels the Pod to belong to the requesting
-// Sandbox — which can live in any namespace.
+// namespace is where the pool Pods live — the sandbox namespace (where the
+// Router creates Sandboxes), which may differ from the install namespace
+// that holds the pool ConfigMap. The claimed Pod is reused in place by the
+// requesting Sandbox, so the Sandbox must live in this same namespace
+// (Kubernetes can't move a Pod across namespaces). The controller relabels
+// the claimed Pod to belong to the Sandbox after a successful claim.
 //
 // Concurrency model: two callers can race on the same pool pod. We use the
 // resourceVersion-based optimistic concurrency Kubernetes provides — the
@@ -594,7 +637,7 @@ func (r *Reconciler) createPoolPod(ctx context.Context, templateName string) err
 	pvc := &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      pvcName,
-			Namespace: r.namespace,
+			Namespace: r.sandboxNamespace,
 			Labels: map[string]string{
 				LabelPooled:   "true",
 				LabelTemplate: templateName,
@@ -624,7 +667,7 @@ func (r *Reconciler) createPoolPod(ctx context.Context, templateName string) err
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      podName,
-			Namespace: r.namespace,
+			Namespace: r.sandboxNamespace,
 			Labels: map[string]string{
 				LabelPooled:            "true",
 				LabelTemplate:          templateName,
@@ -690,7 +733,7 @@ func (r *Reconciler) createPoolPod(ctx context.Context, templateName string) err
 		return fmt.Errorf("failed to create pool pod: %w", err)
 	}
 
-	r.logger.Info("created warm pool pod", "pod", podName, "pvc", pvcName, "template", templateName, "namespace", r.namespace)
+	r.logger.Info("created warm pool pod", "pod", podName, "pvc", pvcName, "template", templateName, "namespace", r.sandboxNamespace)
 	return nil
 }
 
@@ -748,7 +791,7 @@ func (r *Reconciler) listPoolPods(ctx context.Context, template string) ([]corev
 	if template != "" {
 		labels[LabelTemplate] = template
 	}
-	if err := r.client.List(ctx, podList, client.InNamespace(r.namespace), labels); err != nil {
+	if err := r.client.List(ctx, podList, client.InNamespace(r.sandboxNamespace), labels); err != nil {
 		return nil, err
 	}
 	return podList.Items, nil

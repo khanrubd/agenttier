@@ -162,8 +162,9 @@ All values are documented inline in [`helm/agenttier/values.yaml`](https://githu
 | `warmPool.enabled` | Leader-elected reconciler that pre-creates idle Pods. |
 | `warmPool.desiredCount` | Number of hot spares to keep. |
 | `warmPool.template` | Template the warm Pods use. |
+| `defaults.sandboxNamespace` | Namespace where Sandboxes (and therefore warm pool Pods + PVCs) are created. Defaults to `default`. Must match where the Router creates Sandboxes — a claimed pool Pod is reused in place and can't move namespaces. |
 
-The Settings page in the Web UI mutates the same values via the `agenttier-warmpool-config` ConfigMap, so admins can retune without redeploying the chart.
+The Settings page in the Web UI mutates the same values via the `agenttier-warmpool-config` ConfigMap, so admins can retune without redeploying the chart. The pool's configuration lives in the install namespace, but the idle Pods themselves are provisioned in `defaults.sandboxNamespace` so a claimed Pod can be handed directly to a new Sandbox.
 
 ### Optional add-ons
 

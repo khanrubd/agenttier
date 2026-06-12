@@ -1474,7 +1474,7 @@ func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 // --- Warm Pool Handlers ---
 
 func (s *Server) handleGetWarmPoolStatus(w http.ResponseWriter, r *http.Request) {
-	status, err := warmpool.GetStatus(r.Context(), s.k8sClient, s.config.InstallNamespace)
+	status, err := warmpool.GetStatus(r.Context(), s.k8sClient, s.config.InstallNamespace, s.config.SandboxNamespace)
 	if err != nil {
 		respondError(w, http.StatusInternalServerError, "failed to get pool status: "+err.Error())
 		return

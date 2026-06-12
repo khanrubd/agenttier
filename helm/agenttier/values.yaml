@@ -102,6 +102,15 @@ auth:
 
 # --- Sandbox Defaults ---
 defaults:
+  # sandboxNamespace is where the Router creates Sandboxes and therefore
+  # where the warm pool provisions its idle Pods + PVCs. A pool Pod is
+  # reused in place by the claiming Sandbox, and Kubernetes can't move a
+  # Pod across namespaces, so this MUST match the namespace Sandboxes are
+  # created in. The Router defaults new Sandboxes to "default"; change both
+  # together if you move Sandboxes elsewhere. Distinct from the install
+  # namespace (where the controller/router run and the pool ConfigMap lives).
+  sandboxNamespace: "default"
+
   sandbox:
     # Defaults to the chart's appVersion when the tag is omitted at render
     # time. Users can override to pin a specific image.

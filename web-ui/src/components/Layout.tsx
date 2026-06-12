@@ -88,19 +88,42 @@ export default function Layout() {
           )}
         </div>
 
-        {/* Warm pool status */}
+        {/* Warm pool status. The backend returns a per-template `pools`
+            array (canonical) plus legacy flat fields that are only
+            populated when exactly one pool is configured. Aggregate over
+            `pools` so the widget reflects every configured template — the
+            legacy scalars alone read as "off" the moment a second pool
+            exists. */}
         <div style={{ borderTop: '1px solid #e5e4e7', paddingTop: '12px', marginTop: '12px' }}>
-          {poolStatus && poolStatus.desiredCount > 0 ? (
-            <div style={{ padding: '0 8px', fontSize: '11px', color: '#6b6375' }}>
-              <div style={{ fontWeight: 600, marginBottom: '4px' }}>Warm Pool</div>
-              <div>{poolStatus.readyCount} ready / {poolStatus.desiredCount} target</div>
-              {poolStatus.pendingCount > 0 && <div>{poolStatus.pendingCount} provisioning…</div>}
-            </div>
-          ) : (
-            <div style={{ padding: '0 8px', fontSize: '11px', color: '#9ca3af' }}>
-              Warm pool: off
-            </div>
-          )}
+          {(() => {
+            const pools = poolStatus?.pools && poolStatus.pools.length > 0
+              ? poolStatus.pools
+              : poolStatus && poolStatus.desiredCount > 0
+                // Legacy single-pool shape — promote the flat fields.
+                ? [{
+                    template: poolStatus.template,
+                    desiredCount: poolStatus.desiredCount,
+                    readyCount: poolStatus.readyCount,
+                    pendingCount: poolStatus.pendingCount,
+                  }]
+                : [];
+            const target = pools.reduce((sum, p) => sum + (p.desiredCount || 0), 0);
+            const ready = pools.reduce((sum, p) => sum + (p.readyCount || 0), 0);
+            const pending = pools.reduce((sum, p) => sum + (p.pendingCount || 0), 0);
+            return target > 0 ? (
+              <div style={{ padding: '0 8px', fontSize: '11px', color: '#6b6375' }}>
+                <div style={{ fontWeight: 600, marginBottom: '4px' }}>
+                  Warm Pool{pools.length > 1 ? ` (${pools.length} templates)` : ''}
+                </div>
+                <div>{ready} ready / {target} target</div>
+                {pending > 0 && <div>{pending} provisioning…</div>}
+              </div>
+            ) : (
+              <div style={{ padding: '0 8px', fontSize: '11px', color: '#9ca3af' }}>
+                Warm pool: off
+              </div>
+            );
+          })()}
         </div>
       </nav>
 

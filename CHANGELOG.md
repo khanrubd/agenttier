@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Warm pool now actually claims pods (instant start works).** Pool Pods + PVCs were provisioned in the install namespace (e.g. `agenttier`), but the Router creates Sandboxes in `default`. The claim guard required `sandbox.Namespace == InstallNamespace`, so a claim was never attempted — and even if it had been, a claimed Pod can't move namespaces to reach the Sandbox. Net effect: on any install whose namespace wasn't `default`, every sandbox cold-started while idle pool Pods piled up (and leaked PVCs) in the install namespace. The warm pool now decouples its **config namespace** (the ConfigMap, still in the install namespace) from its **pod namespace** (pool Pods + PVCs, provisioned in the sandbox namespace `default` where Sandboxes are created), so a claimed Pod is reused in place. New `SANDBOX_NAMESPACE` env / `--sandbox-namespace` flag on both the controller and router (Helm `defaults.sandboxNamespace`, default `default`). Added a regression test and verified end to end on the live cluster: a new sandbox claimed a ready pool Pod and went Running instantly, and the reconciler replenished the pool.
+- **Warm pool status no longer shows "off" with multiple pools.** The Web UI left-nav glance widget read the legacy single-pool scalar (`desiredCount`), which the API only populates when exactly one pool is configured. With two or more templates configured it read as zero and the widget showed "Warm pool: off" despite ready pods. The widget now aggregates the per-template `pools[]` array (total ready / target across all pools), falling back to the legacy scalar for single-pool installs.
+
 ## [v0.6.0] — 2026-06-01
 
 ### Security

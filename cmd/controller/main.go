@@ -70,6 +70,7 @@ func main() {
 		defaultMountPath        string
 		agentMemorySidecarImage string
 		namespace               string
+		sandboxNamespace        string
 		enableWebhook           bool
 	)
 
@@ -91,6 +92,12 @@ func main() {
 	// namespace.
 	flag.StringVar(&namespace, "namespace", os.Getenv("POD_NAMESPACE"),
 		"Namespace where AgentTier is installed. Defaults to POD_NAMESPACE env var.")
+	// Sandbox namespace — where the Router creates Sandboxes and therefore
+	// where warm pool Pods + PVCs must be provisioned so a claimed pod can
+	// be reused in place. Defaults to SANDBOX_NAMESPACE env var, falling
+	// back to the warm pool's DefaultSandboxNamespace ("default") when unset.
+	flag.StringVar(&sandboxNamespace, "sandbox-namespace", os.Getenv("SANDBOX_NAMESPACE"),
+		"Namespace where Sandboxes (and warm pool Pods) live. Defaults to SANDBOX_NAMESPACE env var, then \"default\".")
 	flag.BoolVar(&enableWebhook, "enable-webhook", false,
 		"Serve the Sandbox validating/mutating admission webhook. Requires a serving certificate mounted at the webhook server cert dir (provided by cert-manager via the Helm chart).")
 
@@ -99,6 +106,12 @@ func main() {
 	flag.Parse()
 
 	ctrl.SetLogger(zap.New(zap.UseFlagOptions(&opts)))
+
+	// Default the sandbox namespace to where the Router creates Sandboxes
+	// ("default") when neither the flag nor SANDBOX_NAMESPACE env is set.
+	if sandboxNamespace == "" {
+		sandboxNamespace = warmpool.DefaultSandboxNamespace
+	}
 
 	setupLog.Info("starting AgentTier controller",
 		"version", version.Version,
@@ -155,6 +168,7 @@ func main() {
 		DefaultMountPath:        defaultMountPath,
 		AgentMemorySidecarImage: agentMemorySidecarImage,
 		InstallNamespace:        namespace,
+		PoolSandboxNamespace:    sandboxNamespace,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Sandbox")
 		os.Exit(1)
@@ -188,7 +202,7 @@ func main() {
 	}
 
 	// Start warm pool reconciler (runs only on the leader, respects leader election)
-	wpReconciler := warmpool.NewReconciler(mgr.GetClient(), bootLogger, namespace)
+	wpReconciler := warmpool.NewReconciler(mgr.GetClient(), bootLogger, namespace, sandboxNamespace)
 	if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
 		wpReconciler.RunLoop(ctx)
 		return nil

@@ -60,6 +60,12 @@ type Config struct {
 	// the warm pool ConfigMap, pool Pods, and pool PVCs live). Set from
 	// POD_NAMESPACE in the router deployment.
 	InstallNamespace string
+	// SandboxNamespace is where Sandboxes (and therefore warm pool Pods)
+	// live. Used when reporting warm pool status so the Router lists pool
+	// Pods in the right namespace. Set from SANDBOX_NAMESPACE in the router
+	// deployment; empty falls back to the warm pool's DefaultSandboxNamespace
+	// ("default").
+	SandboxNamespace string
 	// DevAuth, when true, bypasses authentication and stamps every request
 	// with a default admin identity. This is the local-development
 	// convenience path. It is OFF by default so a misconfigured production
