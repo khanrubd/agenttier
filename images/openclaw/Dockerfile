@@ -85,10 +85,12 @@ RUN usermod -l sandbox -d /home/sandbox -m node \
 # tied to a release cut, same as @anthropic-ai/claude-code in
 # images/claude-code/Dockerfile.
 #
-# 2026.5.19 = latest May 2026 stable on the public npm registry
-# (date-versioned upstream, requires Node >=22.19.0). Bump the pin in
-# lockstep with smoke-tested upgrades.
-RUN npm install -g openclaw@2026.5.19
+# 2026.6.5 = latest June 2026 stable on the public npm registry
+# (date-versioned upstream, requires Node >=22.19.0). The amazon-bedrock
+# provider plugin below is pinned to the SAME version — the plugin
+# declares peerDependencies openclaw >=2026.6.5, so the two must move in
+# lockstep or plugin load fails at runtime. Bump both together.
+RUN npm install -g openclaw@2026.6.5
 
 # Pre-install the amazon-bedrock provider plugin into a staging directory.
 # OpenClaw stores plugins under the user's home (writable PVC), not in
@@ -100,7 +102,7 @@ RUN npm install -g openclaw@2026.5.19
 # plugin out in the directory layout OpenClaw expects, then copy it
 # to /opt/openclaw-plugins for the entrypoint to seed onto the PVC.
 RUN mkdir -p /tmp/openclaw-plugin-build/.openclaw \
-    && HOME=/tmp/openclaw-plugin-build openclaw plugins install @openclaw/amazon-bedrock-provider \
+    && HOME=/tmp/openclaw-plugin-build openclaw plugins install @openclaw/amazon-bedrock-provider@2026.6.5 \
     && mkdir -p /opt/openclaw-plugins \
     && cp -r /tmp/openclaw-plugin-build/.openclaw/npm/. /opt/openclaw-plugins/ \
     && chmod -R a+rX /opt/openclaw-plugins \

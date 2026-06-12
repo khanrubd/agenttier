@@ -38,6 +38,33 @@ if [ -r "${SEED_CONFIG}" ] && [ ! -e "${TARGET_CONFIG}" ]; then
     cp "${SEED_CONFIG}" "${TARGET_CONFIG}"
 fi
 
+# Inject a per-pod gateway token so the local Gateway accepts authenticated
+# turns. The seed config sets gateway.mode=local + gateway.auth.mode=token
+# but intentionally ships NO token (a baked, shared token would be identical
+# across every pod). On first launch we generate a random token and write it
+# to both gateway.auth.token and gateway.remote.token — they must match or
+# gateway-routed agent turns fail with "unauthorized: gateway token missing".
+# Idempotent: skipped if a token already exists (survives stop/resume).
+if [ -e "${TARGET_CONFIG}" ] && command -v python3 >/dev/null 2>&1; then
+    python3 - "${TARGET_CONFIG}" <<'PY' || true
+import json, sys, secrets
+p = sys.argv[1]
+try:
+    d = json.load(open(p))
+except Exception:
+    sys.exit(0)
+gw = d.setdefault("gateway", {})
+gw.setdefault("mode", "local")
+auth = gw.setdefault("auth", {})
+auth.setdefault("mode", "token")
+if not auth.get("token"):
+    tok = secrets.token_hex(24)
+    auth["token"] = tok
+    gw.setdefault("remote", {})["token"] = tok
+    json.dump(d, open(p, "w"), indent=1)
+PY
+fi
+
 PLUGIN_SEED=/opt/openclaw-plugins
 PLUGIN_TARGET="${OPENCLAW_DIR}/npm"
 
@@ -50,4 +77,13 @@ RUNTIME_BIN=/usr/local/bin/agenttier-sandbox-runtime
 if [ -x "${RUNTIME_BIN}" ]; then
     "${RUNTIME_BIN}" &
 fi
+
+# Start the OpenClaw local Gateway in the background. The interactive
+# `openclaw` TUI routes agent turns through this Gateway on
+# ws://127.0.0.1:18789; without it running, prompts get no response. setsid
+# detaches it into its own session so it survives this entrypoint's exec.
+if command -v openclaw >/dev/null 2>&1; then
+    setsid sh -c "openclaw gateway run >${OPENCLAW_DIR}/gateway.log 2>&1" </dev/null >/dev/null 2>&1 &
+fi
+
 exec "$@"
