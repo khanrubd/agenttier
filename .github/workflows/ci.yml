@@ -7,7 +7,7 @@ on:
     branches: [main]
 
 env:
-  GO_VERSION: "1.22"
+  GO_VERSION: "1.25"
   NODE_VERSION: "20"
 
 jobs:
@@ -131,30 +131,37 @@ jobs:
         run: go mod verify
 
       # govulncheck scans Go source for CVEs in imported modules
-      # (vuln.go.dev). **Advisory** for now: we are pinned to Go 1.22
-      # while Dependabot's grouped upgrade PRs (k8s.io/* 0.36, OTel 1.43,
-      # prometheus 1.23) are all waiting on a coordinated Go 1.25 bump.
-      # The stdlib CVEs govulncheck flags are only fixed in Go 1.25.x,
-      # so blocking on them would require the very upgrade we haven't
-      # done yet. Promote to blocking as part of the Go-toolchain bump
-      # task.
+      # (vuln.go.dev). Runs on the Go 1.25 toolchain now, so the
+      # previously-CRITICAL findings (grpc CVE-2026-33186, the Go-1.22-era
+      # stdlib CVEs) are cleared. Kept **advisory** by design: govulncheck
+      # also surfaces freshly-disclosed Go stdlib CVEs whose only fix is the
+      # *next* toolchain patch (not yet released). Blocking on those would
+      # break main on every new upstream disclosure for something we can't
+      # yet fix. The CI Go version floats to the latest 1.25.x, so they
+      # self-clear on the next patch; findings land in the Security tab for
+      # visibility in the meantime. gosec (above) is the blocking code-scan.
       - name: govulncheck
         run: |
-          # govulncheck v1.3.0+ requires Go 1.25 to build. We're pinned to
-          # Go 1.22 until the coordinated toolchain bump (todo 8.1), so
-          # install the last release that still supports 1.22: v1.1.4.
-          go install golang.org/x/vuln/cmd/govulncheck@v1.1.4 || true
+          go install golang.org/x/vuln/cmd/govulncheck@latest
           govulncheck ./... || true
 
-      # Static analysis for Go-specific security bugs (unsafe pointers,
-      # integer overflow, weak crypto, SQL injection patterns, etc.).
-      # Advisory — findings go to the Security tab but don't block the
-      # build. Promote to blocking once the baseline is clean.
+      # Static analysis for Go-specific security bugs (weak crypto, SQL
+      # injection, blocklisted imports, etc.). BLOCKING as of the Go 1.25
+      # bump. A few rule classes are excluded with rationale (each is also
+      # gated per-site in golangci-lint's gosec via //nolint, the lint job):
+      #   G115 — int->uint16 casts at the terminal protocol boundary are
+      #          bounds-checked upstream (matches .golangci.yml).
+      #   G204 — subprocess launch with user input IS the product contract
+      #          (exec/invoke/pty run caller-supplied commands by design).
+      #   G101 — false positives on label-key / Secret-name-prefix string
+      #          constants in the API-key store (not credentials).
+      #   G705 — false positive: the rate-limit 429 body interpolates only
+      #          ints into a constant JSON format string (no user input).
+      # gosec still blocks on every other rule class.
       - name: gosec
         uses: securego/gosec@master
         with:
-          args: "-exclude-dir=test -exclude-generated -fmt=sarif -out=gosec.sarif ./..."
-        continue-on-error: true
+          args: "-exclude-dir=test -exclude-generated -exclude=G115,G204,G101,G705 -fmt=sarif -out=gosec.sarif ./..."
 
       - name: Upload gosec SARIF to code-scanning
         if: always()
@@ -166,12 +173,13 @@ jobs:
 
       # Trivy filesystem scan: picks up vulnerable dependencies in the
       # repo itself (go.sum, package-lock.json, python-sdk pyproject).
-      # **Advisory** for now: some CRITICAL findings (e.g. grpc
-      # CVE-2026-33186) require a dependency upgrade that pulls Go
-      # 1.24+, which we are holding for a coordinated toolchain bump
-      # alongside OTel, k8s.io, and prometheus majors. SARIF uploads to
-      # the Security tab so we see what is in flight, but the job does
-      # not fail until the toolchain moves.
+      # The grpc CVE-2026-33186 that previously blocked here is cleared by
+      # the Go 1.25 dependency bump. Kept **advisory** by design: Trivy
+      # tracks the upstream CVE feed, so a freshly-disclosed HIGH in a
+      # transitive dep would otherwise turn main red on an unrelated
+      # upstream disclosure before a fix is even published. SARIF uploads to
+      # the Security tab give us the drift signal; gosec is the blocking
+      # code-level gate.
       - name: Trivy filesystem scan
         uses: aquasecurity/trivy-action@master
         with:

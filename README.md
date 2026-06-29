@@ -50,7 +50,7 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 
 ### Sandbox lifecycle
 
-- **Create, stop, resume, delete** — sandboxes spin up from a template; stopping preserves the workspace, packages, and git state on a persistent volume; resume reattaches the same volume in seconds; idle and max-runtime caps auto-stop with grace.
+- **Create, stop, resume, delete** — sandboxes spin up from a template; stopping preserves the workspace, packages, and git state on a persistent volume; resume reattaches the same volume in seconds; idle and max-runtime caps auto-stop with grace. Opt into `snapshotOnStop` to capture a CSI VolumeSnapshot of the workspace each time the sandbox stops, so a stopped state can be restored or cloned later.
 - **Clone any sandbox via VolumeSnapshot** — `POST /api/v1/sandboxes/{id}/clone` takes a CSI VolumeSnapshot of the source PVC and provisions a new sandbox whose workspace is byte-identical to the source. Clones inherit the source's spec (template, env, ports, agent harness) so a fork is one HTTP call away. SDK + CLI surfaces; works on any CSI driver with snapshot support (EBS, GCE PD, Azure Disk, etc).
 - **Sub-second cold starts** — per-template warm pools, optional immediate PVC binding, and an opt-in image pre-pull DaemonSet take creation from ~10 s down to ~800 ms.
 - **Self-healing** — bounded retries on infrastructure failures with structured Kubernetes events for every transition; clean Error state once the retry budget is exhausted.

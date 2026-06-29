@@ -12,7 +12,7 @@
 # Bakes a small HTTP server into the sandbox so the Router can proxy
 # requests directly instead of going through SPDY exec. See
 # pkg/sandboxruntime for design rationale.
-FROM public.ecr.aws/docker/library/golang:1.22 AS runtime-build
+FROM public.ecr.aws/docker/library/golang:1.25 AS runtime-build
 
 ARG TARGETARCH
 
@@ -78,13 +78,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && ln -sf /usr/bin/python3.11 /usr/bin/python \
     && rm -rf /var/lib/apt/lists/*
 
-# Go 1.22 — install the right tarball for the build architecture.
+# Go 1.25 — install the right tarball for the build architecture.
 RUN case "${TARGETARCH}" in \
       amd64) GOARCH=amd64 ;; \
       arm64) GOARCH=arm64 ;; \
       *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
-    && curl -fsSL "https://go.dev/dl/go1.22.5.linux-${GOARCH}.tar.gz" | tar -C /usr/local -xzf -
+    && curl -fsSL "https://go.dev/dl/go1.25.10.linux-${GOARCH}.tar.gz" | tar -C /usr/local -xzf -
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # In-pod runtime binary + entrypoint that backgrounds it.

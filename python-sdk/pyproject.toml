@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "agenttier"
 # Source of truth is src/agenttier/_version.py — keep both in sync on release.
-version = "0.7.0"
+version = "0.7.1"
 description = "Python SDK for AgentTier — isolated, persistent Kubernetes sandboxes for humans and AI agents"
 readme = "README.md"
 license = "Apache-2.0"

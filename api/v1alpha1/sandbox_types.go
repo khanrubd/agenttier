@@ -368,8 +368,14 @@ type NetworkSpec struct {
 	// +optional
 	IngressRules []NetworkRule `json:"ingressRules,omitempty"`
 
-	// AllowedDomains restricts egress to specific domain names.
-	// Requires a DNS-aware CNI plugin (Calico, Cilium).
+	// AllowedDomains is intended to restrict egress to specific domain names.
+	//
+	// NOT ENFORCED on vanilla Kubernetes NetworkPolicy, which cannot match
+	// egress by DNS name — this field is currently ignored by the generated
+	// NetworkPolicy. Domain-based egress requires Cilium FQDN policies
+	// (CiliumNetworkPolicy) or an egress proxy, which is a tracked follow-up.
+	// Until then use EgressRules (CIDR/port based) for egress control;
+	// setting AllowedDomains has no effect today.
 	// +optional
 	AllowedDomains []string `json:"allowedDomains,omitempty"`
 

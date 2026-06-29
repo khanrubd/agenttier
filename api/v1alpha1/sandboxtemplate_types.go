@@ -165,11 +165,24 @@ type HarnessSpec struct {
 	// +optional
 	Skills []SkillSpec `json:"skills,omitempty"`
 
-	// Hooks defines lifecycle scripts executed at specific points.
+	// Hooks declares lifecycle scripts for sandbox state transitions.
+	//
+	// NOTE: hook execution is NOT yet wired into the controller's reconcile
+	// path. These scripts are accepted and stored for forward-compatibility
+	// but are not run today — do not rely on them for setup/teardown side
+	// effects. Tracked as a follow-up.
 	// +optional
 	Hooks *HooksSpec `json:"hooks,omitempty"`
 
-	// Constraints defines operational boundaries for the agent.
+	// Constraints declares advisory operational boundaries surfaced to the
+	// agent harness as hints the harness itself may honor.
+	//
+	// SECURITY NOTE: these are NOT a platform-enforced sandbox. AgentTier
+	// does not block RestrictedCommands, deny RestrictedPaths, or cap
+	// MaxFileSize / MaxCommandTimeout at runtime — code running in the
+	// sandbox can ignore them. Do not rely on Constraints to contain
+	// untrusted workloads; use NetworkPolicy, the non-root / read-only-rootfs
+	// pod hardening, and (for kernel isolation) the gVisor RuntimeClass.
 	// +optional
 	Constraints *ConstraintsSpec `json:"constraints,omitempty"`
 

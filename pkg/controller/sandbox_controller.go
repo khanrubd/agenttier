@@ -34,6 +34,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
+
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
 	"github.com/agenttier/agenttier/pkg/controller/warmpool"
 )
@@ -594,6 +596,18 @@ func (r *SandboxReconciler) reconcileDelete(ctx context.Context, sandbox *agentt
 
 // stopSandbox deletes the pod but preserves the PVC.
 func (r *SandboxReconciler) stopSandbox(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox, reason string) (ctrl.Result, error) {
+	// SnapshotOnStop: if the (effective) storage spec opts in, capture a
+	// VolumeSnapshot of the workspace PVC before the pod is torn down so the
+	// stopped state can be restored or cloned. A snapshot failure is logged
+	// and evented but does NOT block the stop — we don't strand the sandbox
+	// in Running over a snapshot hiccup.
+	if sandbox.Status.PVCName != "" && r.snapshotOnStopEnabled(ctx, sandbox) {
+		if err := r.snapshotSandboxPVC(ctx, sandbox); err != nil {
+			log.FromContext(ctx).Error(err, "SnapshotOnStop failed; stopping without a snapshot", "sandbox", sandbox.Name)
+			r.Recorder.Eventf(sandbox, corev1.EventTypeWarning, "SnapshotFailed", "SnapshotOnStop failed: %v", err)
+		}
+	}
+
 	if sandbox.Status.PodName != "" {
 		pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: sandbox.Status.PodName, Namespace: sandbox.Namespace}}
 		if err := r.Delete(ctx, pod); err != nil && !errors.IsNotFound(err) {
@@ -611,6 +625,52 @@ func (r *SandboxReconciler) stopSandbox(ctx context.Context, sandbox *agenttierv
 
 	r.Recorder.Event(sandbox, corev1.EventTypeNormal, "Stopped", reason)
 	return ctrl.Result{}, nil
+}
+
+// snapshotOnStopEnabled reports whether SnapshotOnStop is set on the sandbox's
+// effective storage spec (sandbox spec wins; otherwise inherited from the
+// resolved template's storage).
+func (r *SandboxReconciler) snapshotOnStopEnabled(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox) bool {
+	if sandbox.Spec.Storage != nil {
+		return sandbox.Spec.Storage.SnapshotOnStop
+	}
+	if sandbox.Spec.TemplateRef != nil {
+		resolver := &TemplateResolver{Client: r.Client}
+		if resolved, err := resolver.Resolve(ctx, sandbox.Spec.TemplateRef, sandbox.Namespace); err == nil &&
+			resolved != nil && resolved.Spec.Storage != nil {
+			return resolved.Spec.Storage.SnapshotOnStop
+		}
+	}
+	return false
+}
+
+// snapshotSandboxPVC creates a VolumeSnapshot of the sandbox's workspace PVC.
+// The snapshot is intentionally NOT owner-referenced to the Sandbox: the point
+// of SnapshotOnStop is to preserve state that can outlive the sandbox (restore
+// / clone later), so it must survive sandbox deletion. The operator manages
+// snapshot lifecycle.
+func (r *SandboxReconciler) snapshotSandboxPVC(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox) error {
+	pvcName := sandbox.Status.PVCName
+	snap := &snapshotv1.VolumeSnapshot{
+		ObjectMeta: metav1.ObjectMeta{
+			Name:      fmt.Sprintf("%s-stopsnap-%d", sandbox.Name, time.Now().Unix()),
+			Namespace: sandbox.Namespace,
+			Labels: map[string]string{
+				"agenttier.io/sandbox":       sandbox.Name,
+				"agenttier.io/snapshot-kind": "on-stop",
+			},
+		},
+		Spec: snapshotv1.VolumeSnapshotSpec{
+			Source: snapshotv1.VolumeSnapshotSource{
+				PersistentVolumeClaimName: &pvcName,
+			},
+		},
+	}
+	if err := r.Create(ctx, snap); err != nil {
+		return fmt.Errorf("create VolumeSnapshot: %w", err)
+	}
+	r.Recorder.Eventf(sandbox, corev1.EventTypeNormal, "Snapshotted", "Created VolumeSnapshot %s before stopping", snap.Name)
+	return nil
 }
 
 // handleInfrastructureFailure attempts auto-restart with backoff.

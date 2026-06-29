@@ -7,6 +7,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.7.1] — 2026-06-29
+
+### Changed
+
+- **Coordinated Go 1.25 toolchain bump + dependency major upgrades (closes #64).** Moved `go.mod` (and the CI matrix, both controller/router Dockerfiles, all seven sandbox-image builder stages, and the general-coding Go tarball) from Go 1.22 to Go 1.25. With the toolchain unblocked, upgraded the held majors: `k8s.io/*` 0.30 → 0.34, `sigs.k8s.io/controller-runtime` 0.18 → 0.22, OpenTelemetry 1.28 → 1.38, `prometheus/client_golang` 1.19 → 1.23, `google.golang.org/grpc` 1.64 → 1.76, plus `golang.org/x/net` → 0.55 and other transitive bumps. This clears the previously-CRITICAL findings (grpc CVE-2026-33186 and the Go-1.22-era stdlib CVEs) that `govulncheck` flagged, and lifts the Dependabot major-version holds for the k8s, OTel, and gRPC groups (the `gomod` ignore list in `dependabot.yml` is removed; the grouped-PR config stays). The OTel resource builder was updated to semconv v1.37 to match the SDK's resource schema. No controller-runtime API breakage; full build + test suite green on Go 1.25.
+
+### Security
+
+- **CI security scans: gosec is now blocking (part of #64).** With the baseline clean on Go 1.25, the dedicated `gosec` step in the CI `security` job is promoted from advisory to **blocking**. Four rule classes are excluded with documented, per-site rationale (each is also gated in golangci-lint's gosec via `//nolint`): G115 (bounds-checked int→uint16 at the terminal protocol boundary), G204 (subprocess launch with user input — the exec/invoke/pty product contract), G101 (false positives on label-key / Secret-name-prefix constants), and G705 (false positive: the 429 body interpolates only ints into a constant JSON string). `govulncheck`, Trivy, and gitleaks remain advisory by design — they track the upstream CVE feed and would otherwise turn `main` red on freshly-disclosed CVEs whose only fix is a not-yet-released toolchain/dependency patch; their SARIF still uploads to the Security tab. The previously-CRITICAL govulncheck findings are cleared by the toolchain bump.
+
+### Fixed
+
+- **`StorageSpec.SnapshotOnStop` is now implemented (part of #65).** This field was accepted but silently ignored. The controller's stop path now creates a `VolumeSnapshot` of the workspace PVC before deleting the pod when `snapshotOnStop: true` (resolved from the sandbox spec, or inherited from the template). The snapshot is intentionally not owner-referenced to the Sandbox so it survives sandbox deletion (the point is to preserve state for later restore/clone); a snapshot failure is evented but does not block the stop. Regression tests cover the create-on-stop and disabled-by-default paths.
+- **Honest CRD documentation for the remaining spec-only fields (closes #65).** Three fields were accepted but not enforced, and two of them read as security controls. Their godoc (and the regenerated CRD descriptions surfaced by `kubectl explain`) now state the truth: lifecycle `Hooks` are stored but **not yet executed** by the controller; `Constraints` (RestrictedCommands / RestrictedPaths / MaxFileSize / MaxCommandTimeout) are **advisory harness hints, NOT a platform-enforced sandbox** — use NetworkPolicy / pod hardening / gVisor to contain untrusted code; and `NetworkSpec.AllowedDomains` is **not enforced on vanilla NetworkPolicy** (DNS/FQDN egress needs Cilium or an egress proxy) so it has no effect today. Full hook execution, runtime command enforcement, and Cilium-backed domain egress remain tracked follow-ups.
+
 ## [v0.7.0] — 2026-06-28
 
 ### Added

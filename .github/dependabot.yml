@@ -8,27 +8,11 @@ updates:
     labels:
       - "dependencies"
       - "go"
-    # Hold off on Go-toolchain-blocked majors. These all require Go 1.23+
-    # but go.mod is pinned to 1.22 per the project's coordinated Go-toolchain
-    # policy (see .kiro/steering/project.md#dependency-policy). They land in
-    # a single coordinated bump alongside k8s.io/* 0.36, OTel 1.43, and
-    # prometheus 1.23.
-    ignore:
-      - dependency-name: "google.golang.org/grpc"
-        update-types: ["version-update:semver-major", "version-update:semver-minor"]
-      - dependency-name: "golang.org/x/oauth2"
-        update-types: ["version-update:semver-minor"]
-      - dependency-name: "golang.org/x/net"
-        update-types: ["version-update:semver-minor"]
-      - dependency-name: "go.opentelemetry.io/*"
-        update-types: ["version-update:semver-minor"]
-      # Kubernetes client libraries: same coordinated-bump policy. The
-      # `kubernetes` group below means these come as a single PR; without
-      # the ignore that PR would still be re-proposed every week.
-      - dependency-name: "k8s.io/*"
-        update-types: ["version-update:semver-minor"]
-      - dependency-name: "sigs.k8s.io/*"
-        update-types: ["version-update:semver-minor"]
+    # The Go-toolchain-blocked majors (grpc, OTel, k8s.io/*, controller-runtime,
+    # prometheus) were unblocked by the coordinated Go 1.25 bump (go.mod) and
+    # are no longer held — Dependabot may now propose them. They still arrive
+    # as grouped PRs (see `groups` below) so the version-locked sets land
+    # together.
     groups:
       # Bundle the Kubernetes client libraries together. These are version-locked
       # in practice — upgrading one without the others causes compile failures.

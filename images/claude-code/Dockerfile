@@ -12,7 +12,7 @@
 
 # ---- Stage 1: in-pod runtime binary ----------------------------------------
 # See pkg/sandboxruntime for design rationale.
-FROM public.ecr.aws/docker/library/golang:1.22 AS runtime-build
+FROM public.ecr.aws/docker/library/golang:1.25 AS runtime-build
 ARG TARGETARCH
 WORKDIR /src
 COPY go.mod go.sum ./
