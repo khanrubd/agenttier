@@ -178,7 +178,13 @@ func isInfrastructureFailure(pod *corev1.Pod) bool {
 			case "OOMKilled", "Evicted":
 				return true
 			case "Completed":
-				return false // Normal exit
+				return false // Normal exit (exit 0)
+			case "Error":
+				// Non-zero exit of the user's command under
+				// RestartPolicy:Never. This is an APPLICATION failure, not
+				// infrastructure — restarting it 5 times won't help, so let
+				// it go terminal immediately instead of burning the budget.
+				return false
 			}
 		}
 		if cs.State.Waiting != nil && cs.State.Waiting.Reason == "CrashLoopBackOff" {

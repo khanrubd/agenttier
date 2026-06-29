@@ -400,6 +400,14 @@ func (req ConfigureRequest) validate() error {
 		if strings.Contains(f.Path, "..") {
 			return fmt.Errorf("files[%d].path must not contain '..'", i)
 		}
+		// Reject shell metacharacters: writeFiles interpolates the path into
+		// a `sh -c` command via single-quoting, so an embedded quote /
+		// backtick / backslash / newline would break out and inject. Mirrors
+		// router.sandboxFilePath's allowlist (kept in sync, not imported,
+		// since the agent package must not depend on the router package).
+		if strings.ContainsAny(f.Path, "'`\\\n\r") {
+			return fmt.Errorf("files[%d].path contains disallowed characters", i)
+		}
 		if f.Content == "" && f.ContentBase64 == "" {
 			return fmt.Errorf("files[%d] must set content or contentBase64", i)
 		}

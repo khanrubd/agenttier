@@ -21,9 +21,10 @@ Design notes:
   random jitter so simultaneous client retries don't synchronize and
   hammer a recovering server.
 * Idempotent methods (``GET``, ``HEAD``, ``OPTIONS``, ``PUT``, ``DELETE``) are
-  always retried on connection errors. ``POST`` is retried on connection
-  errors only when ``retry_post=True`` since POSTs are typically
-  side-effecting.
+  retried on both connection errors and retryable status codes. ``POST`` is
+  retried only when ``retry_post=True`` (for both connection errors AND
+  retryable 5xx/429 responses), since a replayed POST could double-create a
+  sandbox or re-run an exec when the original already took effect.
 """
 
 from __future__ import annotations
@@ -64,9 +65,11 @@ class RetryConfig:
         seconds plus jitter.
     :param backoff_max: Upper bound on a single wait (seconds).
     :param retry_status: HTTP status codes that trigger a retry.
-    :param retry_post: When True, POST requests are also retried on
-        connection errors. Most Router endpoints are not idempotent so
-        the default is False.
+    :param retry_post: When True, POST requests are also retried — on both
+        connection errors and retryable status codes. Most Router endpoints
+        are not idempotent (create, exec, clone), so the default is False and
+        a POST that gets a 5xx/429 is returned to the caller rather than
+        replayed.
     :param respect_retry_after: When True, honor ``Retry-After`` header on
         429 / 503 responses (cap to ``backoff_max`` to avoid runaway sleeps).
     """
@@ -118,6 +121,13 @@ class _RetryTransport(httpx.BaseTransport):
                 continue
 
             if response.status_code not in self._config.retry_status:
+                return response
+            # Don't replay a non-idempotent method (POST) on a retryable
+            # status unless explicitly allowed: a 502/503/504 may mean the
+            # request already took effect server-side, so retrying could
+            # double-create a sandbox or re-run an exec. The connection-error
+            # branch above applies the same gate.
+            if method not in _IDEMPOTENT_METHODS and not self._config.retry_post:
                 return response
             if attempt >= attempts_remaining:
                 return response
@@ -193,6 +203,10 @@ class _AsyncRetryTransport(httpx.AsyncBaseTransport):
                 continue
 
             if response.status_code not in self._config.retry_status:
+                return response
+            # Same idempotency gate as the sync transport: never replay a
+            # non-idempotent POST on a retryable status unless retry_post.
+            if method not in _IDEMPOTENT_METHODS and not self._config.retry_post:
                 return response
             if attempt >= attempts_remaining:
                 return response

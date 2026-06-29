@@ -55,19 +55,20 @@ func init() {
 
 func main() {
 	var (
-		listenAddr       string
-		oidcIssuer       string
-		oidcClientID     string
-		adminGroup       string
-		groupClaim       string
-		previewDomain    string
-		ingressClassName string
-		namespace        string
-		sandboxNamespace string
-		rateLimitPerIP   float64
-		rateLimitPerUser float64
-		devAuth          bool
-		showVersion      bool
+		listenAddr        string
+		oidcIssuer        string
+		oidcClientID      string
+		adminGroup        string
+		groupClaim        string
+		previewDomain     string
+		ingressClassName  string
+		namespace         string
+		sandboxNamespace  string
+		rateLimitPerIP    float64
+		rateLimitPerUser  float64
+		rateLimitTrustXFF bool
+		devAuth           bool
+		showVersion       bool
 	)
 
 	flag.StringVar(&listenAddr, "listen-addr", ":8080", "HTTP listen address")
@@ -97,6 +98,12 @@ func main() {
 		"Steady-state per-client-IP request rate (req/sec). 0 disables IP-level rate limiting.")
 	flag.Float64Var(&rateLimitPerUser, "ratelimit-per-user-rate", 0,
 		"Steady-state per-authenticated-user request rate (req/sec). 0 disables user-level rate limiting.")
+	// Trust X-Forwarded-For/X-Real-IP for the per-IP limiter key. OFF by
+	// default (secure) so a forged header can't mint a fresh bucket per
+	// request; enable only when behind a trusted proxy/LB (e.g. the ALB).
+	flag.BoolVar(&rateLimitTrustXFF, "ratelimit-trust-forwarded-headers",
+		os.Getenv("RATE_LIMIT_TRUST_FORWARDED_HEADERS") == "true",
+		"Trust X-Forwarded-For/X-Real-IP for per-IP rate limiting. Enable only behind a trusted proxy/LB.")
 	// Dev-auth — explicit opt-in to bypass authentication and treat every
 	// request as admin. OFF by default so a prod install that forgot to set
 	// an OIDC issuer fails closed (401) rather than open. Also honors
@@ -169,10 +176,11 @@ func main() {
 
 	// Create and start server
 	rateLimitCfg := router.RateLimitConfig{
-		PerIPRate:    rateLimitPerIP,
-		PerUserRate:  rateLimitPerUser,
-		PerIPBurst:   30,  // burst sized for typical web-UI traffic
-		PerUserBurst: 100, // generous so an interactive admin doesn't trip
+		PerIPRate:             rateLimitPerIP,
+		PerUserRate:           rateLimitPerUser,
+		PerIPBurst:            30,  // burst sized for typical web-UI traffic
+		PerUserBurst:          100, // generous so an interactive admin doesn't trip
+		TrustForwardedHeaders: rateLimitTrustXFF,
 	}
 	config := &router.Config{
 		ListenAddr:       listenAddr,

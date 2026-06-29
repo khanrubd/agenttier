@@ -431,6 +431,15 @@ func MergeSandboxWithTemplate(sandbox *agenttierv1alpha1.SandboxSpec, template *
 		config.RuntimeClass = template.RuntimeClass
 	}
 
+	// ServiceAccount (IRSA / Workload Identity for per-sandbox cloud
+	// identity): sandbox > template. Empty leaves pod.Spec.ServiceAccountName
+	// unset so the namespace default applies (unchanged prior behavior).
+	if sandbox.ServiceAccount != "" {
+		config.ServiceAccount = sandbox.ServiceAccount
+	} else if template != nil && template.ServiceAccount != "" {
+		config.ServiceAccount = template.ServiceAccount
+	}
+
 	// Security: sandbox > template
 	if sandbox.Security != nil {
 		config.Privileged = sandbox.Security.Privileged

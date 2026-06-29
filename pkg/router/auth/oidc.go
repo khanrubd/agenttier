@@ -114,6 +114,16 @@ func (v *OIDCValidator) ValidateToken(ctx context.Context, tokenString string) (
 		return nil, fmt.Errorf("failed to parse JWT header: %w", err)
 	}
 
+	// Enforce the signing algorithm explicitly. We only verify RS256
+	// (verifyRS256Signature is hardcoded to RSA + SHA-256). Rejecting any
+	// other "alg" up front is defense-in-depth against algorithm-confusion
+	// attacks (e.g. "none", or HS256 using the RSA public key as the HMAC
+	// secret) — so a future refactor that branches on alg can never be
+	// tricked into skipping or downgrading verification.
+	if header.Alg != "RS256" {
+		return nil, fmt.Errorf("unsupported JWT alg %q: only RS256 is accepted", header.Alg)
+	}
+
 	// Get signing key from JWKS cache
 	key, err := v.jwksCache.GetKey(header.Kid)
 	if err != nil {

@@ -18,7 +18,9 @@ package router
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -89,6 +91,9 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 
 	namespace := req.Namespace
+	if namespace == "" {
+		namespace = s.config.SandboxNamespace
+	}
 	if namespace == "" {
 		namespace = "default"
 	}
@@ -555,9 +560,9 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
-	// Lookup sandbox
-	sandbox := &agenttierv1alpha1.Sandbox{}
-	if err := s.k8sClient.Get(r.Context(), types.NamespacedName{Name: sandboxID, Namespace: "default"}, sandbox); err != nil {
+	// Lookup sandbox (resolves across namespaces, honoring ?namespace=).
+	sandbox, err := s.resolveSandbox(r.Context(), sandboxID, r.URL.Query().Get("namespace"))
+	if err != nil {
 		http.Error(w, "sandbox not found", http.StatusNotFound)
 		return
 	}
@@ -1318,6 +1323,9 @@ func (s *Server) handleDeletePolicy(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleGetEffectivePolicy(w http.ResponseWriter, r *http.Request) {
 	namespace := r.URL.Query().Get("namespace")
 	if namespace == "" {
+		namespace = s.config.SandboxNamespace
+	}
+	if namespace == "" {
 		namespace = "default"
 	}
 	policy, err := governance.Resolve(r.Context(), s.governanceStore, namespace)
@@ -1470,11 +1478,87 @@ func (s *Server) handleAdminListSandboxes(w http.ResponseWriter, r *http.Request
 func (s *Server) handleAdminListSharing(w http.ResponseWriter, r *http.Request) {
 	respondJSON(w, http.StatusOK, map[string]interface{}{})
 }
-func (s *Server) handleGetPreferences(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]interface{}{})
+
+// userPrefsConfigMapName derives a stable ConfigMap name from the user's OIDC
+// subject. The subject is hashed (not stored in plaintext) so the resource
+// name is a valid RFC 1123 label and carries no PII.
+func userPrefsConfigMapName(sub string) string {
+	sum := sha256.Sum256([]byte(sub))
+	return "agenttier-prefs-" + hex.EncodeToString(sum[:])[:16]
 }
+
+func (s *Server) prefsNamespace() string {
+	if s.config.InstallNamespace != "" {
+		return s.config.InstallNamespace
+	}
+	return "default"
+}
+
+func (s *Server) handleGetPreferences(w http.ResponseWriter, r *http.Request) {
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	cm := &corev1.ConfigMap{}
+	err := s.k8sClient.Get(r.Context(),
+		types.NamespacedName{Name: userPrefsConfigMapName(claims.Sub), Namespace: s.prefsNamespace()}, cm)
+	if err != nil {
+		// No preferences saved yet — return an empty object, not an error.
+		respondJSON(w, http.StatusOK, map[string]interface{}{})
+		return
+	}
+	prefs := map[string]interface{}{}
+	if raw := cm.Data["preferences"]; raw != "" {
+		_ = json.Unmarshal([]byte(raw), &prefs)
+	}
+	respondJSON(w, http.StatusOK, prefs)
+}
+
 func (s *Server) handleUpdatePreferences(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "not yet implemented")
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	var prefs map[string]interface{}
+	if err := json.NewDecoder(r.Body).Decode(&prefs); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	data, err := json.Marshal(prefs)
+	if err != nil {
+		respondError(w, http.StatusBadRequest, "invalid preferences: "+err.Error())
+		return
+	}
+
+	name := userPrefsConfigMapName(claims.Sub)
+	ns := s.prefsNamespace()
+	cm := &corev1.ConfigMap{}
+	if getErr := s.k8sClient.Get(r.Context(), types.NamespacedName{Name: name, Namespace: ns}, cm); getErr != nil {
+		cm = &corev1.ConfigMap{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      name,
+				Namespace: ns,
+				Labels:    map[string]string{"agenttier.io/component": "user-preferences"},
+			},
+			Data: map[string]string{"preferences": string(data)},
+		}
+		if err := s.k8sClient.Create(r.Context(), cm); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to save preferences: "+err.Error())
+			return
+		}
+	} else {
+		if cm.Data == nil {
+			cm.Data = map[string]string{}
+		}
+		cm.Data["preferences"] = string(data)
+		if err := s.k8sClient.Update(r.Context(), cm); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to save preferences: "+err.Error())
+			return
+		}
+	}
+	respondJSON(w, http.StatusOK, prefs)
 }
 func (s *Server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 	claims := GetClaims(r.Context())
@@ -1545,10 +1629,9 @@ func (s *Server) handleSetWarmPoolConfig(w http.ResponseWriter, r *http.Request)
 // --- Helpers ---
 
 func (s *Server) getSandboxWithAuthCheck(ctx context.Context, sandboxID string, claims *Claims) (*agenttierv1alpha1.Sandbox, error) {
-	sandbox := &agenttierv1alpha1.Sandbox{}
-	// Try default namespace first, then try to find it
-	if err := s.k8sClient.Get(ctx, types.NamespacedName{Name: sandboxID, Namespace: "default"}, sandbox); err != nil {
-		return nil, fmt.Errorf("sandbox %s not found", sandboxID)
+	sandbox, err := s.resolveSandbox(ctx, sandboxID, "")
+	if err != nil {
+		return nil, err
 	}
 
 	// Check ownership (non-admin must own the sandbox)
@@ -1559,6 +1642,59 @@ func (s *Server) getSandboxWithAuthCheck(ctx context.Context, sandboxID string, 
 	}
 
 	return sandbox, nil
+}
+
+// resolveSandbox finds a Sandbox by ID (name) without assuming it lives in
+// "default". It tries the configured sandbox namespace first (a cheap Get —
+// the common single-namespace case), then falls back to a cluster-wide
+// list-by-name so sandboxes created in other namespaces are reachable (the
+// multi-namespace / per-namespace-governance deployment the product targets).
+// Previously every sandbox-scoped lookup hardcoded Namespace:"default",
+// silently 404ing anything created elsewhere.
+//
+// nsHint, when non-empty (e.g. from a ?namespace= query param), pins the
+// lookup to that namespace and skips the cluster-wide search — this also
+// disambiguates the rare case of the same name existing in two namespaces.
+func (s *Server) resolveSandbox(ctx context.Context, sandboxID, nsHint string) (*agenttierv1alpha1.Sandbox, error) {
+	if nsHint != "" {
+		sb := &agenttierv1alpha1.Sandbox{}
+		if err := s.k8sClient.Get(ctx, types.NamespacedName{Name: sandboxID, Namespace: nsHint}, sb); err != nil {
+			return nil, fmt.Errorf("sandbox %s not found in namespace %s", sandboxID, nsHint)
+		}
+		return sb, nil
+	}
+
+	// Fast path: the configured sandbox namespace.
+	primaryNS := s.config.SandboxNamespace
+	if primaryNS == "" {
+		primaryNS = "default"
+	}
+	sb := &agenttierv1alpha1.Sandbox{}
+	if err := s.k8sClient.Get(ctx, types.NamespacedName{Name: sandboxID, Namespace: primaryNS}, sb); err == nil {
+		return sb, nil
+	}
+
+	// Fall back to a cluster-wide search by name.
+	list := &agenttierv1alpha1.SandboxList{}
+	if err := s.k8sClient.List(ctx, list); err != nil {
+		return nil, fmt.Errorf("sandbox %s not found", sandboxID)
+	}
+	var match *agenttierv1alpha1.Sandbox
+	count := 0
+	for i := range list.Items {
+		if list.Items[i].Name == sandboxID {
+			match = &list.Items[i]
+			count++
+		}
+	}
+	switch count {
+	case 0:
+		return nil, fmt.Errorf("sandbox %s not found", sandboxID)
+	case 1:
+		return match, nil
+	default:
+		return nil, fmt.Errorf("sandbox %s exists in multiple namespaces; specify ?namespace=<ns>", sandboxID)
+	}
 }
 
 func sandboxToJSON(sb *agenttierv1alpha1.Sandbox) map[string]interface{} {

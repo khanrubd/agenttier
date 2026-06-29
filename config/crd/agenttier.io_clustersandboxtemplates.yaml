@@ -2376,6 +2376,16 @@ spec:
                       Use with caution — only for sandboxes that require elevated privileges.
                     type: boolean
                 type: object
+              serviceAccount:
+                description: |-
+                  ServiceAccount is the name of a Kubernetes ServiceAccount that
+                  sandboxes created from this template run under. Use this to attach a
+                  scoped cloud identity (EKS IRSA / GKE Workload Identity) so every
+                  sandbox from this template gets the same per-template cloud
+                  credentials instead of the namespace default ServiceAccount. A sandbox
+                  may override this via its own spec.serviceAccount. The ServiceAccount
+                  must already exist in the sandbox's namespace.
+                type: string
               sidecars:
                 description: Sidecars defines default sidecar containers.
                 items:

@@ -7,6 +7,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.7.0] — 2026-06-28
+
+### Added
+
+- **Per-sandbox / per-template cloud identity via a `serviceAccount` field.** New optional `spec.serviceAccount` on both `Sandbox` and `SandboxTemplate` (sandbox overrides template) sets the Pod's `ServiceAccountName`, so an operator can attach a scoped EKS IRSA-annotated or GKE Workload Identity ServiceAccount and give each sandbox (or each template's sandboxes) a distinct cloud identity instead of sharing the namespace default. Previously the `MergedPodConfig.ServiceAccount` plumbing existed but was never populated — the field was inert. Threaded through the template-merge chain; CRDs regenerated. Additive and optional (empty leaves prior behavior unchanged). Merge + pod-builder tests added.
+- **Multi-namespace sandbox resolution in the Router API.** The Router previously hardcoded `Namespace: "default"` on every sandbox lookup (get / terminal / exec / stop / resume / clone / files / ports / governance), silently 404ing any sandbox created elsewhere and making the per-namespace governance feature a no-op for real multi-tenant deployments. A new `resolveSandbox` helper tries the configured sandbox namespace first, then falls back to a cluster-wide list-by-name (with a clear "specify `?namespace=`" error when a name exists in multiple namespaces). Sandboxes in any namespace are now fully serviceable through the API, terminal, and Web UI. Regression tests cover the non-default-namespace, fast-path, ambiguous, and not-found cases.
+- **User preferences endpoint (was `501`).** `PUT /user/preferences` now persists a per-user preferences object (ConfigMap-backed, keyed by a hash of the OIDC subject in the install namespace) and `GET /user/preferences` reads it back, unblocking notification-preference wiring. Round-trip test added. (The sibling sharing endpoints remain stubs, tracked under the Sharing & collaboration item.)
+
+### Changed
+
+- **Per-IP rate limiter no longer trusts forwarding headers by default.** `clientIP` previously always honored `X-Forwarded-For` / `X-Real-IP`, so a client could spoof a unique value per request and mint a fresh token bucket each time — fully bypassing the per-IP throttle. It now keys on the real TCP peer (`RemoteAddr`) unless the new `TrustForwardedHeaders` config (Router `--ratelimit-trust-forwarded-headers` / `RATE_LIMIT_TRUST_FORWARDED_HEADERS`) is explicitly enabled for installs that sit behind a trusted proxy/LB. Opt-in rate limiting only; default-secure. Tests cover both trusted and spoofed-untrusted cases.
+
+### Security
+
+- **OIDC validator enforces `alg: RS256`.** The JWT header's `alg` was parsed but never checked. The validator only ever verifies RS256, so any other `alg` (`none`, `HS256`, `RS512`, empty) is now rejected up front — defense-in-depth against algorithm-confusion attacks should the verification path ever be refactored to branch on `alg`. Test rejects each non-RS256 algorithm.
+- **Warm-pool sandboxes now fail closed on NetworkPolicy errors.** The warm-claim path previously only logged a NetworkPolicy creation failure and proceeded to mark the sandbox `Running` — leaving it with no default-deny / egress isolation, permanently and silently. It now ensures the NetworkPolicy *before* marking Running and transitions to `Error` on failure, matching the cold-start path.
+- **Agent `/configure` rejects shell-metacharacter file paths.** `writeFiles` interpolates each file path into a single-quoted `sh -c` command; a path containing a quote / backtick / backslash / newline could break out and inject. `validate()` now rejects those characters (mirroring the code-mode `sandboxFilePath` allowlist). Confined to the caller's own sandbox today, but closes the injection primitive and a project-rule violation. Test added.
+
+### Fixed
+
+- **Completed sandboxes no longer report `Running` forever.** Pods run with `RestartPolicy: Never`, so a process that exits 0 lands the pod in phase `Succeeded`, which `reconcileRunning` never handled — the Sandbox stayed `Running` while its pod was dead (misleading every API/UI consumer, especially for agent-mode and one-shot CMD sandboxes). It now transitions to a terminal `Stopped` phase. Reconcile test added.
+- **Non-zero application exits stop restart-looping.** `isInfrastructureFailure` classified every terminated reason except `Completed` as infrastructure (including `Error`, a non-zero app exit), so a misconfigured command burned the full 5-attempt restart budget before going terminal. `Error` is now treated as an application failure and goes terminal immediately. Test added.
+- **Warm-pool-claimed PVCs no longer keep their pool labels.** `Claim` stripped the pool labels from the Pod but not the PVC, leaving a running sandbox's PVC looking like a pool resource — a data-loss landmine for any tooling that reaps pool PVCs by label. The claim path now strips them from the PVC too (alongside the v0.6.5 ownerReference adoption). Test asserts the claimed PVC carries no pool labels.
+- **SDK retry layer no longer replays non-idempotent POSTs on 5xx/429.** The status-code retry branch ignored the `retry_post` gate (only the connection-error branch honored it), so a `502/503/504` to a POST replayed it — risking a double-create / double-exec. The status branch now applies the same idempotency gate; a POST is returned to the caller unless `retry_post=True`. Sync + async regression tests added.
+
 ## [v0.6.5] — 2026-06-28
 
 ### Security

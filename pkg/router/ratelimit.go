@@ -58,6 +58,15 @@ type RateLimitConfig struct {
 	// LimiterTTL is how long an IP / user limiter survives without
 	// activity before the cleanup pass evicts it. Defaults to 30 min.
 	LimiterTTL time.Duration
+
+	// TrustForwardedHeaders controls whether the per-IP limiter trusts the
+	// X-Forwarded-For / X-Real-IP request headers to identify the client.
+	// DEFAULT false (secure): the limiter keys on the real TCP peer
+	// (RemoteAddr), so a client cannot mint a fresh token bucket per
+	// request by spoofing a forwarding header. Set true ONLY when the
+	// Router sits behind a trusted proxy/LB (e.g. the ALB) that appends a
+	// reliable client IP — otherwise the per-IP throttle is bypassable.
+	TrustForwardedHeaders bool
 }
 
 // DefaultRateLimitConfig returns a config matching the values documented in
@@ -226,7 +235,7 @@ func (s *Server) rateLimitMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		ip := clientIP(r)
+		ip := clientIP(r, s.rateLimiter.cfg.TrustForwardedHeaders)
 		// Per-user lookup needs the Claims, which authMiddleware sets
 		// later in the chain. Mount order: rateLimit → auth → handler,
 		// meaning at this point we can only enforce per-IP. Per-user
@@ -282,22 +291,29 @@ func isExemptFromRateLimit(path string) bool {
 	return false
 }
 
-// clientIP extracts the client IP from the request, honoring
-// X-Forwarded-For so callers behind load balancers / ingresses are
-// identified by their original IP rather than the LB's.
+// clientIP extracts the client IP used as the per-IP rate-limit key.
+//
+// When trustForwarded is false (the secure default), it ignores the
+// client-supplied X-Forwarded-For / X-Real-IP headers and uses the real TCP
+// peer (RemoteAddr) — otherwise an attacker could send a unique forged
+// X-Forwarded-For per request and get a fresh token bucket every time,
+// defeating the per-IP limit entirely. Set trustForwarded true only when the
+// Router sits behind a trusted proxy/LB that appends a reliable client IP.
 //
 // The first entry in X-Forwarded-For is the original client; subsequent
 // entries are intermediate proxies.
-func clientIP(r *http.Request) string {
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
-		// Take the first comma-separated entry.
-		if idx := strings.Index(xff, ","); idx > 0 {
-			return strings.TrimSpace(xff[:idx])
+func clientIP(r *http.Request, trustForwarded bool) string {
+	if trustForwarded {
+		if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+			// Take the first comma-separated entry.
+			if idx := strings.Index(xff, ","); idx > 0 {
+				return strings.TrimSpace(xff[:idx])
+			}
+			return strings.TrimSpace(xff)
 		}
-		return strings.TrimSpace(xff)
-	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
+		if xri := r.Header.Get("X-Real-IP"); xri != "" {
+			return strings.TrimSpace(xri)
+		}
 	}
 	host, _, err := net.SplitHostPort(r.RemoteAddr)
 	if err != nil {

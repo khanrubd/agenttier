@@ -158,4 +158,13 @@ func TestWarmPoolClaim_AdoptsPodAndPVC(t *testing.T) {
 		t.Fatalf("get claimed pvc: %v", err)
 	}
 	assertOwnedBySandbox(t, claimedPVC.OwnerReferences, "claimed pvc")
+
+	// The claimed PVC must no longer carry pool labels — otherwise a reaper
+	// that deletes pool PVCs by label would destroy a running sandbox's disk.
+	if _, ok := claimedPVC.Labels[warmpool.LabelPooled]; ok {
+		t.Errorf("claimed PVC still has %s label (data-loss landmine)", warmpool.LabelPooled)
+	}
+	if _, ok := claimedPVC.Labels[warmpool.LabelTemplate]; ok {
+		t.Errorf("claimed PVC still has %s label", warmpool.LabelTemplate)
+	}
 }

@@ -1910,6 +1910,15 @@ spec:
                       Use with caution — only for sandboxes that require elevated privileges.
                     type: boolean
                 type: object
+              serviceAccount:
+                description: |-
+                  ServiceAccount is the name of a Kubernetes ServiceAccount to run the
+                  sandbox Pod under. Use this to attach a scoped cloud identity — an EKS
+                  IRSA-annotated ServiceAccount or a GKE Workload Identity SA — so the
+                  sandbox gets per-sandbox cloud credentials instead of the namespace
+                  default ServiceAccount. The ServiceAccount must already exist in the
+                  sandbox's namespace. Overrides the template's serviceAccount.
+                type: string
               sharing:
                 description: Sharing defines access permissions for other users.
                 properties:

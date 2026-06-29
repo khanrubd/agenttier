@@ -114,46 +114,76 @@ func TestRateLimitMiddleware_ExemptHealthEndpoints(t *testing.T) {
 
 func TestClientIP_HonorsXForwardedFor(t *testing.T) {
 	cases := []struct {
-		name string
-		req  *http.Request
-		want string
+		name  string
+		req   *http.Request
+		trust bool
+		want  string
 	}{
 		{
-			name: "no headers — falls back to RemoteAddr",
-			req:  &http.Request{RemoteAddr: "192.0.2.10:55432"},
-			want: "192.0.2.10",
+			name:  "no headers — falls back to RemoteAddr",
+			req:   &http.Request{RemoteAddr: "192.0.2.10:55432"},
+			trust: true,
+			want:  "192.0.2.10",
 		},
 		{
-			name: "X-Forwarded-For with one entry",
+			name: "trusted: X-Forwarded-For with one entry",
 			req: func() *http.Request {
 				r := httptest.NewRequest("GET", "/", nil)
 				r.Header.Set("X-Forwarded-For", "203.0.113.1")
 				return r
 			}(),
-			want: "203.0.113.1",
+			trust: true,
+			want:  "203.0.113.1",
 		},
 		{
-			name: "X-Forwarded-For with chained proxies — first wins",
+			name: "trusted: X-Forwarded-For with chained proxies — first wins",
 			req: func() *http.Request {
 				r := httptest.NewRequest("GET", "/", nil)
 				r.Header.Set("X-Forwarded-For", "203.0.113.1, 10.0.0.5, 10.0.0.6")
 				return r
 			}(),
-			want: "203.0.113.1",
+			trust: true,
+			want:  "203.0.113.1",
 		},
 		{
-			name: "X-Real-IP fallback",
+			name: "trusted: X-Real-IP fallback",
 			req: func() *http.Request {
 				r := httptest.NewRequest("GET", "/", nil)
 				r.Header.Set("X-Real-IP", "203.0.113.99")
 				return r
 			}(),
-			want: "203.0.113.99",
+			trust: true,
+			want:  "203.0.113.99",
+		},
+		{
+			// SECURITY regression guard: with trust off (the default), a
+			// spoofed X-Forwarded-For must be IGNORED so it can't mint a
+			// fresh rate-limit bucket per request. The key is the real peer.
+			name: "untrusted: spoofed X-Forwarded-For is ignored",
+			req: func() *http.Request {
+				r := httptest.NewRequest("GET", "/", nil)
+				r.RemoteAddr = "192.0.2.50:40000"
+				r.Header.Set("X-Forwarded-For", "1.2.3.4")
+				return r
+			}(),
+			trust: false,
+			want:  "192.0.2.50",
+		},
+		{
+			name: "untrusted: spoofed X-Real-IP is ignored",
+			req: func() *http.Request {
+				r := httptest.NewRequest("GET", "/", nil)
+				r.RemoteAddr = "192.0.2.51:40001"
+				r.Header.Set("X-Real-IP", "5.6.7.8")
+				return r
+			}(),
+			trust: false,
+			want:  "192.0.2.51",
 		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := clientIP(tc.req); got != tc.want {
+			if got := clientIP(tc.req, tc.trust); got != tc.want {
 				t.Errorf("clientIP() = %q, want %q", got, tc.want)
 			}
 		})

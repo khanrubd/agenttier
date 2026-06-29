@@ -246,3 +246,62 @@ async def test_async_sse_passes_through() -> None:
         r = await c.get("/stream", headers={"Accept": "text/event-stream"})
     assert r.status_code == 503
     assert counter["calls"] == 1
+
+
+# --- POST idempotency gate on status retries (regression) ------------------
+
+
+def test_post_not_retried_on_503_by_default() -> None:
+    """Regression: a POST that gets a retryable 5xx must NOT be replayed when
+    retry_post is False (the default) — replaying could double-create."""
+    counter = Counter()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
+        return httpx.Response(503, json={"error": "down"})
+
+    transport = wrap_transport(
+        _make_transport(handler),
+        RetryConfig(max_retries=3, backoff_factor=0.0),  # retry_post defaults False
+    )
+    with httpx.Client(transport=transport, base_url="http://test") as c:
+        r = c.post("/sandboxes", json={"name": "x"})
+    assert r.status_code == 503
+    assert counter["calls"] == 1  # NOT retried
+
+
+def test_post_retried_on_503_when_retry_post_true() -> None:
+    counter = Counter()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
+        if counter["calls"] < 3:
+            return httpx.Response(503)
+        return httpx.Response(201, json={"ok": True})
+
+    transport = wrap_transport(
+        _make_transport(handler),
+        RetryConfig(max_retries=3, backoff_factor=0.0, retry_post=True),
+    )
+    with httpx.Client(transport=transport, base_url="http://test") as c:
+        r = c.post("/sandboxes", json={"name": "x"})
+    assert r.status_code == 201
+    assert counter["calls"] == 3
+
+
+@pytest.mark.asyncio
+async def test_async_post_not_retried_on_503_by_default() -> None:
+    counter = Counter()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
+        return httpx.Response(503)
+
+    transport = wrap_async_transport(
+        httpx.MockTransport(handler),
+        RetryConfig(max_retries=3, backoff_factor=0.0),
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.post("/sandboxes", json={"name": "x"})
+    assert r.status_code == 503
+    assert counter["calls"] == 1  # NOT retried

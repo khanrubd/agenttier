@@ -214,3 +214,24 @@ func splitJWT(tok string) [3]string {
 	}
 	return out
 }
+
+// TestValidateToken_RejectsNonRS256Alg guards the alg-confusion hardening:
+// the validator only verifies RS256, so any other "alg" header (none, HS256,
+// RS512, empty) must be rejected up front — before signature verification.
+func TestValidateToken_RejectsNonRS256Alg(t *testing.T) {
+	key, _ := rsa.GenerateKey(rand.Reader, 2048)
+	v := validatorWithKey(&key.PublicKey, "kid1", "https://issuer.example", "client-abc")
+	claims := baseClaims("https://issuer.example", "client-abc")
+	cb, _ := json.Marshal(claims)
+
+	for _, alg := range []string{"none", "HS256", "RS512", ""} {
+		header := map[string]string{"alg": alg, "typ": "JWT", "kid": "kid1"}
+		hb, _ := json.Marshal(header)
+		// Third part is a dummy signature — the alg gate must fire before
+		// we ever attempt signature verification.
+		tok := b64(hb) + "." + b64(cb) + ".ZHVtbXk"
+		if _, err := v.ValidateToken(context.TODO(), tok); err == nil {
+			t.Errorf("alg=%q was ACCEPTED; expected rejection (algorithm confusion)", alg)
+		}
+	}
+}

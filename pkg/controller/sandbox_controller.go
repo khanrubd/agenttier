@@ -202,6 +202,13 @@ func (r *SandboxReconciler) reconcileCreating(ctx context.Context, sandbox *agen
 					if claimedPVC != "" {
 						pvc := &corev1.PersistentVolumeClaim{}
 						if err := r.Get(ctx, client.ObjectKey{Namespace: sandbox.Namespace, Name: claimedPVC}, pvc); err == nil {
+							// Strip the pool labels — warmpool.Claim removes
+							// them from the Pod but not the PVC, leaving a
+							// running sandbox's PVC looking like a pool
+							// resource (a data-loss landmine for any reaper
+							// that deletes pool PVCs by label).
+							delete(pvc.Labels, warmpool.LabelPooled)
+							delete(pvc.Labels, warmpool.LabelTemplate)
 							if err := controllerutil.SetControllerReference(sandbox, pvc, r.Scheme); err != nil {
 								logger.Error(err, "failed to set owner reference on claimed pvc", "pvc", claimedPVC)
 							} else if err := r.Update(ctx, pvc); err != nil {
@@ -210,7 +217,30 @@ func (r *SandboxReconciler) reconcileCreating(ctx context.Context, sandbox *agen
 						}
 					}
 
-					// Success — update sandbox status directly to Running
+					// Ensure NetworkPolicy BEFORE marking Running. A
+					// warm-claimed sandbox must never report Running without
+					// its network isolation in place — the cold-start path
+					// treats an NP failure as fatal, and so must this one
+					// (previously it only logged the error and proceeded,
+					// leaving the sandbox Running with no default-deny / egress
+					// rules and never retrying).
+					networkSpec := sandbox.Spec.Network
+					if networkSpec == nil && templateSpec != nil {
+						networkSpec = templateSpec.Network
+					}
+					// Warm-pool path: HTTP-exec opt-in flows through the
+					// resolved template's Harness.
+					npOpts := NetworkPolicyOptions{RouterNamespace: r.InstallNamespace}
+					if templateSpec != nil && templateSpec.Harness != nil &&
+						templateSpec.Harness.UseHTTPExec != nil &&
+						*templateSpec.Harness.UseHTTPExec {
+						npOpts.AllowRouterIngressOn9000 = true
+					}
+					if err := r.ensureNetworkPolicy(ctx, sandbox, networkSpec, npOpts); err != nil {
+						return r.transitionToError(ctx, sandbox, fmt.Sprintf("NetworkPolicy creation failed for warm-pool sandbox: %v", err))
+					}
+
+					// Isolation is in place — record the claim and mark Running.
 					now := metav1.Now()
 					sandbox.Status.Phase = agenttierv1alpha1.SandboxPhaseRunning
 					sandbox.Status.PodName = claimedPod
@@ -229,25 +259,6 @@ func (r *SandboxReconciler) reconcileCreating(ctx context.Context, sandbox *agen
 						"startupDurationMs", startupDuration.Milliseconds(),
 					)
 					r.Recorder.Eventf(sandbox, corev1.EventTypeNormal, "Running", "Sandbox is ready from warm pool (startup: %s)", startupDuration.Round(time.Millisecond))
-
-					// Ensure NetworkPolicy exists for the claimed pod
-					networkSpec := sandbox.Spec.Network
-					if networkSpec == nil && templateSpec != nil {
-						networkSpec = templateSpec.Network
-					}
-					// Warm-pool path: HTTP-exec opt-in flows through
-					// the resolved template's Harness. The pool pod's
-					// runtime token Secret is created here on first
-					// claim — the pool itself doesn't pre-create them.
-					npOpts := NetworkPolicyOptions{RouterNamespace: r.InstallNamespace}
-					if templateSpec != nil && templateSpec.Harness != nil &&
-						templateSpec.Harness.UseHTTPExec != nil &&
-						*templateSpec.Harness.UseHTTPExec {
-						npOpts.AllowRouterIngressOn9000 = true
-					}
-					if err := r.ensureNetworkPolicy(ctx, sandbox, networkSpec, npOpts); err != nil {
-						logger.Error(err, "failed to ensure network policy for warm-pool sandbox", "sandbox", sandbox.Name)
-					}
 
 					return ctrl.Result{RequeueAfter: DefaultRequeueDelay}, nil
 				}
@@ -412,6 +423,16 @@ func (r *SandboxReconciler) reconcileRunning(ctx context.Context, sandbox *agent
 	if pod.Status.Phase == corev1.PodFailed {
 		reason := getPodFailureReason(pod)
 		return r.handleInfrastructureFailure(ctx, sandbox, reason, pod)
+	}
+
+	// Check pod completion. Pods run with RestartPolicy:Never, so a main
+	// process that exits 0 leaves the pod in phase Succeeded — which no
+	// other branch handles, leaving the Sandbox reporting Running forever
+	// while its pod is dead (misleading every API/UI consumer, especially
+	// for agent-mode or one-shot CMD sandboxes). Treat completion as a stop:
+	// transition to Stopped and clean up the pod (resumable, terminal).
+	if pod.Status.Phase == corev1.PodSucceeded {
+		return r.stopSandbox(ctx, sandbox, "Sandbox process completed (pod exited 0)")
 	}
 
 	// Reset RestartCount once the pod has been stably Running for the

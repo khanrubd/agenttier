@@ -119,6 +119,15 @@ type SandboxSpec struct {
 	// +optional
 	RuntimeClass *string `json:"runtimeClass,omitempty"`
 
+	// ServiceAccount is the name of a Kubernetes ServiceAccount to run the
+	// sandbox Pod under. Use this to attach a scoped cloud identity — an EKS
+	// IRSA-annotated ServiceAccount or a GKE Workload Identity SA — so the
+	// sandbox gets per-sandbox cloud credentials instead of the namespace
+	// default ServiceAccount. The ServiceAccount must already exist in the
+	// sandbox's namespace. Overrides the template's serviceAccount.
+	// +optional
+	ServiceAccount string `json:"serviceAccount,omitempty"`
+
 	// AutoResume automatically resumes a stopped sandbox when an exec session is requested.
 	// +optional
 	AutoResume bool `json:"autoResume,omitempty"`

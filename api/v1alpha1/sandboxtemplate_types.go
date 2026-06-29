@@ -121,6 +121,16 @@ type SandboxTemplateSpec struct {
 	// Security defines default security settings.
 	// +optional
 	Security *SecuritySpec `json:"security,omitempty"`
+
+	// ServiceAccount is the name of a Kubernetes ServiceAccount that
+	// sandboxes created from this template run under. Use this to attach a
+	// scoped cloud identity (EKS IRSA / GKE Workload Identity) so every
+	// sandbox from this template gets the same per-template cloud
+	// credentials instead of the namespace default ServiceAccount. A sandbox
+	// may override this via its own spec.serviceAccount. The ServiceAccount
+	// must already exist in the sandbox's namespace.
+	// +optional
+	ServiceAccount string `json:"serviceAccount,omitempty"`
 }
 
 // HarnessSpec defines the agent runtime configuration within a template.

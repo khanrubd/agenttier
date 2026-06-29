@@ -117,6 +117,24 @@ spec:
 
 `mountAs: env` exposes every key in the Secret as an env var (with the optional `envPrefix` prepended). `mountAs: file` mounts the Secret as a read-only volume at `mountPath`. Combine with IRSA on EKS for AWS-native flows like Bedrock — annotate the sandbox ServiceAccount with the role ARN and skip `credentials` for AWS calls entirely.
 
+### Per-sandbox cloud identity (`serviceAccount`)
+
+Set `spec.serviceAccount` on a template (or on an individual sandbox, which
+overrides the template) to run every sandbox under a specific Kubernetes
+ServiceAccount — typically one annotated for EKS IRSA or GKE Workload
+Identity. This gives each template's sandboxes a distinct, scoped cloud
+identity instead of sharing the namespace default ServiceAccount:
+
+```yaml
+spec:
+  serviceAccount: bedrock-reader   # must already exist in the sandbox namespace
+```
+
+The ServiceAccount must already exist in the namespace where sandboxes are
+created. When unset, the Pod uses the namespace default ServiceAccount
+(prior behavior). This is the recommended way to give different teams or
+templates separate AWS/GCP credentials.
+
 Agent-mode sandboxes use the same `credentials` block; nothing special is required for `/invoke` to inherit them. See [agent-mode.md](agent-mode.md#memory-model-providers-secrets) for the canonical patterns.
 
 ## Managing templates
