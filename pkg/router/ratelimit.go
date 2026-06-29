@@ -333,7 +333,10 @@ func writeRateLimitResponse(w http.ResponseWriter, retryAfter time.Duration) {
 	w.Header().Set("Retry-After", fmt.Sprintf("%d", seconds))
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusTooManyRequests)
-	fmt.Fprintf(w, `{"error":"rate_limited","retryAfter":%d,"message":"too many requests; retry after %d seconds"}`, seconds, seconds)
+	// G705 (XSS taint) is a false positive here: only the int `seconds` is
+	// interpolated, twice, into a constant JSON template — no caller-controlled
+	// string reaches the writer.
+	fmt.Fprintf(w, `{"error":"rate_limited","retryAfter":%d,"message":"too many requests; retry after %d seconds"}`, seconds, seconds) //nolint:gosec
 }
 
 func max(a, b int) int {

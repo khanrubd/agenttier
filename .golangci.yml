@@ -1,43 +1,87 @@
+# golangci-lint v2 configuration.
+# Migrated from the v1 schema when the repo moved to the Go 1.25 toolchain:
+# golangci-lint v1's last release (v1.64.8) is built with Go 1.24 and fails to
+# analyze a go.mod that requires Go 1.25, so CI uses golangci-lint v2 via
+# golangci-lint-action@v9 (see .github/workflows/ci.yml). v2 folds gosimple into
+# staticcheck and always runs typecheck, and it splits formatters (gofmt,
+# goimports) out of `linters` into their own `formatters` block.
+version: "2"
+
 run:
-  timeout: 5m
-  go: "1.22"
+  # Language version for analysis; keep in lockstep with go.mod's `go` directive.
+  go: "1.25"
 
 linters:
-  disable-all: true
+  default: none
   enable:
     # Correctness
     - govet
     - errcheck
-    - staticcheck
-    - gosimple
+    - staticcheck   # also covers the former gosimple checks in v2
     - ineffassign
-    - typecheck
     - unused
     # Style (minimal)
-    - gofmt
-    - goimports
     - misspell
     - unconvert
     # Security
     - gosec
-
-linters-settings:
-  goimports:
-    local-prefixes: github.com/agenttier/agenttier
-  gosec:
-    # G115: integer overflow conversion — we enforce bounds at protocol boundaries;
-    # the residual int->uint{16} casts are on values clamped by the terminal client.
-    excludes:
-      - G115
+  settings:
+    staticcheck:
+      # v2 folds staticcheck's SA (correctness), S (gosimple), ST (stylecheck),
+      # and QF (quickfix) into one linter. v1 only ran SA + gosimple, never
+      # stylecheck, and QF didn't exist — so drop ST* and QF* to preserve the
+      # project's "correctness + security, not noisy style" lint policy.
+      checks:
+        - all
+        - -ST1*
+        - -QF1*
+    gosec:
+      # G115: integer overflow conversion — we enforce bounds at protocol
+      # boundaries; the residual int->uint{16} casts are on values clamped by
+      # the terminal client. The other gosec rules the standalone security-job
+      # step excludes (G204/G101/G705) are suppressed per-site with //nolint:gosec
+      # so they stay caught everywhere else.
+      excludes:
+        - G115
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Tests intentionally exec, ignore errors, and hardcode fixtures.
+      - linters:
+          - errcheck
+          - gosec
+        path: _test\.go
+      - linters:
+          - gosec
+        path: test/
+    paths:
+      # web-ui/node_modules vendors a stray .go file (flatted) that is not ours.
+      - web-ui/node_modules
+      - third_party$
+      - builtin$
+      - examples$
 
 issues:
-  exclude-rules:
-    - path: _test\.go
-      linters:
-        - gosec
-        - errcheck
-    - path: test/
-      linters:
-        - gosec
   max-issues-per-linter: 0
   max-same-issues: 0
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/agenttier/agenttier
+  exclusions:
+    generated: lax
+    paths:
+      - web-ui/node_modules
+      - third_party$
+      - builtin$
+      - examples$
