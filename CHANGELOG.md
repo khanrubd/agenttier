@@ -7,8 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.7.5] — 2026-06-29
+
+### Added
+
+- **The controller applies its own CRDs on startup (closes the helm-upgrade CRD gap).** Helm installs CRDs only on first `helm install` and never on `helm upgrade`, so a release that added a CRD field left the field unusable until an operator ran `kubectl apply -f config/crd/` by hand. The controller now embeds the generated CRDs (`pkg/crds`) and create-or-updates them before the manager starts — so CRDs track the running controller version automatically, and a fresh install no longer needs a manual apply either. Gated by `controller.manageCRDs` (default `true`; set `false` when CRDs are managed out-of-band via GitOps). The controller ClusterRole gains `apiextensions.k8s.io/customresourcedefinitions` get/list/watch/create/update/patch (no delete).
+- **Cluster capacity card on the Metrics page, backed by a new `GET /api/v1/cluster/nodes` endpoint (admin-only).** Surfaces per-node allocatable vs. requested CPU/memory, a requests-based saturation percentage, and — when the cloud provider labels them — the instance type and managed node group (EKS / Karpenter / GKE / AKS). The Web UI renders a summary (ready nodes, CPU/mem saturation, node group) plus a per-node table behind an expander; it polls every 10s and hides itself for non-admins.
+- **Controller-side OpenTelemetry reconcile spans.** Each reconcile now emits a `controller.reconcile_sandbox` span with the sandbox name/namespace/phase (and records errors), so a sandbox can be traced end-to-end across the controller, router, and pod — tracing was router-only before.
+
+### Changed
+
+- **Dependency refresh resolving the open Dependabot backlog.** OpenTelemetry 1.38 → 1.44 (otelhttp 0.69; `google.golang.org/grpc` → 1.81 transitively; the OTel resource builder moved to semconv v1.41 to match the SDK schema); web-ui deps refreshed within their ranges (`react` 19.2.7, `react-router-dom` 6.30.4, `typescript-eslint` 8.62.1, `vite` 5.4.21, `@vitejs/plugin-react` 4.7.0, `js-yaml` 4.3.0); and GitHub Actions `actions/checkout` → v7, `actions/upload-artifact` → v7, `gitleaks/gitleaks-action` → v3. Held for a coordinated follow-up (each blocked or deliberately deferred): the `k8s.io/*` + controller-runtime group (0.36 / 0.24 require Go 1.26; we're on 1.25), the `js-yaml` 4→5 major (directly used), and the `langgraph-agent` example deps (coordinated with the reference image).
+- **Release cleanup sweep is now comprehensive (keep-latest-5).** `hack/release-retention.sh` and the `release-retention` CI job now keep the latest **5** releases (was 3) and **delete** older Release entries instead of demoting them (git tags + PyPI versions are preserved forever, so by-tag installs still resolve); additionally prune `github-pages` deployments to the latest 10 and delete `dependabot/*` branches with no open PR. Documented in `RELEASING.md` and the `release-workflow` skill (which also gained a Dependabot-PR-triage pre-release step).
+
+### Security
+
+- **A revoked or expired API key now stops working immediately, not after the cache TTL.** The validator's LRU cache returned cached claims on a hit without re-checking the key's expiry or the backing store, so a revoked key (`DELETE /user/api-keys/{id}`) or one that expired mid-TTL kept authenticating for up to ~5 minutes. The cache now re-checks `ExpiresAt` on every hit and the revoke path evicts the entry by hash. Regression tests cover both the cache-hit-expiry and revoke-eviction paths.
+
 ### Fixed
 
+- **Warm-pool pod/PVC names use a CSPRNG suffix, closing a PVC-reuse data-contamination risk.** The pool name suffix was `time.Now().UnixNano() % 1e6`, which wraps every millisecond, and the PVC create swallowed `AlreadyExists` — so two pool pods minted in the same millisecond could collide and the second could silently mount a PVC already owned by a live sandbox (cross-tenant contamination under RWX). The suffix is now 16 hex chars from `crypto/rand`, and an `AlreadyExists` on the pool PVC now fails closed (the next reconcile retries with a fresh name) instead of mounting a foreign volume.
 - **CI lint works on the Go 1.25 toolchain.** golangci-lint v1's final release (v1.64.8) is built with Go 1.24 and refuses a go.mod that requires Go 1.25, so the `lint` job went red right after the v0.7.1 Go bump. Migrated to golangci-lint v2.12.2 via `golangci-lint-action@v9` and converted `.golangci.yml` to the v2 schema (staticcheck pinned to `all,-ST1*,-QF1*` to preserve the "correctness + security, not noisy style" policy now that v2 folds in the QF/ST categories; `web-ui/node_modules` excluded; the rate-limit 429 writer's new gosec G705 false positive suppressed per-site). Also bumped the `release-cli` job's `setup-go` from 1.22 to 1.25 — it had been missed in the v0.7.1 bump and failed all five CLI builds, which skipped the GitHub Release (the v0.7.1 CLI binaries + Release were published out-of-band). CI-tooling only; no runtime impact.
 
 ## [v0.7.1] — 2026-06-29

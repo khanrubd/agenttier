@@ -96,6 +96,24 @@ pip install agenttier==X.Y.Z   # if PyPI publish is on
 
 If any of these 404 or fail, investigate the workflow run before announcing.
 
+## Post-release cleanup sweep
+
+The `release-retention` workflow job (and `hack/release-retention.sh <tag>`) runs after
+`github-release` and keeps the repo tidy. It keeps the **latest 5** releases and prunes the rest:
+
+- **GitHub Releases** older than the latest 5 are **deleted** (the git tag is preserved, so
+  by-tag `helm`/`docker`/`go install` still resolve — only the Release page + its CLI binaries go).
+- **ghcr.io images** for pruned release tags + untagged manifests >30 days are deleted.
+- **Helm chart index** (`gh-pages` `/charts/index.yaml`) is trimmed to the latest 5.
+- **github-pages deployments** are pruned to the latest 10.
+- **`dependabot/*` branches** with no open PR are deleted.
+- **Never pruned:** git tags, PyPI versions, and cosign signatures/SBOMs of kept images — forever.
+
+Open **Dependabot PRs** are triaged *before* tagging (take safe bumps in-tree and supersede,
+defer held/blocked majors with a written reason) and closed in this sweep. The agent-side
+`release-workflow` skill has the full mechanics, env knobs (`KEEP_COUNT`, `KEEP_DEPLOYMENTS`),
+and `--dry-run`.
+
 ## First-release-only chores
 
 These only apply when the release produces artifacts for the first time:

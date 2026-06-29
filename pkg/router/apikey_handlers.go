@@ -141,7 +141,8 @@ func (s *Server) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		respondError(w, http.StatusBadRequest, "keyId is required")
 		return
 	}
-	if err := s.secretStore().deleteAPIKey(r.Context(), keyID, claims.Sub, claims.IsAdmin); err != nil {
+	keyHash, err := s.secretStore().deleteAPIKey(r.Context(), keyID, claims.Sub, claims.IsAdmin)
+	if err != nil {
 		// Map ownership failures to 403, everything else to 404/500-ish 400.
 		if err.Error() == "access denied" {
 			respondError(w, http.StatusForbidden, "you do not own this API key")
@@ -149,6 +150,11 @@ func (s *Server) handleRevokeAPIKey(w http.ResponseWriter, r *http.Request) {
 		}
 		respondError(w, http.StatusNotFound, err.Error())
 		return
+	}
+	// Evict the cache so the revoked key stops authenticating immediately
+	// rather than lingering until its cache entry ages out (~cacheTTL).
+	if s.apiKeyValidator != nil && keyHash != "" {
+		s.apiKeyValidator.InvalidateHash(keyHash)
 	}
 	respondJSON(w, http.StatusOK, map[string]interface{}{"status": "revoked", "id": keyID})
 }

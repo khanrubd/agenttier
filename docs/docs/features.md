@@ -66,7 +66,8 @@ What AgentTier ships today, grouped by what you probably need first.
 
 ## Observability
 
-- **OpenTelemetry** — distributed traces across the router and controller. Every HTTP request gets a server span (`router.GET`, `router.POST`); agent-mode `/configure` and `/invoke` get bounded-cardinality spans (`agenttier.configure`, `agenttier.invoke`) with `template`, `outcome`, and a non-reversible `actor_hash`. Wires to any OTLP collector; the chart ships an opt-in collector for clusters without one. See [Observability](observability.md) for setup and backend integration.
+- **OpenTelemetry** — distributed traces across the router and controller. Every HTTP request gets a server span (`router.GET`, `router.POST`); agent-mode `/configure` and `/invoke` get bounded-cardinality spans (`agenttier.configure`, `agenttier.invoke`) with `template`, `outcome`, and a non-reversible `actor_hash`; and every controller reconcile gets a `controller.reconcile_sandbox` span tagged with the sandbox's name, namespace, and phase, so a sandbox traces end-to-end across the API call, the reconcile, and the pod. Wires to any OTLP collector; the chart ships an opt-in collector for clusters without one. See [Observability](observability.md) for setup and backend integration.
+- **Cluster capacity** — the Web UI Metrics page surfaces per-node allocatable vs. requested CPU/memory, a requests-based saturation percentage, and the managed node group (EKS / Karpenter / GKE / AKS) via the admin-only `GET /api/v1/cluster/nodes` endpoint, complementing the left-nav node/pod glance widget.
 - **Trace-correlated logs** — slog JSON output stamps `trace_id` and `span_id` on every log line written under an active span context, so a single trace ID pivots between OTel UI and `kubectl logs` without any extra setup.
 - **Prometheus** — `/metrics` exposes invoke + configure counters and histograms partitioned by template and outcome, plus rate-limit and throttling counters. Optional `ServiceMonitor` for Prometheus Operator (`observability.prometheus.serviceMonitor=true`).
 - **Kubernetes Events** — every lifecycle transition emits a typed Event on the Sandbox resource so `kubectl describe sandbox` is a first-class debugging surface.
@@ -75,6 +76,7 @@ What AgentTier ships today, grouped by what you probably need first.
 ## Deployment and operations
 
 - **Single Helm chart** — one `helm install agenttier agenttier/agenttier` deploys controller, router, web UI, CRDs, RBAC, and all opt-ins.
+- **CRDs upgrade automatically** — the controller create-or-updates its bundled CRDs on startup, so `helm upgrade` (which never upgrades CRDs itself) makes new CRD fields usable immediately and fresh installs need no manual `kubectl apply`. Disable with `controller.manageCRDs=false` for GitOps-managed CRDs.
 - **Multi-cluster** — works on EKS, GKE, AKS, kind, and any self-managed Kubernetes 1.27+ with NetworkPolicy-capable CNI.
 - **Leader-elected HA** — multi-replica controller with Lease-based election. Graceful degradation for non-critical dependency failures (e.g. can't reach OTel collector).
 - **Cluster autoscaling out of the box** — opt-in upstream Cluster Autoscaler installs cloud-neutral via Helm (works on EKS, GKE, AKS, OpenStack, Cluster API). Pair with the `headroom` Deployment for N+1 spare-node capacity: pause Pods at negative priority squat on a spare node, sandboxes preempt them instantly, evicted Pods trigger a fresh node in the background. See [Scaling](scaling.md) for sizing math + cost trade-offs.

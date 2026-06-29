@@ -75,6 +75,10 @@ Agent-mode operations have their own bounded-cardinality spans:
 - **`agenttier.invoke`** — one span per `/invoke` call. Attributes: `sandbox`, `template`, `actor_hash`, `outcome`, `bytes_stdout`, `bytes_stderr`.
 - **`agenttier.configure`** — one span per `/configure` call. Attributes: `sandbox`, `template`, `actor_hash`, `outcome`, `install_command_hash`.
 
+The controller emits a span per reconcile:
+
+- **`controller.reconcile_sandbox`** — one span each time the controller reconciles a Sandbox. Attributes: `sandbox.name`, `sandbox.namespace`, `sandbox.phase`; the span records an error and sets an error status when the reconcile fails. Combined with the router's request spans, a single sandbox can be traced end-to-end across the API call, the reconcile, and the pod.
+
 `actor_hash` is a stable, non-reversible 8-character SHA-256 prefix of the OIDC `sub` claim. The raw subject **never** leaves the process. This satisfies GDPR / SOC2 controls in third-party trace stores while still letting an operator group spans by user within an investigation window.
 
 ## Logs with trace correlation

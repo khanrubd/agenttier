@@ -218,6 +218,41 @@ export async function fetchClusterStatus(): Promise<ClusterStatus> {
   return request<ClusterStatus>('/cluster/status');
 }
 
+// --- Cluster capacity (Metrics page "Cluster capacity" card) ---
+//
+// Per-node allocatable/requests + a requests-based saturation summary,
+// returned by the admin-only GET /cluster/nodes. CPU is millicores, memory
+// is bytes; the UI formats them.
+export interface NodeResources {
+  cpuMillis: number;
+  memBytes: number;
+}
+
+export interface NodeCapacity {
+  name: string;
+  ready: boolean;
+  instanceType?: string;
+  nodeGroup?: string;
+  allocatable: NodeResources;
+  requests: NodeResources;
+}
+
+export interface NodeCapacityResponse {
+  nodes: NodeCapacity[];
+  summary: {
+    ready: number;
+    total: number;
+    cpuSaturationPct: number;
+    memSaturationPct: number;
+    allocatable: NodeResources;
+    requests: NodeResources;
+  };
+}
+
+export async function fetchClusterNodes(): Promise<NodeCapacityResponse> {
+  return request<NodeCapacityResponse>('/cluster/nodes');
+}
+
 // --- Headroom API ---
 //
 // Read/write the chart's optional spare-node pause-Pod Deployment so

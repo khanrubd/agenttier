@@ -88,6 +88,15 @@ rules:
   - apiGroups: [""]
     resources: ["secrets"]
     verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  # CustomResourceDefinitions — the controller applies its own bundled CRDs on
+  # startup (create-or-update) so they track the running controller version,
+  # since Helm only installs CRDs on first install and never on upgrade. No
+  # delete verb: the controller never removes CRDs. Disable the behavior with
+  # --manage-crds=false (Helm: controller.manageCRDs=false) when CRDs are
+  # managed out-of-band.
+  - apiGroups: ["apiextensions.k8s.io"]
+    resources: ["customresourcedefinitions"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRoleBinding

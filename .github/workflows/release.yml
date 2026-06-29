@@ -67,7 +67,7 @@ jobs:
             context: .
             dockerfile: images/rl/Dockerfile
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v4
       - uses: docker/setup-buildx-action@v4
       - uses: docker/login-action@v4
@@ -201,7 +201,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Extract version
         id: version
         run: echo "VERSION=${GITHUB_REF#refs/tags/v}" >> "$GITHUB_OUTPUT"
@@ -213,7 +213,7 @@ jobs:
             --app-version "${{ steps.version.outputs.VERSION }}" \
             --destination /tmp/charts
       - name: Upload chart as workflow artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: helm-chart
           path: /tmp/charts/*.tgz
@@ -271,7 +271,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -355,7 +355,7 @@ jobs:
           - goos: windows
             goarch: amd64
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
         with:
           go-version: "1.25"
@@ -379,7 +379,7 @@ jobs:
           sha256sum "$out" > "${out}.sha256"
           mkdir -p dist
           mv "$out" "${out}.sha256" dist/
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: cli-${{ matrix.goos }}-${{ matrix.goarch }}
           path: dist/*
@@ -393,7 +393,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           path: artifacts
@@ -482,7 +482,7 @@ jobs:
     needs: release-images
     if: ${{ !contains(github.ref, '-rc') }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v6
         with:
           python-version: "3.11"
@@ -493,7 +493,7 @@ jobs:
           python -m build
           twine check dist/*
       - name: Upload SDK artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: python-sdk-dist
           path: python-sdk/dist/*
@@ -537,7 +537,7 @@ jobs:
       contents: write
       packages: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
       - name: Install yq
         run: |
           sudo wget -qO /usr/local/bin/yq \

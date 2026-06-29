@@ -106,12 +106,15 @@ generate: ## Generate deepcopy functions
 .PHONY: manifests
 manifests: ## Generate CRD manifests
 	controller-gen crd:generateEmbeddedObjectMeta=true rbac:roleName=agenttier-controller webhook paths="./api/..." output:crd:artifacts:config=config/crd output:rbac:artifacts:config=config/rbac
+	@# Keep the controller's embedded copy (pkg/crds, applied on startup) in
+	@# lockstep with the generated source of truth in config/crd.
+	cp config/crd/*.yaml pkg/crds/
 
 .PHONY: verify-codegen
 verify-codegen: generate manifests ## Verify generated code is up to date
-	@if [ -n "$$(git status --porcelain api/ config/)" ]; then \
+	@if [ -n "$$(git status --porcelain api/ config/ pkg/crds/)" ]; then \
 		echo "Generated files are out of date. Run 'make generate manifests' and commit."; \
-		git diff api/ config/; \
+		git diff api/ config/ pkg/crds/; \
 		exit 1; \
 	fi
 

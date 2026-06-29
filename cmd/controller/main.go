@@ -40,6 +40,7 @@ import (
 	"github.com/agenttier/agenttier/pkg/controller"
 	"github.com/agenttier/agenttier/pkg/controller/warmpool"
 	agenttierwebhook "github.com/agenttier/agenttier/pkg/controller/webhook"
+	"github.com/agenttier/agenttier/pkg/crds"
 	"github.com/agenttier/agenttier/pkg/governance"
 	agentotel "github.com/agenttier/agenttier/pkg/otel"
 	"github.com/agenttier/agenttier/pkg/version"
@@ -72,6 +73,7 @@ func main() {
 		namespace               string
 		sandboxNamespace        string
 		enableWebhook           bool
+		manageCRDs              bool
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8081", "The address the metrics endpoint binds to.")
@@ -100,6 +102,8 @@ func main() {
 		"Namespace where Sandboxes (and warm pool Pods) live. Defaults to SANDBOX_NAMESPACE env var, then \"default\".")
 	flag.BoolVar(&enableWebhook, "enable-webhook", false,
 		"Serve the Sandbox validating/mutating admission webhook. Requires a serving certificate mounted at the webhook server cert dir (provided by cert-manager via the Helm chart).")
+	flag.BoolVar(&manageCRDs, "manage-crds", true,
+		"Apply the controller's bundled CRDs on startup (create-or-update). Keeps CRDs in lockstep with the running controller version, since Helm only installs CRDs on first install and never upgrades them. Set false if you manage CRDs out-of-band (e.g. GitOps/ArgoCD).")
 
 	opts := zap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
@@ -118,11 +122,9 @@ func main() {
 		"commit", version.GitCommit,
 	)
 
-	// Initialize OpenTelemetry. Same pattern as the router — env-driven,
-	// no-export when OTEL_EXPORTER_OTLP_ENDPOINT is empty. The warm-pool
-	// reconciler logger below picks up the trace-context handler so any
-	// spans threaded into reconcile contexts (future task; controller-side
-	// reconcile spans are not in scope for this commit) auto-correlate.
+	// Reconcile spans are emitted per-reconcile (controller.reconcile_sandbox);
+	// the warm-pool reconciler logger picks up the trace-context handler so any
+	// spans threaded into reconcile contexts auto-correlate in logs.
 	bootLogger := slog.New(agentotel.NewSlogContextHandler(
 		slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{Level: slog.LevelInfo}),
 	))
@@ -143,7 +145,26 @@ func main() {
 		}
 	}()
 
-	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
+	restCfg := ctrl.GetConfigOrDie()
+
+	// Apply (create-or-update) the controller's bundled CRDs before the
+	// manager starts. Helm installs CRDs only on first install and never on
+	// upgrade, so without this a release that adds a CRD field left the field
+	// unusable until an operator ran `kubectl apply -f config/crd/` by hand.
+	// Running it here also covers fresh installs — the Sandbox informer needs
+	// the CRD to exist before mgr.Start. Disable with --manage-crds=false when
+	// CRDs are managed out-of-band (GitOps).
+	if manageCRDs {
+		applyCtx, applyCancel := context.WithTimeout(context.Background(), 60*time.Second)
+		if err := crds.Apply(applyCtx, restCfg, bootLogger); err != nil {
+			applyCancel()
+			setupLog.Error(err, "failed to apply bundled CRDs")
+			os.Exit(1)
+		}
+		applyCancel()
+	}
+
+	mgr, err := ctrl.NewManager(restCfg, ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,

@@ -184,13 +184,21 @@ The Settings page in the Web UI mutates the same values via the `agenttier-warmp
 
 ## Upgrading
 
-Helm upgrades are in-place and CRD-aware. Chart versions track the app version.
+Helm upgrades are in-place. Chart versions track the app version.
 
 ```bash
 helm repo update
 helm upgrade agenttier agenttier/agenttier \
   --namespace agenttier -f values.prod.yaml
 ```
+
+**CRDs upgrade automatically.** Helm installs CRDs only on first install and never updates them on
+`helm upgrade`, which historically left newly added CRD fields unusable until you ran
+`kubectl apply -f config/crd/` by hand. The controller now applies its bundled CRDs on startup
+(create-or-update), so a `helm upgrade` that rolls the controller image also brings the CRDs up to
+the running version — no manual step. If you manage CRDs out-of-band (GitOps/Argo CD), set
+`controller.manageCRDs=false` and apply CRD updates yourself; the controller's ServiceAccount then
+no longer needs `customresourcedefinitions` write access.
 
 See the [CHANGELOG](https://github.com/agenttier/agenttier/blob/main/CHANGELOG.md) for per-version upgrade notes.
 

@@ -35,6 +35,8 @@ package warmpool
 
 import (
 	"context"
+	cryptorand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -608,6 +610,17 @@ func Claim(ctx context.Context, k8sClient client.Client, namespace, template str
 	return "", "", nil
 }
 
+// randomNameSuffix returns n lowercase hex characters from a CSPRNG, suitable
+// as a DNS-label-safe name suffix. Replaces the old UnixNano()%1e6 generator,
+// whose 1 ms wrap made same-millisecond pool names collide.
+func randomNameSuffix(n int) (string, error) {
+	b := make([]byte, (n+1)/2)
+	if _, err := cryptorand.Read(b); err != nil {
+		return "", err
+	}
+	return hex.EncodeToString(b)[:n], nil
+}
+
 // createPoolPod creates a single idle pod for the warm pool.
 func (r *Reconciler) createPoolPod(ctx context.Context, templateName string) error {
 	// Resolve template
@@ -621,8 +634,16 @@ func (r *Reconciler) createPoolPod(ctx context.Context, templateName string) err
 		image = tmpl.Spec.Image.Repository
 	}
 
-	// Generate unique names
-	suffix := fmt.Sprintf("%d", time.Now().UnixNano()%1000000)
+	// Generate a collision-resistant name. The old UnixNano()%1e6 suffix
+	// wrapped every millisecond, so two pool pods minted in the same ms could
+	// land on the same name — and because the PVC create below swallowed
+	// AlreadyExists, a colliding pod could silently mount a PVC already owned
+	// by a live sandbox (cross-tenant data contamination under RWX). Use a
+	// CSPRNG suffix instead (16 hex chars ≈ 2^64 space).
+	suffix, err := randomNameSuffix(16)
+	if err != nil {
+		return fmt.Errorf("generate pool name suffix: %w", err)
+	}
 	podName := fmt.Sprintf("pool-%s-%s", templateName[:min(len(templateName), 12)], suffix)
 	pvcName := podName + "-pvc"
 
@@ -653,7 +674,14 @@ func (r *Reconciler) createPoolPod(ctx context.Context, templateName string) err
 			},
 		},
 	}
-	if err := r.client.Create(ctx, pvc); err != nil && !errors.IsAlreadyExists(err) {
+	if err := r.client.Create(ctx, pvc); err != nil {
+		if errors.IsAlreadyExists(err) {
+			// With a CSPRNG suffix this is astronomically unlikely. If it does
+			// happen, the existing PVC may belong to a live sandbox, so fail
+			// closed rather than mount a foreign volume — the next reconcile
+			// retries with a fresh name.
+			return fmt.Errorf("pool PVC %s already exists; refusing to reuse a possibly-claimed volume", pvcName)
+		}
 		return fmt.Errorf("failed to create pool PVC: %w", err)
 	}
 

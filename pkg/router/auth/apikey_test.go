@@ -112,3 +112,52 @@ func TestHashAPIKey_StableAndDistinct(t *testing.T) {
 		t.Errorf("expected 64-hex-char sha256, got len %d", len(a))
 	}
 }
+
+func TestAPIKeyValidator_CacheHitRechecksExpiry(t *testing.T) {
+	key := "atk_willexpire"
+	store := &mapStore{records: map[string]*APIKeyRecord{
+		HashAPIKey(key): {UserID: "u-1"},
+	}}
+	v := NewAPIKeyValidator(store, 16, time.Hour)
+
+	// Seed the cache directly with an entry whose key has already expired,
+	// simulating a key that expired partway through a long cache TTL. The
+	// pre-fix code returned the cached claims because it only compared
+	// cachedAt against the TTL and never re-checked the key's own expiry.
+	past := time.Now().Add(-time.Minute)
+	v.cache.Put(HashAPIKey(key), &cacheEntry{
+		claims:    &Claims{Sub: "u-1"},
+		cachedAt:  time.Now(),
+		expiresAt: &past,
+	})
+
+	if _, err := v.ValidateKey(context.Background(), key); err == nil {
+		t.Fatal("expected an expired key to be rejected on a cache hit")
+	}
+	if store.calls != 0 {
+		t.Errorf("expiry should be caught on the cache path without a store lookup; got %d store calls", store.calls)
+	}
+}
+
+func TestAPIKeyValidator_InvalidateEvictsCache(t *testing.T) {
+	key := "atk_revokeme"
+	store := &mapStore{records: map[string]*APIKeyRecord{
+		HashAPIKey(key): {UserID: "u-1"},
+	}}
+	v := NewAPIKeyValidator(store, 16, time.Hour)
+
+	// Prime the cache.
+	if _, err := v.ValidateKey(context.Background(), key); err != nil {
+		t.Fatalf("prime: %v", err)
+	}
+	// Simulate revocation: the backing record is deleted AND the cache evicted.
+	delete(store.records, HashAPIKey(key))
+	v.Invalidate(key)
+
+	if _, err := v.ValidateKey(context.Background(), key); err == nil {
+		t.Fatal("expected a revoked key to be rejected immediately after Invalidate")
+	}
+	if store.calls != 2 {
+		t.Errorf("eviction should force a re-lookup against the store; got %d store calls", store.calls)
+	}
+}

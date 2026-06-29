@@ -552,3 +552,66 @@ func TestNamespaceSplit_PoolPodsLiveInSandboxNamespace(t *testing.T) {
 func slogDiscard() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
 }
+
+func TestRandomNameSuffix_DistinctAndDNSSafe(t *testing.T) {
+	const n = 16
+	seen := make(map[string]struct{}, 2000)
+	for i := 0; i < 2000; i++ {
+		s, err := randomNameSuffix(n)
+		if err != nil {
+			t.Fatalf("randomNameSuffix: %v", err)
+		}
+		if len(s) != n {
+			t.Fatalf("suffix length = %d, want %d", len(s), n)
+		}
+		for _, r := range s {
+			if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+				t.Fatalf("suffix %q contains a non-hex (non-DNS-safe) char %q", s, r)
+			}
+		}
+		if _, dup := seen[s]; dup {
+			t.Fatalf("collision after %d samples: %q (the old UnixNano%%1e6 generator is what this replaces)", i, s)
+		}
+		seen[s] = struct{}{}
+	}
+}
+
+func TestCreatePoolPod_DesiredTwoGetsDistinctPVCNames(t *testing.T) {
+	scheme := newScheme(t)
+	const installNS, sandboxNS = "agenttier", "default"
+
+	tmpl := &agenttierv1alpha1.ClusterSandboxTemplate{
+		ObjectMeta: metav1.ObjectMeta{Name: "general-coding"},
+		Spec: agenttierv1alpha1.SandboxTemplateSpec{
+			Image: &agenttierv1alpha1.ImageSpec{Repository: "ghcr.io/agenttier/sandbox-general:test"},
+		},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(tmpl).Build()
+	ctx := context.Background()
+	if err := SetConfig(ctx, c, installNS, Config{Pools: []PoolConfig{
+		{Template: "general-coding", DesiredCount: 2},
+	}}); err != nil {
+		t.Fatalf("SetConfig: %v", err)
+	}
+
+	r := NewReconciler(c, slogDiscard(), installNS, sandboxNS)
+	// The reconciler creates one pool pod per template per cycle, so run two
+	// cycles to reach DesiredCount=2.
+	for i := 0; i < 2; i++ {
+		if err := r.Reconcile(ctx); err != nil {
+			t.Fatalf("Reconcile cycle %d: %v", i, err)
+		}
+	}
+
+	pvcs := &corev1.PersistentVolumeClaimList{}
+	if err := c.List(ctx, pvcs, client.InNamespace(sandboxNS),
+		client.MatchingLabels{LabelPooled: "true"}); err != nil {
+		t.Fatalf("list pool PVCs: %v", err)
+	}
+	if len(pvcs.Items) != 2 {
+		t.Fatalf("expected 2 distinct pool PVCs, got %d", len(pvcs.Items))
+	}
+	if pvcs.Items[0].Name == pvcs.Items[1].Name {
+		t.Fatalf("two pool PVCs share a name %q — suffix collision", pvcs.Items[0].Name)
+	}
+}

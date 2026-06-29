@@ -34,10 +34,14 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
+	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/codes"
+
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
 
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
 	"github.com/agenttier/agenttier/pkg/controller/warmpool"
+	agentotel "github.com/agenttier/agenttier/pkg/otel"
 )
 
 const (
@@ -81,6 +85,28 @@ type SandboxReconciler struct {
 }
 
 func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
+	// One span per reconcile so a sandbox can be traced controller→router→pod.
+	// Per-object identifiers are fine as span attributes (each span is a
+	// discrete event, not an aggregated metric series — the cardinality rule
+	// in the project guide is about Prometheus labels, not trace attributes).
+	ctx, span := agentotel.Tracer("controller").Start(ctx, "controller.reconcile_sandbox")
+	span.SetAttributes(
+		attribute.String("sandbox.name", req.Name),
+		attribute.String("sandbox.namespace", req.Namespace),
+	)
+	defer span.End()
+
+	res, err := r.dispatch(ctx, req)
+	if err != nil {
+		span.RecordError(err)
+		span.SetStatus(codes.Error, err.Error())
+	}
+	return res, err
+}
+
+// dispatch runs the reconcile state machine. It is wrapped by Reconcile, which
+// owns the OTel span; dispatch enriches that span with the resolved phase.
+func (r *SandboxReconciler) dispatch(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	logger := log.FromContext(ctx)
 
 	sandbox := &agenttierv1alpha1.Sandbox{}
@@ -90,6 +116,9 @@ func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 		return ctrl.Result{}, err
 	}
+
+	agentotel.SpanFromContext(ctx).SetAttributes(
+		attribute.String("sandbox.phase", string(sandbox.Status.Phase)))
 
 	// Handle deletion
 	if !sandbox.DeletionTimestamp.IsZero() {

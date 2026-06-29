@@ -277,6 +277,7 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	// Auth via the same /api/v1 middleware; ClusterRole already grants the
 	// node + pod read verbs we need.
 	api.HandleFunc("/cluster/status", s.handleGetClusterStatus).Methods("GET")
+	api.Handle("/cluster/nodes", s.requireAdmin(http.HandlerFunc(s.handleGetClusterNodes))).Methods("GET")
 
 	// Cluster headroom (spare-capacity Deployment). Read-only for any
 	// authenticated user, write-gated to admins because changing the

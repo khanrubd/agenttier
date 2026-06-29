@@ -123,6 +123,42 @@ func TestAPIKey_RevokeRemovesIt(t *testing.T) {
 	}
 }
 
+func TestAPIKey_RevokeEvictsCachedKey(t *testing.T) {
+	s, _ := apiKeyFixture(t)
+
+	// Create.
+	body := `{"name":"cached"}`
+	cr := httptest.NewRequest(http.MethodPost, "/api/v1/user/api-keys", strings.NewReader(body))
+	cr.Header.Set("Content-Type", "application/json")
+	cr.ContentLength = int64(len(body))
+	crRec := httptest.NewRecorder()
+	s.router.ServeHTTP(crRec, cr)
+	var created struct {
+		ID  string `json:"id"`
+		Key string `json:"key"`
+	}
+	_ = json.Unmarshal(crRec.Body.Bytes(), &created)
+
+	// Validate once to prime the validator cache.
+	if _, err := s.validateAPIKey(context.Background(), created.Key); err != nil {
+		t.Fatalf("prime validate: %v", err)
+	}
+
+	// Revoke.
+	dr := httptest.NewRequest(http.MethodDelete, "/api/v1/user/api-keys/"+created.ID, nil)
+	drRec := httptest.NewRecorder()
+	s.router.ServeHTTP(drRec, dr)
+	if drRec.Code != http.StatusOK {
+		t.Fatalf("revoke: expected 200, got %d", drRec.Code)
+	}
+
+	// The revoke must evict the cache so the key fails IMMEDIATELY, not after
+	// cacheTTL. Without the eviction the cached entry keeps authenticating.
+	if _, err := s.validateAPIKey(context.Background(), created.Key); err == nil {
+		t.Fatal("revoked key still validates from cache (eviction missing)")
+	}
+}
+
 func TestAPIKey_ListReturnsMetadataNotSecrets(t *testing.T) {
 	s, _ := apiKeyFixture(t)
 

@@ -68,10 +68,17 @@ func (v *APIKeyValidator) ValidateKey(ctx context.Context, key string) (*Claims,
 	// Check cache first
 	if cached, ok := v.cache.Get(keyHash); ok {
 		entry := cached.(*cacheEntry)
+		// Re-check the key's own expiry on every hit. Otherwise a key that
+		// expires partway through the cache TTL keeps authenticating until the
+		// entry ages out — auth staleness bounded only by cacheTTL.
+		if entry.expiresAt != nil && time.Now().After(*entry.expiresAt) {
+			v.cache.Remove(keyHash)
+			return nil, fmt.Errorf("API key expired")
+		}
 		if time.Since(entry.cachedAt) < v.cacheTTL {
 			return entry.claims, nil
 		}
-		// Cache expired — remove and re-validate
+		// Cache TTL elapsed — remove and re-validate against the store.
 		v.cache.Remove(keyHash)
 	}
 
@@ -95,11 +102,27 @@ func (v *APIKeyValidator) ValidateKey(ctx context.Context, key string) (*Claims,
 
 	// Cache the result
 	v.cache.Put(keyHash, &cacheEntry{
-		claims:   claims,
-		cachedAt: time.Now(),
+		claims:    claims,
+		cachedAt:  time.Now(),
+		expiresAt: record.ExpiresAt,
 	})
 
 	return claims, nil
+}
+
+// Invalidate evicts a key from the cache by its plaintext value.
+func (v *APIKeyValidator) Invalidate(key string) {
+	v.InvalidateHash(hashAPIKey(key))
+}
+
+// InvalidateHash evicts a key from the cache by its SHA-256 hash. The revoke
+// path calls this after deleting the backing Secret so a revoked key stops
+// authenticating immediately instead of lingering for up to cacheTTL.
+func (v *APIKeyValidator) InvalidateHash(keyHash string) {
+	if v == nil || v.cache == nil {
+		return
+	}
+	v.cache.Remove(keyHash)
 }
 
 // hashAPIKey computes the SHA-256 hash of an API key.
@@ -116,8 +139,9 @@ func HashAPIKey(key string) string {
 // --- Simple LRU Cache ---
 
 type cacheEntry struct {
-	claims   *Claims
-	cachedAt time.Time
+	claims    *Claims
+	cachedAt  time.Time
+	expiresAt *time.Time
 }
 
 // LRUCache is a simple thread-safe LRU cache.

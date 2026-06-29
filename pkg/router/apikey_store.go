@@ -163,15 +163,16 @@ func (s *secretAPIKeyStore) listAPIKeysForUser(ctx context.Context, userID strin
 }
 
 // deleteAPIKey removes a key Secret by its ID (the Secret name), but only if it
-// belongs to the requesting user (unless the caller is admin). Returns an error
-// if the key doesn't exist or isn't owned by the user.
-func (s *secretAPIKeyStore) deleteAPIKey(ctx context.Context, keyID, userID string, isAdmin bool) error {
+// belongs to the requesting user (unless the caller is admin). Returns the
+// deleted key's SHA-256 hash (so the caller can evict it from the validator
+// cache) and an error if the key doesn't exist or isn't owned by the user.
+func (s *secretAPIKeyStore) deleteAPIKey(ctx context.Context, keyID, userID string, isAdmin bool) (string, error) {
 	secret := &corev1.Secret{}
 	if err := s.k8sClient.Get(ctx, client.ObjectKey{Namespace: s.namespace, Name: keyID}, secret); err != nil {
-		return fmt.Errorf("api key not found")
+		return "", fmt.Errorf("api key not found")
 	}
 	if secret.Labels[apiKeySecretPurposeLabel] != apiKeySecretPurpose {
-		return fmt.Errorf("api key not found")
+		return "", fmt.Errorf("api key not found")
 	}
 	if !isAdmin {
 		rec := &auth.APIKeyRecord{}
@@ -179,13 +180,14 @@ func (s *secretAPIKeyStore) deleteAPIKey(ctx context.Context, keyID, userID stri
 			_ = json.Unmarshal(raw, rec)
 		}
 		if rec.UserID != userID {
-			return fmt.Errorf("access denied")
+			return "", fmt.Errorf("access denied")
 		}
 	}
+	keyHash := string(secret.Data["keyHash"])
 	if err := s.k8sClient.Delete(ctx, secret); err != nil {
-		return fmt.Errorf("delete api key: %w", err)
+		return "", fmt.Errorf("delete api key: %w", err)
 	}
-	return nil
+	return keyHash, nil
 }
 
 // sanitizeLabelValue makes an arbitrary user identifier safe to use as a

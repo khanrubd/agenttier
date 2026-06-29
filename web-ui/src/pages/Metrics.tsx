@@ -5,6 +5,7 @@
 
 import { useState, useEffect } from 'react';
 import { fetchAnalytics } from '../api/client';
+import NodeCapacityCard from '../components/NodeCapacityCard';
 
 interface MetricsData {
   total_sandboxes: number;
@@ -48,6 +49,10 @@ export default function Metrics() {
         <MetricCard label="Stopped" value={data.status_breakdown?.Stopped || 0} color="#6b7280" />
         <MetricCard label="Avg Startup" value={data.avg_startup_ms > 0 ? `${data.avg_startup_ms}ms` : '—'} />
       </div>
+
+      {/* Cluster capacity — node fleet allocatable/requests + saturation.
+          Admin-only endpoint; the card hides itself for non-admins. */}
+      <NodeCapacityCard />
 
       {/* Status breakdown */}
       <section style={{ marginBottom: '32px' }}>
