@@ -179,11 +179,37 @@ func (r *SandboxReconciler) reconcileCreating(ctx context.Context, sandbox *agen
 			// Relabel the claimed pod to belong to this sandbox
 			pod := &corev1.Pod{}
 			if err := r.Get(ctx, client.ObjectKey{Namespace: sandbox.Namespace, Name: claimedPod}, pod); err == nil {
+				// Claim strips the pool labels; an otherwise-empty labels map
+				// round-trips back as nil, so guard before assigning.
+				if pod.Labels == nil {
+					pod.Labels = map[string]string{}
+				}
 				pod.Labels["agenttier.io/sandbox"] = sandbox.Name
 				pod.Labels["agenttier.io/template"] = templateName
-				if err := r.Update(ctx, pod); err != nil {
+				// Adopt the claimed Pod: make this Sandbox its controller
+				// owner so (a) the Owns(&Pod{}) watch drives prompt
+				// self-healing on pod failure instead of waiting for the 30s
+				// periodic requeue, and (b) the Pod is garbage-collected with
+				// the Sandbox. Pool pods are created with no owner reference,
+				// so there's no controller-owner conflict here.
+				if err := controllerutil.SetControllerReference(sandbox, pod, r.Scheme); err != nil {
+					logger.Error(err, "failed to set owner reference on claimed pod, falling through to normal creation")
+				} else if err := r.Update(ctx, pod); err != nil {
 					logger.Error(err, "failed to relabel claimed pod, falling through to normal creation")
 				} else {
+					// Adopt the claimed PVC too, so it's GC'd with the Sandbox
+					// and never mistaken for (or reaped as) a stray pool PVC.
+					if claimedPVC != "" {
+						pvc := &corev1.PersistentVolumeClaim{}
+						if err := r.Get(ctx, client.ObjectKey{Namespace: sandbox.Namespace, Name: claimedPVC}, pvc); err == nil {
+							if err := controllerutil.SetControllerReference(sandbox, pvc, r.Scheme); err != nil {
+								logger.Error(err, "failed to set owner reference on claimed pvc", "pvc", claimedPVC)
+							} else if err := r.Update(ctx, pvc); err != nil {
+								logger.Error(err, "failed to adopt claimed pvc", "pvc", claimedPVC)
+							}
+						}
+					}
+
 					// Success — update sandbox status directly to Running
 					now := metav1.Now()
 					sandbox.Status.Phase = agenttierv1alpha1.SandboxPhaseRunning

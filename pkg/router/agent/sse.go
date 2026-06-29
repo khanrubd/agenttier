@@ -34,7 +34,13 @@ type sseWriter struct {
 	w       http.ResponseWriter
 	flusher http.Flusher
 	stream  string // "stdout" or "stderr" — set per-stream by withStream()
-	mu      sync.Mutex
+	// mu is a POINTER so that the original writer and every writer derived
+	// via withStream() share ONE lock. They all write the same underlying
+	// http.ResponseWriter (which is not safe for concurrent Write/Flush), so
+	// the stdout writer, the stderr writer, and the keepalive goroutine must
+	// serialize through the same mutex. A per-writer mutex (the previous bug)
+	// did not serialize them and produced interleaved, corrupted SSE frames.
+	mu      *sync.Mutex
 	pending []byte // partial line buffer, only flushed on newline
 }
 
@@ -52,14 +58,16 @@ func newSSEWriter(w http.ResponseWriter) (*sseWriter, bool) {
 	// Disable nginx proxy buffering so events arrive at the client live.
 	w.Header().Set("X-Accel-Buffering", "no")
 	w.WriteHeader(http.StatusOK)
-	return &sseWriter{w: w, flusher: flusher}, true
+	return &sseWriter{w: w, flusher: flusher, mu: &sync.Mutex{}}, true
 }
 
 // withStream returns a copy of the writer with stream=name set so subsequent
 // Write calls emit events tagged for stdout vs stderr. The underlying
-// flusher and response writer are shared (and serialized via mu).
+// flusher, response writer, AND mutex are shared — the shared mutex is what
+// serializes concurrent stdout/stderr/keepalive writes to the one
+// ResponseWriter.
 func (s *sseWriter) withStream(name string) *sseWriter {
-	return &sseWriter{w: s.w, flusher: s.flusher, stream: name, mu: sync.Mutex{}}
+	return &sseWriter{w: s.w, flusher: s.flusher, stream: name, mu: s.mu}
 }
 
 // WriteEvent emits a single SSE event with the given name + payload encoded

@@ -123,18 +123,23 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		sandbox.Spec.Storage = req.Storage
 	}
 
-	// Parse timeout if provided
+	// Parse timeout / idleTimeout if provided. A bad value is a 400, not a
+	// silent drop — operators rely on these for cost + governance ceilings.
 	if req.Timeout != "" {
 		d, err := parseDuration(req.Timeout)
-		if err == nil {
-			sandbox.Spec.Timeout = d
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "invalid timeout: "+err.Error())
+			return
 		}
+		sandbox.Spec.Timeout = d
 	}
 	if req.IdleTimeout != "" {
 		d, err := parseDuration(req.IdleTimeout)
-		if err == nil {
-			sandbox.Spec.IdleTimeout = d
+		if err != nil {
+			respondError(w, http.StatusBadRequest, "invalid idleTimeout: "+err.Error())
+			return
 		}
+		sandbox.Spec.IdleTimeout = d
 	}
 
 	// Governance enforcement. Violations short-circuit before the CR ever
@@ -396,6 +401,7 @@ func (s *Server) handleCloneSandbox(w http.ResponseWriter, r *http.Request) {
 	cloneSpec := *source.Spec.DeepCopy()
 	cloneSpec.CloneFromSnapshot = snapName
 	cloneSpec.CreatedBy = &agenttierv1alpha1.UserIdentity{
+		Sub:         claims.Sub,
 		Email:       claims.Email,
 		DisplayName: claims.Name,
 	}
@@ -502,9 +508,15 @@ func (s *Server) handleExecCommand(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request) {
 	sandboxID := mux.Vars(r)["sandboxId"]
 
-	// Auth: dev mode bypass (no OIDC configured = auto-admin)
+	// Auth: mirror the REST authMiddleware gate exactly so the terminal fails
+	// closed. Dev-admin is granted ONLY behind the explicit --dev-auth flag
+	// (config.DevAuth); a production install that simply has no OIDC issuer
+	// must reject anonymous connections, not hand out an admin shell. When
+	// dev-auth is off we require a valid API key or OIDC JWT. The WebSocket
+	// handshake can't reliably set custom headers from a browser, so the JWT
+	// may also arrive as a ?token= query param.
 	var claims *Claims
-	if s.config.OIDCIssuerURL == "" {
+	if s.config.DevAuth {
 		claims = &Claims{
 			Sub:     "dev-user",
 			Email:   "dev@agenttier.local",
@@ -512,8 +524,16 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 			Groups:  []string{"agenttier-admins"},
 			IsAdmin: true,
 		}
+	} else if apiKey := r.Header.Get("X-API-Key"); apiKey != "" {
+		var err error
+		claims, err = s.validateAPIKey(r.Context(), apiKey)
+		if err != nil {
+			http.Error(w, "invalid api key", http.StatusUnauthorized)
+			return
+		}
 	} else {
-		// Production: extract token from query param or header
+		// Extract a bearer token from the ?token= query param or the
+		// Authorization header.
 		token := r.URL.Query().Get("token")
 		if token == "" {
 			authHeader := r.Header.Get("Authorization")
@@ -1581,12 +1601,19 @@ func imageFromSpec(img *agenttierv1alpha1.ImageSpec) string {
 	return img.Repository
 }
 
+// parseDuration parses a Go-style duration string ("30m", "8h", "24h") into a
+// *metav1.Duration for the Sandbox spec. It rejects unparseable and
+// non-positive values so a bad timeout surfaces as a 400 at the create handler
+// instead of being silently dropped.
 func parseDuration(s string) (*metav1.Duration, error) {
-	// Simple duration parsing: "8h", "30m", "24h"
-	// metav1.Duration wraps time.Duration
-	// For now, we'll handle common formats
-	_ = s
-	return nil, fmt.Errorf("duration parsing not implemented")
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return nil, fmt.Errorf("invalid duration %q: %w", s, err)
+	}
+	if d <= 0 {
+		return nil, fmt.Errorf("duration %q must be positive", s)
+	}
+	return &metav1.Duration{Duration: d}, nil
 }
 
 func respondJSON(w http.ResponseWriter, status int, data interface{}) {

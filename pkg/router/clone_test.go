@@ -181,3 +181,43 @@ func TestClone_RejectsInvalidName(t *testing.T) {
 		t.Fatalf("expected 400 (invalid name), got %d body=%s", rec.Code, rec.Body.String())
 	}
 }
+
+// TestClone_StampsCreatedBySub is the regression guard for the bug where the
+// clone handler set CreatedBy.Email/DisplayName but NOT Sub. Ownership checks
+// key on Sub, so an empty Sub locked the (non-admin) cloner out of their own
+// clone. The clone's CreatedBy.Sub must equal the cloning user's subject.
+func TestClone_StampsCreatedBySub(t *testing.T) {
+	source := &agenttierv1alpha1.Sandbox{
+		ObjectMeta: metav1.ObjectMeta{Name: "sbx-source", Namespace: "default"},
+		Spec: agenttierv1alpha1.SandboxSpec{
+			Mode:        agenttierv1alpha1.SandboxModeCode,
+			TemplateRef: &agenttierv1alpha1.TemplateReference{Name: "general-coding", Kind: "ClusterSandboxTemplate"},
+		},
+		Status: agenttierv1alpha1.SandboxStatus{
+			Phase:   agenttierv1alpha1.SandboxPhaseRunning,
+			PVCName: "sbx-source-workspace",
+		},
+	}
+	s, c := cloneFixture(t, source)
+
+	// runClone drives the request through authMiddleware with DevAuth=true,
+	// so the effective caller is the dev-user (Sub="dev-user").
+	rec := runClone(s, "sbx-source", `{"name":"sbx-clone"}`)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", rec.Code, rec.Body.String())
+	}
+
+	clone := &agenttierv1alpha1.Sandbox{}
+	if err := c.Get(context.Background(), client.ObjectKey{Name: "sbx-clone", Namespace: "default"}, clone); err != nil {
+		t.Fatalf("get clone: %v", err)
+	}
+	if clone.Spec.CreatedBy == nil {
+		t.Fatal("clone has no CreatedBy")
+	}
+	if clone.Spec.CreatedBy.Sub == "" {
+		t.Fatal("REGRESSION: clone CreatedBy.Sub is empty — cloner is locked out of their own clone")
+	}
+	if clone.Spec.CreatedBy.Sub != "dev-user" {
+		t.Errorf("clone CreatedBy.Sub = %q, want %q (the cloning user's subject)", clone.Spec.CreatedBy.Sub, "dev-user")
+	}
+}

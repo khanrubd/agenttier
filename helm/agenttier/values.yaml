@@ -114,7 +114,7 @@ defaults:
   sandbox:
     # Defaults to the chart's appVersion when the tag is omitted at render
     # time. Users can override to pin a specific image.
-    image: ghcr.io/agenttier/sandbox-general:v0.6.0
+    image: ghcr.io/agenttier/sandbox-general:v0.6.5
     resources:
       requests:
         cpu: 500m
@@ -129,7 +129,7 @@ defaults:
     timeout: 8h
     idleTimeout: 1h
   claudeCode:
-    image: ghcr.io/agenttier/sandbox-claude-code:v0.6.0
+    image: ghcr.io/agenttier/sandbox-claude-code:v0.6.5
     # IRSA role ARN for Bedrock access (annotated on sandbox ServiceAccount)
     irsaRoleArn: ""
   openclaw:
@@ -139,7 +139,7 @@ defaults:
     # provider + discovery, and the entrypoint seeds it to the writable
     # PVC on first launch so user customizations persist across
     # stop/resume.
-    image: ghcr.io/agenttier/sandbox-openclaw:v0.6.0
+    image: ghcr.io/agenttier/sandbox-openclaw:v0.6.5
     # IRSA role ARN for Bedrock access (annotated on sandbox ServiceAccount).
     # Required IAM permissions: bedrock:InvokeModel,
     # bedrock:InvokeModelWithResponseStream, bedrock:ListFoundationModels,
@@ -150,21 +150,21 @@ defaults:
     # LangGraph + LangChain + httpx + the mem0 client. Pair with the
     # `langgraph-agent` default template (helm/agenttier/templates/
     # default-templates.yaml) to spin up an agent in one apply.
-    image: ghcr.io/agenttier/sandbox-langgraph:v0.6.0
+    image: ghcr.io/agenttier/sandbox-langgraph:v0.6.5
   strandsBedrock:
     # AWS Strands Agents SDK preinstalled, points at Bedrock by default.
     # IRSA-driven auth via the AWS SDK default credential chain — annotate
     # the namespace's default ServiceAccount with eks.amazonaws.com/role-arn
     # to give it Bedrock access. Pair with the `strands-bedrock` default
     # template.
-    image: ghcr.io/agenttier/sandbox-strands-bedrock:v0.6.0
+    image: ghcr.io/agenttier/sandbox-strands-bedrock:v0.6.5
     irsaRoleArn: ""
   rl:
     # Reinforcement-learning reference image. PyTorch (CPU) + Ray RLlib +
     # Gymnasium + Stable-Baselines3 preinstalled. Pair with the
     # `rl-rollout` default template. CPU-only for now; GPU rollouts plug
     # in once a future phase lands GPU resource overrides on the CRD.
-    image: ghcr.io/agenttier/sandbox-rl:v0.6.0
+    image: ghcr.io/agenttier/sandbox-rl:v0.6.5
 
 # --- Networking ---
 networking:

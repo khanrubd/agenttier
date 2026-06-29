@@ -226,12 +226,17 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	api.HandleFunc("/sandboxes/{id}/share/{userId}", s.handleRevokeShare).Methods("DELETE")
 	api.HandleFunc("/sandboxes/{id}/share-links", s.handleCreateShareLink).Methods("POST")
 
-	// Templates
+	// Templates. Read is open to any authenticated user; create/update/delete
+	// are admin-gated because a template defines the container image, resource
+	// limits, system prompt, harness config, and ServiceAccount/IRSA wiring
+	// sandboxes run under, and is the unit governance allowlists reference —
+	// letting a non-admin mutate one is a privilege-escalation + governance
+	// bypass.
 	api.HandleFunc("/templates", s.handleListTemplates).Methods("GET")
-	api.HandleFunc("/templates", s.handleCreateTemplate).Methods("POST")
+	api.Handle("/templates", s.requireAdmin(http.HandlerFunc(s.handleCreateTemplate))).Methods("POST")
 	api.HandleFunc("/templates/{name}", s.handleGetTemplate).Methods("GET")
-	api.HandleFunc("/templates/{name}", s.handleUpdateTemplate).Methods("PUT")
-	api.HandleFunc("/templates/{name}", s.handleDeleteTemplate).Methods("DELETE")
+	api.Handle("/templates/{name}", s.requireAdmin(http.HandlerFunc(s.handleUpdateTemplate))).Methods("PUT")
+	api.Handle("/templates/{name}", s.requireAdmin(http.HandlerFunc(s.handleDeleteTemplate))).Methods("DELETE")
 
 	// Governance
 	api.HandleFunc("/governance/policies", s.handleListPolicies).Methods("GET")
@@ -241,12 +246,14 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	api.Handle("/governance/policies/{namespace}", s.requireAdmin(http.HandlerFunc(s.handleDeletePolicy))).Methods("DELETE")
 	api.HandleFunc("/governance/effective", s.handleGetEffectivePolicy).Methods("GET")
 
-	// Audit
-	api.HandleFunc("/audit/events", s.handleListAuditEvents).Methods("GET")
+	// Audit — admin-only: lists Sandbox Events across all namespaces with no
+	// per-owner filter, so it would otherwise leak every tenant's sandbox
+	// names + event messages to any authenticated user.
+	api.Handle("/audit/events", s.requireAdmin(http.HandlerFunc(s.handleListAuditEvents))).Methods("GET")
 
-	// Analytics
-	api.HandleFunc("/analytics/usage", s.handleGetUsageAnalytics).Methods("GET")
-	api.HandleFunc("/analytics/costs", s.handleGetCostEstimates).Methods("GET")
+	// Analytics — admin-only: aggregates usage + cost across all tenants.
+	api.Handle("/analytics/usage", s.requireAdmin(http.HandlerFunc(s.handleGetUsageAnalytics))).Methods("GET")
+	api.Handle("/analytics/costs", s.requireAdmin(http.HandlerFunc(s.handleGetCostEstimates))).Methods("GET")
 
 	// Admin
 	api.HandleFunc("/admin/sandboxes", s.handleAdminListSandboxes).Methods("GET")
@@ -260,9 +267,11 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	api.HandleFunc("/user/api-keys", s.handleCreateAPIKey).Methods("POST")
 	api.HandleFunc("/user/api-keys/{keyId}", s.handleRevokeAPIKey).Methods("DELETE")
 
-	// Warm pool
+	// Warm pool. Status is readable by any authenticated user; setting the
+	// desired count is a cost/capacity decision, so it's admin-gated to match
+	// the cluster-headroom write below.
 	api.HandleFunc("/warmpool/status", s.handleGetWarmPoolStatus).Methods("GET")
-	api.HandleFunc("/warmpool/config", s.handleSetWarmPoolConfig).Methods("PUT")
+	api.Handle("/warmpool/config", s.requireAdmin(http.HandlerFunc(s.handleSetWarmPoolConfig))).Methods("PUT")
 
 	// Cluster status — node + pod headcount for the Web UI's left-nav glance.
 	// Auth via the same /api/v1 middleware; ClusterRole already grants the

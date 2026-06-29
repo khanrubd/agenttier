@@ -181,6 +181,13 @@ func (s *Server) handleInvoke(w http.ResponseWriter, r *http.Request) {
 // /invoke/cancel), "error" (start failure).
 func (s *Server) runStreamed(ctx context.Context, w http.ResponseWriter, flusher http.Flusher, req InvokeRequest) (int, string) {
 	cmd := exec.CommandContext(ctx, req.Command[0], req.Command[1:]...) //nolint:gosec // authenticated caller, arbitrary command is the contract
+	// Without WaitDelay, killing a shell wrapper (e.g. /bin/sh -c "...") on
+	// timeout/cancel leaves orphaned grandchildren holding the inherited
+	// stdout/stderr pipes open, so the pipe reads below never hit EOF and
+	// wg.Wait() blocks forever — defeating the very timeout we're enforcing
+	// and leaking the Router's concurrency slot. 500ms gives post-cancel
+	// cleanup a small grace window before the pipes are force-closed.
+	cmd.WaitDelay = 500 * time.Millisecond
 	if req.WorkingDir != "" {
 		cmd.Dir = req.WorkingDir
 	}
@@ -210,18 +217,24 @@ func (s *Server) runStreamed(ctx context.Context, w http.ResponseWriter, flusher
 
 	// Stream stdout + stderr concurrently so a chatty stderr doesn't
 	// starve stdout consumers (or vice versa). 4 KiB chunks balance
-	// latency against syscall overhead.
+	// latency against syscall overhead. writeMu serializes the two
+	// goroutines' writes — http.ResponseWriter is NOT safe for concurrent
+	// Write/Flush, and unsynchronized stdout+stderr writes interleave
+	// mid-event and corrupt the SSE framing the Router/SDK must parse.
 	var wg sync.WaitGroup
+	var writeMu sync.Mutex
 	streamPipe := func(stream string, r io.Reader) {
 		defer wg.Done()
 		buf := make([]byte, 4096)
 		for {
 			n, err := r.Read(buf)
 			if n > 0 {
+				writeMu.Lock()
 				writeEvent(w, flusher, "log", map[string]string{
 					"stream": stream,
 					"data":   string(buf[:n]),
 				})
+				writeMu.Unlock()
 			}
 			if err != nil {
 				return
