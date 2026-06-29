@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **CI lint works on the Go 1.25 toolchain.** golangci-lint v1's final release (v1.64.8) is built with Go 1.24 and refuses a go.mod that requires Go 1.25, so the `lint` job went red right after the v0.7.1 Go bump. Migrated to golangci-lint v2.12.2 via `golangci-lint-action@v9` and converted `.golangci.yml` to the v2 schema (staticcheck pinned to `all,-ST1*,-QF1*` to preserve the "correctness + security, not noisy style" policy now that v2 folds in the QF/ST categories; `web-ui/node_modules` excluded; the rate-limit 429 writer's new gosec G705 false positive suppressed per-site). Also bumped the `release-cli` job's `setup-go` from 1.22 to 1.25 — it had been missed in the v0.7.1 bump and failed all five CLI builds, which skipped the GitHub Release (the v0.7.1 CLI binaries + Release were published out-of-band). CI-tooling only; no runtime impact.
+
 ## [v0.7.1] — 2026-06-29
 
 ### Changed
