@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [v0.8.1] — 2026-06-30
+
 ### Fixed
 
 - **Helm chart: `helm upgrade --reuse-values` from a pre-0.8.0 release no longer crashes.** The new `optional.storage`, `optional.backup`, and `optional.notifications` value sub-trees are absent from older releases' stored values, so `--reuse-values` left them nil and the new templates failed with `nil pointer evaluating interface {}.enabled`. The guards are now nil-safe (`| default dict`), so an upgrade that reuses old values renders cleanly with the new features defaulting to off.
