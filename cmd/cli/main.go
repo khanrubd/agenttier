@@ -37,6 +37,7 @@ import (
 	"net/url"
 	"os"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/agenttier/agenttier/pkg/version"
@@ -176,6 +177,7 @@ func runConfigure(args []string) int {
 		return 1
 	}
 	defer resp.Body.Close()
+	warnIfDeprecated(resp)
 	if resp.StatusCode/100 != 2 {
 		return printErrorResponse("configure", resp)
 	}
@@ -389,6 +391,7 @@ func runInvoke(args []string) int {
 		return 1
 	}
 	defer resp.Body.Close()
+	warnIfDeprecated(resp)
 	if resp.StatusCode/100 != 2 {
 		return printErrorResponse("invoke", resp)
 	}
@@ -435,6 +438,7 @@ func runInvokeCancel(g *globalFlags, sandboxID, invokeID string) int {
 		return 1
 	}
 	defer resp.Body.Close()
+	warnIfDeprecated(resp)
 	if resp.StatusCode == http.StatusNoContent {
 		fmt.Fprintf(os.Stderr, "canceled %s\n", invokeID)
 		return 0
@@ -552,6 +556,34 @@ func parseSSE(r io.Reader) <-chan sseEvent {
 
 // printErrorResponse drains a non-2xx HTTP response, prints a useful error to
 // stderr, and returns a process exit code.
+// deprecationWarned tracks endpoints we've already warned about so a CLI
+// deprecation notice fires at most once per process per endpoint.
+var deprecationWarned sync.Map
+
+// warnIfDeprecated prints a one-time stderr notice when the Router flags the
+// endpoint as deprecated (Deprecation: true). Silence with
+// AGENTTIER_DEPRECATION_WARNINGS=off.
+func warnIfDeprecated(resp *http.Response) {
+	if resp == nil || resp.Request == nil {
+		return
+	}
+	if !strings.EqualFold(resp.Header.Get("Deprecation"), "true") {
+		return
+	}
+	if strings.EqualFold(os.Getenv("AGENTTIER_DEPRECATION_WARNINGS"), "off") {
+		return
+	}
+	key := resp.Request.Method + " " + resp.Request.URL.Path
+	if _, seen := deprecationWarned.LoadOrStore(key, struct{}{}); seen {
+		return
+	}
+	msg := "agenttier: API endpoint " + key + " is deprecated"
+	if s := resp.Header.Get("Sunset"); s != "" {
+		msg += " (sunset " + s + ")"
+	}
+	fmt.Fprintln(os.Stderr, msg)
+}
+
 func printErrorResponse(op string, resp *http.Response) int {
 	body, _ := io.ReadAll(resp.Body)
 	var decoded map[string]any

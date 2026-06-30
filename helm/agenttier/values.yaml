@@ -121,7 +121,7 @@ defaults:
   sandbox:
     # Defaults to the chart's appVersion when the tag is omitted at render
     # time. Users can override to pin a specific image.
-    image: ghcr.io/agenttier/sandbox-general:v0.7.5
+    image: ghcr.io/agenttier/sandbox-general:v0.8.0
     resources:
       requests:
         cpu: 500m
@@ -136,7 +136,7 @@ defaults:
     timeout: 8h
     idleTimeout: 1h
   claudeCode:
-    image: ghcr.io/agenttier/sandbox-claude-code:v0.7.5
+    image: ghcr.io/agenttier/sandbox-claude-code:v0.8.0
     # IRSA role ARN for Bedrock access (annotated on sandbox ServiceAccount)
     irsaRoleArn: ""
   openclaw:
@@ -146,7 +146,7 @@ defaults:
     # provider + discovery, and the entrypoint seeds it to the writable
     # PVC on first launch so user customizations persist across
     # stop/resume.
-    image: ghcr.io/agenttier/sandbox-openclaw:v0.7.5
+    image: ghcr.io/agenttier/sandbox-openclaw:v0.8.0
     # IRSA role ARN for Bedrock access (annotated on sandbox ServiceAccount).
     # Required IAM permissions: bedrock:InvokeModel,
     # bedrock:InvokeModelWithResponseStream, bedrock:ListFoundationModels,
@@ -157,21 +157,21 @@ defaults:
     # LangGraph + LangChain + httpx + the mem0 client. Pair with the
     # `langgraph-agent` default template (helm/agenttier/templates/
     # default-templates.yaml) to spin up an agent in one apply.
-    image: ghcr.io/agenttier/sandbox-langgraph:v0.7.5
+    image: ghcr.io/agenttier/sandbox-langgraph:v0.8.0
   strandsBedrock:
     # AWS Strands Agents SDK preinstalled, points at Bedrock by default.
     # IRSA-driven auth via the AWS SDK default credential chain — annotate
     # the namespace's default ServiceAccount with eks.amazonaws.com/role-arn
     # to give it Bedrock access. Pair with the `strands-bedrock` default
     # template.
-    image: ghcr.io/agenttier/sandbox-strands-bedrock:v0.7.5
+    image: ghcr.io/agenttier/sandbox-strands-bedrock:v0.8.0
     irsaRoleArn: ""
   rl:
     # Reinforcement-learning reference image. PyTorch (CPU) + Ray RLlib +
     # Gymnasium + Stable-Baselines3 preinstalled. Pair with the
     # `rl-rollout` default template. CPU-only for now; GPU rollouts plug
     # in once a future phase lands GPU resource overrides on the CRD.
-    image: ghcr.io/agenttier/sandbox-rl:v0.7.5
+    image: ghcr.io/agenttier/sandbox-rl:v0.8.0
 
 # --- Networking ---
 networking:
@@ -188,8 +188,24 @@ networking:
 # --- Security ---
 security:
   gvisor:
+    # When enabled, the chart renders a `gvisor` RuntimeClass (handler runsc)
+    # so templates/sandboxes can opt in with `runtimeClass: gvisor`. The runsc
+    # runtime must be installed on the nodes first — either bake it into the
+    # node image / Bottlerocket variant, or enable the installer DaemonSet
+    # below (standard containerd nodes only: AL2/AL2023/Ubuntu, NOT Bottlerocket).
     enabled: false
     runtimeClassName: gvisor
+    # nodeSelector pins gVisor pods (and the installer) to nodes labelled for
+    # runsc, so the rest of the fleet stays on runc. Apply this label to your
+    # gVisor node group (the Terraform module provisions one).
+    nodeSelector:
+      agenttier.io/runtime: gvisor
+    # Opt-in DaemonSet that installs the runsc binary + containerd shim and
+    # patches containerd config on labelled nodes. Leave false if your node
+    # image already ships runsc.
+    installer:
+      enabled: false
+      image: gcr.io/gvisor/gvisor-installer:latest
   podSecurityStandard: restricted
 
 # --- Observability ---
@@ -237,6 +253,63 @@ observability:
 
 # --- Optional Components ---
 optional:
+  # Scheduled VolumeSnapshot backups of sandbox PVCs (disaster-recovery
+  # Layer 1). Opt-in. The controller snapshots every managed, non-pool PVC on
+  # the interval and prunes backups older than the retention window. Requires
+  # a VolumeSnapshotClass + the CSI snapshotter (the same dependency the
+  # cloning feature uses). Restore = create a Sandbox with
+  # `spec.cloneFromSnapshot: <backup-snapshot-name>`. See docs/backup.md.
+  backup:
+    snapshots:
+      enabled: false
+      intervalHours: 6
+      retentionDays: 14
+      # snapshotClassName: ""   # empty uses the cluster's default VolumeSnapshotClass
+  # Optional SQL backend for historical records — audit events, sandbox
+  # lifecycle events, and cost snapshots that outlive a Sandbox object
+  # (Kubernetes Events are GC'd after ~1h). OPT-IN: when disabled (default)
+  # the Router uses a no-op backend and Kubernetes stays the source of truth.
+  # Recording is best-effort — a backend error is logged and never blocks the
+  # request it describes. The bundled "sqlite" driver is pure-Go (no CGO) and
+  # persists to a PVC; Postgres/MySQL are bring-your-own (wire a driver in
+  # cmd/router and point at your DSN).
+  storage:
+    enabled: false
+    driver: sqlite
+    sqlite:
+      # Path to the SQLite database file inside the Router pod. The parent
+      # directory is mounted from the PVC below when persistence is enabled.
+      path: /var/lib/agenttier/agenttier.db
+      persistence:
+        # When true (and driver is sqlite) the chart provisions a small PVC so
+        # records survive Router restarts. Turn off only for ephemeral testing.
+        enabled: true
+        size: 1Gi
+        storageClassName: ""   # empty uses the cluster's default StorageClass
+  # Lifecycle notifications (sandbox Error / Stopped). Each channel is opt-in
+  # and delivers to the sandbox owner. Secret-bearing values (webhook/Slack
+  # URLs contain tokens; SMTP credentials) are referenced from Kubernetes
+  # Secrets, never inlined here. Disabled by default — no user is blocked
+  # without it.
+  notifications:
+    enabled: false
+    # Generic webhook: POSTs the notification JSON. Provide the URL via a
+    # Secret (it usually embeds a token). secretKey defaults to "url".
+    webhook:
+      secretName: ""
+      secretKey: "url"
+    # Slack incoming-webhook URL, also via a Secret.
+    slack:
+      secretName: ""
+      secretKey: "url"
+    # SMTP email. host/port/from are non-secret; username+password come from
+    # a Secret with keys "username" and "password" (omit credentialsSecret for
+    # an unauthenticated relay such as a local MTA sidecar).
+    email:
+      host: ""
+      port: 587
+      from: ""
+      credentialsSecret: ""
   # Validating admission webhook for Sandbox resources.
   #
   # When enabled, the controller serves an admission webhook that (1) stamps

@@ -34,6 +34,7 @@ const (
 	NotifyIdleWarning     NotificationType = "idle_warning"
 	NotifyError           NotificationType = "error"
 	NotifyAutoRestart     NotificationType = "auto_restart"
+	NotifySandboxStopped  NotificationType = "sandbox_stopped"
 	NotifySharedChange    NotificationType = "shared_sandbox_changed"
 	NotifyGovernanceLimit NotificationType = "governance_limit"
 	NotifyErrorSpike      NotificationType = "error_spike"

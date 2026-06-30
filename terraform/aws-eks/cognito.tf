@@ -1,9 +1,22 @@
-# AWS Cognito User Pool for AgentLoft OIDC Authentication
+# AWS Cognito user pool for AgentTier OIDC authentication.
+#
+# AgentTier's router validates OIDC ID tokens and maps a configurable group
+# claim to admin access. This provisions a user pool, an SPA app client
+# (PKCE, no client secret), and an admin group whose name matches the
+# `auth.oidc.adminGroup` the AgentTier chart expects. Wiring into the Helm
+# release happens in agenttier.tf.
 
-resource "aws_cognito_user_pool" "agentloft" {
+locals {
+  cognito_issuer_url = "https://cognito-idp.${var.region}.amazonaws.com/${aws_cognito_user_pool.agenttier.id}"
+  cognito_domain_url = "https://${aws_cognito_user_pool_domain.agenttier.domain}.auth.${var.region}.amazoncognito.com"
+}
+
+resource "aws_cognito_user_pool" "agenttier" {
   name = "${var.cluster_name}-users"
 
-  # Password policy
+  # Auto-verify email so invited users can confirm themselves.
+  auto_verified_attributes = ["email"]
+
   password_policy {
     minimum_length    = 8
     require_lowercase = true
@@ -12,10 +25,6 @@ resource "aws_cognito_user_pool" "agentloft" {
     require_uppercase = true
   }
 
-  # Auto-verify email
-  auto_verified_attributes = ["email"]
-
-  # Schema: email is required
   schema {
     name                = "email"
     attribute_data_type = "String"
@@ -27,50 +36,47 @@ resource "aws_cognito_user_pool" "agentloft" {
     }
   }
 
-  # Admin create user config
   admin_create_user_config {
     allow_admin_create_user_only = false
   }
 
-  tags = {
-    Environment = "evaluation"
-    Project     = "agentloft"
-  }
+  tags = local.tags
 }
 
-# User Pool Domain (for hosted UI)
-resource "aws_cognito_user_pool_domain" "agentloft" {
-  domain       = "${var.cluster_name}-auth"
-  user_pool_id = aws_cognito_user_pool.agentloft.id
+# Hosted-UI domain. Cognito domain prefixes must be globally unique within a
+# region; override var.cognito_domain_prefix if the default is taken.
+resource "aws_cognito_user_pool_domain" "agenttier" {
+  domain       = var.cognito_domain_prefix != "" ? var.cognito_domain_prefix : "${var.cluster_name}-auth"
+  user_pool_id = aws_cognito_user_pool.agenttier.id
 }
 
-# App Client for AgentLoft
-resource "aws_cognito_user_pool_client" "agentloft" {
-  name         = "agentloft-web"
-  user_pool_id = aws_cognito_user_pool.agentloft.id
+# SPA app client (the AgentTier web UI). Public client using PKCE, so no
+# client secret is generated.
+resource "aws_cognito_user_pool_client" "agenttier" {
+  name         = "agenttier-web"
+  user_pool_id = aws_cognito_user_pool.agenttier.id
 
-  # OAuth settings
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_flows_user_pool_client = true
   allowed_oauth_scopes                 = ["openid", "email", "profile"]
   supported_identity_providers         = ["COGNITO"]
 
-  # Callback URLs (update with actual domain after deployment)
-  callback_urls = [
+  # Callback / logout URLs. Add your AgentTier URL via var.agenttier_url once
+  # the load balancer hostname is known (re-apply to update).
+  callback_urls = distinct(compact([
     "http://localhost:3000/callback",
     "http://localhost:8080/callback",
-    var.agentloft_url != "" ? "${var.agentloft_url}/callback" : "http://localhost:3000/callback",
-  ]
+    var.agenttier_url != "" ? "${var.agenttier_url}/callback" : "",
+  ]))
 
-  logout_urls = [
+  logout_urls = distinct(compact([
     "http://localhost:3000",
-    var.agentloft_url != "" ? var.agentloft_url : "http://localhost:3000",
-  ]
+    var.agenttier_url != "" ? var.agenttier_url : "",
+  ]))
 
-  # Token validity
-  access_token_validity  = 1  # hours
-  id_token_validity      = 1  # hours
-  refresh_token_validity = 30 # days
+  access_token_validity  = 1
+  id_token_validity      = 1
+  refresh_token_validity = 30
 
   token_validity_units {
     access_token  = "hours"
@@ -78,27 +84,26 @@ resource "aws_cognito_user_pool_client" "agentloft" {
     refresh_token = "days"
   }
 
-  # Generate client secret
-  generate_secret = false # SPA clients should not use client secrets (PKCE instead)
+  generate_secret = false
 
-  # Enable PKCE
   explicit_auth_flows = [
     "ALLOW_REFRESH_TOKEN_AUTH",
     "ALLOW_USER_SRP_AUTH",
   ]
 }
 
-# Admin group
+# Admin group. The name matches the AgentTier chart's default
+# auth.oidc.adminGroup so members are granted admin in the UI/API.
 resource "aws_cognito_user_group" "admins" {
-  name         = "agentloft-admins"
-  user_pool_id = aws_cognito_user_pool.agentloft.id
-  description  = "AgentLoft administrators with full access"
+  name         = "agenttier-admins"
+  user_pool_id = aws_cognito_user_pool.agenttier.id
+  description  = "AgentTier administrators with full access"
 }
 
-# Create a test admin user
+# Optional seed admin user, handy for evaluation clusters.
 resource "aws_cognito_user" "admin" {
   count        = var.create_test_user ? 1 : 0
-  user_pool_id = aws_cognito_user_pool.agentloft.id
+  user_pool_id = aws_cognito_user_pool.agenttier.id
   username     = var.test_user_email
 
   attributes = {
@@ -109,39 +114,9 @@ resource "aws_cognito_user" "admin" {
   temporary_password = var.test_user_password
 }
 
-# Add test user to admin group
 resource "aws_cognito_user_in_group" "admin" {
   count        = var.create_test_user ? 1 : 0
-  user_pool_id = aws_cognito_user_pool.agentloft.id
+  user_pool_id = aws_cognito_user_pool.agenttier.id
   group_name   = aws_cognito_user_group.admins.name
   username     = aws_cognito_user.admin[0].username
-}
-
-# --- Outputs ---
-
-output "cognito_user_pool_id" {
-  value = aws_cognito_user_pool.agentloft.id
-}
-
-output "cognito_client_id" {
-  value = aws_cognito_user_pool_client.agentloft.id
-}
-
-output "cognito_issuer_url" {
-  value = "https://cognito-idp.${var.region}.amazonaws.com/${aws_cognito_user_pool.agentloft.id}"
-}
-
-output "cognito_domain" {
-  value = "https://${aws_cognito_user_pool_domain.agentloft.domain}.auth.${var.region}.amazoncognito.com"
-}
-
-output "helm_auth_values" {
-  value = <<-EOT
-    auth:
-      oidc:
-        issuerUrl: "https://cognito-idp.${var.region}.amazonaws.com/${aws_cognito_user_pool.agentloft.id}"
-        clientId: "${aws_cognito_user_pool_client.agentloft.id}"
-        adminGroup: "agentloft-admins"
-        groupClaim: "cognito:groups"
-  EOT
 }

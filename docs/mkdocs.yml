@@ -52,15 +52,20 @@ nav:
     - Governance: governance.md
     - Port forwarding: port-forwarding.md
     - Cloning: cloning.md
+    - Backup and restore: backup.md
     - Agent mode: agent-mode.md
     - Agent memory: agent-memory.md
   - Reference:
     - CLI: cli.md
     - CLI command reference: cli-reference.md
     - Python SDK: sdk.md
+    - API versioning: api-versioning.md
   - Operations:
     - Verifying images: verifying-images.md
+    - gVisor sandboxing: gvisor.md
     - Scaling: scaling.md
+    - Storage backend: storage.md
+    - Performance: performance.md
     - Observability: observability.md
     - Troubleshooting: troubleshooting.md
 

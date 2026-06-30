@@ -39,6 +39,7 @@ import (
 	agentotel "github.com/agenttier/agenttier/pkg/otel"
 	"github.com/agenttier/agenttier/pkg/router"
 	"github.com/agenttier/agenttier/pkg/router/terminal"
+	"github.com/agenttier/agenttier/pkg/storage"
 	"github.com/agenttier/agenttier/pkg/version"
 )
 
@@ -194,6 +195,25 @@ func main() {
 		SandboxNamespace: sandboxNamespace,
 		DevAuth:          devAuth,
 		RateLimit:        rateLimitCfg,
+	}
+
+	// Optional SQL historical-records backend. Off by default — Kubernetes
+	// Events stay the source of truth. When STORAGE_SQLITE_PATH is set we
+	// open the bundled pure-Go SQLite store; this is best-effort, so a
+	// failure logs and the Router continues with the no-op backend (graceful
+	// degradation, never blocks startup). Postgres/MySQL are bring-your-own:
+	// an operator wires storage.NewSQLBackend with their driver here.
+	if sqlitePath := os.Getenv("STORAGE_SQLITE_PATH"); sqlitePath != "" {
+		backendCtx, backendCancel := context.WithTimeout(context.Background(), 10*time.Second)
+		store, err := storage.OpenSQLite(backendCtx, sqlitePath)
+		backendCancel()
+		if err != nil {
+			logger.Warn("failed to open SQLite storage backend; continuing with no-op backend",
+				"path", sqlitePath, "error", err)
+		} else {
+			config.StorageBackend = store
+			logger.Info("SQLite storage backend enabled", "path", sqlitePath)
+		}
 	}
 
 	server := router.NewServer(config, k8sClient, bridge)

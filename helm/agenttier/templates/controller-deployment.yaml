@@ -32,6 +32,14 @@ spec:
             - --metrics-bind-address=:8081
             - --health-probe-bind-address=:8082
             - --manage-crds={{ .Values.controller.manageCRDs }}
+            {{- if .Values.optional.backup.snapshots.enabled }}
+            - --backup-snapshots
+            - --backup-interval={{ .Values.optional.backup.snapshots.intervalHours | default 6 }}h
+            - --backup-retention={{ mul (.Values.optional.backup.snapshots.retentionDays | default 14) 24 }}h
+            {{- if .Values.optional.backup.snapshots.snapshotClassName }}
+            - --backup-snapshot-class={{ .Values.optional.backup.snapshots.snapshotClassName }}
+            {{- end }}
+            {{- end }}
             {{- if and .Values.optional.agentMemorySidecar .Values.optional.agentMemorySidecar.enabled }}
             - --agent-memory-sidecar-image={{ .Values.optional.agentMemorySidecar.image }}
             {{- end }}
@@ -55,6 +63,48 @@ spec:
               value: "{{ include "agenttier.fullname" . }}-otel-collector.{{ .Release.Namespace }}.svc.cluster.local:4317"
             - name: OTEL_EXPORTER_OTLP_INSECURE
               value: "true"
+            {{- end }}
+            {{- if .Values.optional.notifications.enabled }}
+            {{- with .Values.optional.notifications.webhook }}
+            {{- if .secretName }}
+            - name: NOTIFY_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .secretKey | default "url" }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.optional.notifications.slack }}
+            {{- if .secretName }}
+            - name: NOTIFY_SLACK_WEBHOOK_URL
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .secretName }}
+                  key: {{ .secretKey | default "url" }}
+            {{- end }}
+            {{- end }}
+            {{- with .Values.optional.notifications.email }}
+            {{- if .host }}
+            - name: NOTIFY_SMTP_HOST
+              value: {{ .host | quote }}
+            - name: NOTIFY_SMTP_PORT
+              value: {{ .port | default 587 | quote }}
+            - name: NOTIFY_SMTP_FROM
+              value: {{ .from | default "agenttier@localhost" | quote }}
+            {{- if .credentialsSecret }}
+            - name: NOTIFY_SMTP_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .credentialsSecret }}
+                  key: username
+            - name: NOTIFY_SMTP_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .credentialsSecret }}
+                  key: password
+            {{- end }}
+            {{- end }}
+            {{- end }}
             {{- end }}
           ports:
             - name: metrics

@@ -40,6 +40,7 @@ import (
 	"github.com/agenttier/agenttier/pkg/router/auth"
 	"github.com/agenttier/agenttier/pkg/router/portforward"
 	"github.com/agenttier/agenttier/pkg/router/terminal"
+	"github.com/agenttier/agenttier/pkg/storage"
 
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
 )
@@ -79,6 +80,11 @@ type Config struct {
 	// to DefaultRateLimitConfig() or a customized variant to enforce
 	// limits.
 	RateLimit RateLimitConfig
+	// StorageBackend is the optional historical-records sink (SQL). Nil
+	// (the default) means a no-op backend — Kubernetes Events stay the
+	// source of truth. cmd/router constructs a SQLBackend here when an
+	// operator configures a DSN.
+	StorageBackend storage.Backend
 }
 
 // Server is the main Router HTTP server.
@@ -101,6 +107,10 @@ type Server struct {
 	// storage with an LRU cache. Always constructed; the store is the
 	// Kubernetes Secret store.
 	apiKeyValidator *auth.APIKeyValidator
+	// store is the optional historical-records backend (SQL) for audit
+	// events, sandbox events, and cost snapshots. Defaults to a no-op so
+	// the Kubernetes-native path is unchanged when no SQL is configured.
+	store storage.Backend
 }
 
 // NewServer creates a new Router server with all routes registered.
@@ -127,6 +137,13 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 			PreviewDomain:    config.PreviewDomain,
 			IngressClassName: config.IngressClassName,
 		}),
+	}
+	// Historical-records backend: a SQL store when the operator configured
+	// one (injected via Config), otherwise a no-op so the Kubernetes-native
+	// behavior is unchanged.
+	s.store = config.StorageBackend
+	if s.store == nil {
+		s.store = storage.NewNoopBackend()
 	}
 	// Rate limiter: zero-config = disabled (today's behavior). Operators
 	// opt in by setting Helm values that populate config.RateLimit, which
@@ -190,6 +207,9 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	// Per-user rate limit overlays the per-IP cap for authenticated
 	// callers. Mounted after authMiddleware so claims are available.
 	api.Use(s.rateLimitAuthenticatedMiddleware)
+	// Stamps Deprecation/Sunset headers on any endpoint flagged in
+	// deprecatedRoutes (empty today — no-op until an /api/v2 ships).
+	api.Use(s.deprecationMiddleware)
 
 	// Sandbox CRUD
 	api.HandleFunc("/sandboxes", s.handleListSandboxes).Methods("GET")

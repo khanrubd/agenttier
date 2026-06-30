@@ -9,6 +9,8 @@ compat guarantee. The public clients are the only consumers.
 
 from __future__ import annotations
 
+import os
+import warnings
 from typing import Any
 
 import httpx
@@ -21,6 +23,38 @@ from agenttier.exceptions import (
     NotFoundError,
     PolicyViolationError,
 )
+
+# Endpoints we've already warned about (method, url) so a deprecation notice
+# fires at most once per process per endpoint.
+_warned_deprecations: set[tuple[str, str]] = set()
+
+
+def warn_if_deprecated(response: httpx.Response) -> None:
+    """Emit a one-time DeprecationWarning when the Router flags an endpoint.
+
+    The Router stamps ``Deprecation: true`` (+ optional ``Sunset``) on
+    endpoints superseded by a newer API version. We surface that to SDK users
+    once per endpoint per process. Silence with
+    ``AGENTTIER_DEPRECATION_WARNINGS=off``.
+    """
+    if response.headers.get("Deprecation", "").lower() != "true":
+        return
+    if os.environ.get("AGENTTIER_DEPRECATION_WARNINGS", "").lower() == "off":
+        return
+    method = response.request.method if response.request is not None else ""
+    url = str(response.url)
+    key = (method, url)
+    if key in _warned_deprecations:
+        return
+    _warned_deprecations.add(key)
+    msg = f"AgentTier API endpoint {method} {url} is deprecated"
+    sunset = response.headers.get("Sunset", "")
+    if sunset:
+        msg += f" and will be removed after {sunset}"
+    link = response.headers.get("Link", "")
+    if "successor-version" in link:
+        msg += f"; see {link}"
+    warnings.warn(msg, DeprecationWarning, stacklevel=3)
 
 
 def _decode_body(response: httpx.Response) -> Any:
@@ -44,6 +78,7 @@ def raise_for_status(response: httpx.Response) -> None:
     body when the response is non-2xx so the body-decode logic below works
     on either streaming or buffered responses without bifurcating the API.
     """
+    warn_if_deprecated(response)
     if response.is_success:
         return
 

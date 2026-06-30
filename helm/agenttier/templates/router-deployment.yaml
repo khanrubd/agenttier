@@ -71,6 +71,10 @@ spec:
             - name: OTEL_EXPORTER_OTLP_INSECURE
               value: "true"
             {{- end }}
+            {{- if and .Values.optional.storage.enabled (eq .Values.optional.storage.driver "sqlite") }}
+            - name: STORAGE_SQLITE_PATH
+              value: {{ .Values.optional.storage.sqlite.path | quote }}
+            {{- end }}
           ports:
             - name: http
               containerPort: 8080
@@ -89,6 +93,17 @@ spec:
             periodSeconds: 5
           resources:
             {{- toYaml .Values.router.resources | nindent 12 }}
+          {{- if and .Values.optional.storage.enabled (eq .Values.optional.storage.driver "sqlite") .Values.optional.storage.sqlite.persistence.enabled }}
+          volumeMounts:
+            - name: storage
+              mountPath: {{ dir .Values.optional.storage.sqlite.path | quote }}
+          {{- end }}
+      {{- if and .Values.optional.storage.enabled (eq .Values.optional.storage.driver "sqlite") .Values.optional.storage.sqlite.persistence.enabled }}
+      volumes:
+        - name: storage
+          persistentVolumeClaim:
+            claimName: {{ include "agenttier.fullname" . }}-router-storage
+      {{- end }}
 ---
 apiVersion: v1
 kind: Service

@@ -68,6 +68,8 @@ jobs:
         run: |
           npm ci
           npm run build
+      - name: Web UI bundle-size gate
+        run: ./hack/check-bundle-size.sh web-ui/dist
       - name: Build Docker images
         run: |
           docker build -t agenttier-controller:ci -f Dockerfile.controller .

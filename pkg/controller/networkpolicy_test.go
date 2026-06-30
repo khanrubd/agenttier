@@ -185,6 +185,44 @@ func TestNetworkPolicyBuilder_PeerSandboxes(t *testing.T) {
 	}
 }
 
+func TestNetworkPolicyBuilder_PeerSandboxesCustomSelector(t *testing.T) {
+	builder := &NetworkPolicyBuilder{}
+	sandbox := newTestSandbox("test-sandbox")
+
+	// A custom selector restricts peering to sandboxes carrying a team label
+	// instead of the default "all managed sandboxes in the namespace".
+	networkSpec := &agenttierv1alpha1.NetworkSpec{
+		AllowPeerSandboxes: true,
+		PeerSandboxSelector: &metav1.LabelSelector{
+			MatchLabels: map[string]string{"team": "blue"},
+		},
+	}
+
+	np := builder.Build(sandbox, networkSpec, NetworkPolicyOptions{})
+
+	if len(np.Spec.Egress) != 2 || len(np.Spec.Ingress) != 1 {
+		t.Fatalf("expected DNS+peer egress (2) and peer ingress (1), got egress=%d ingress=%d",
+			len(np.Spec.Egress), len(np.Spec.Ingress))
+	}
+	for _, dir := range []struct {
+		name string
+		sel  *metav1.LabelSelector
+	}{
+		{"ingress", np.Spec.Ingress[0].From[0].PodSelector},
+		{"egress", np.Spec.Egress[1].To[0].PodSelector},
+	} {
+		if dir.sel == nil {
+			t.Fatalf("%s: expected a pod selector", dir.name)
+		}
+		if dir.sel.MatchLabels["team"] != "blue" {
+			t.Errorf("%s: expected custom team=blue selector, got %v", dir.name, dir.sel.MatchLabels)
+		}
+		if _, hasManaged := dir.sel.MatchLabels["agenttier.io/managed"]; hasManaged {
+			t.Errorf("%s: custom selector must replace, not merge with, the default managed selector", dir.name)
+		}
+	}
+}
+
 func TestNetworkPolicyBuilder_PodSelector(t *testing.T) {
 	builder := &NetworkPolicyBuilder{}
 	sandbox := newTestSandbox("my-sandbox")

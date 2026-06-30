@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"strconv"
 	"time"
 
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
@@ -38,10 +39,12 @@ import (
 
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
 	"github.com/agenttier/agenttier/pkg/controller"
+	"github.com/agenttier/agenttier/pkg/controller/backup"
 	"github.com/agenttier/agenttier/pkg/controller/warmpool"
 	agenttierwebhook "github.com/agenttier/agenttier/pkg/controller/webhook"
 	"github.com/agenttier/agenttier/pkg/crds"
 	"github.com/agenttier/agenttier/pkg/governance"
+	"github.com/agenttier/agenttier/pkg/notifications"
 	agentotel "github.com/agenttier/agenttier/pkg/otel"
 	"github.com/agenttier/agenttier/pkg/version"
 )
@@ -74,6 +77,10 @@ func main() {
 		sandboxNamespace        string
 		enableWebhook           bool
 		manageCRDs              bool
+		backupSnapshots         bool
+		backupInterval          time.Duration
+		backupRetention         time.Duration
+		backupSnapshotClass     string
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8081", "The address the metrics endpoint binds to.")
@@ -104,6 +111,11 @@ func main() {
 		"Serve the Sandbox validating/mutating admission webhook. Requires a serving certificate mounted at the webhook server cert dir (provided by cert-manager via the Helm chart).")
 	flag.BoolVar(&manageCRDs, "manage-crds", true,
 		"Apply the controller's bundled CRDs on startup (create-or-update). Keeps CRDs in lockstep with the running controller version, since Helm only installs CRDs on first install and never upgrades them. Set false if you manage CRDs out-of-band (e.g. GitOps/ArgoCD).")
+	flag.BoolVar(&backupSnapshots, "backup-snapshots", false,
+		"Enable scheduled VolumeSnapshot backups of managed sandbox PVCs (disaster-recovery Layer 1). Requires a VolumeSnapshotClass and the CSI snapshotter.")
+	flag.DurationVar(&backupInterval, "backup-interval", 6*time.Hour, "Interval between backup snapshot passes.")
+	flag.DurationVar(&backupRetention, "backup-retention", 14*24*time.Hour, "How long to keep backup snapshots before pruning.")
+	flag.StringVar(&backupSnapshotClass, "backup-snapshot-class", "", "VolumeSnapshotClass for backup snapshots. Empty uses the cluster default.")
 
 	opts := zap.Options{Development: true}
 	opts.BindFlags(flag.CommandLine)
@@ -178,6 +190,40 @@ func main() {
 		os.Exit(1)
 	}
 
+	// Build the notifications fan-out from Helm-driven env config. Each
+	// channel is opt-in (configured only when its env vars are set); secrets
+	// arrive via Secret-backed env refs, never literals in the chart. When no
+	// channel is configured the Notifier is left nil and notifications are a
+	// no-op — no user is blocked without it.
+	notifier := notifications.NewNotifier(bootLogger)
+	var notifyChannels []string
+	if url := os.Getenv("NOTIFY_WEBHOOK_URL"); url != "" {
+		notifier.RegisterChannel(notifications.NewWebhookChannel(url))
+		notifyChannels = append(notifyChannels, "webhook")
+	}
+	if url := os.Getenv("NOTIFY_SLACK_WEBHOOK_URL"); url != "" {
+		notifier.RegisterChannel(notifications.NewSlackChannel(url))
+		notifyChannels = append(notifyChannels, "slack")
+	}
+	if host := os.Getenv("NOTIFY_SMTP_HOST"); host != "" {
+		port := 587
+		if p, perr := strconv.Atoi(os.Getenv("NOTIFY_SMTP_PORT")); perr == nil && p > 0 {
+			port = p
+		}
+		from := os.Getenv("NOTIFY_SMTP_FROM")
+		if from == "" {
+			from = "agenttier@localhost"
+		}
+		notifier.RegisterChannel(notifications.NewEmailChannel(host, port,
+			os.Getenv("NOTIFY_SMTP_USERNAME"), os.Getenv("NOTIFY_SMTP_PASSWORD"), from))
+		notifyChannels = append(notifyChannels, "email")
+	}
+	if len(notifyChannels) == 0 {
+		notifier = nil // nothing configured → disable
+	} else {
+		setupLog.Info("notifications enabled", "channels", notifyChannels)
+	}
+
 	// Register the Sandbox reconciler
 	if err := (&controller.SandboxReconciler{
 		Client:                  mgr.GetClient(),
@@ -190,6 +236,8 @@ func main() {
 		AgentMemorySidecarImage: agentMemorySidecarImage,
 		InstallNamespace:        namespace,
 		PoolSandboxNamespace:    sandboxNamespace,
+		Notifier:                notifier,
+		NotifyChannels:          notifyChannels,
 	}).SetupWithManager(mgr); err != nil {
 		setupLog.Error(err, "unable to create controller", "controller", "Sandbox")
 		os.Exit(1)
@@ -230,6 +278,20 @@ func main() {
 	})); err != nil {
 		setupLog.Error(err, "unable to add warm pool reconciler")
 		os.Exit(1)
+	}
+
+	// Start the scheduled-backup loop (leader-only) when enabled. Snapshots
+	// managed sandbox PVCs on an interval and prunes by retention; restore is
+	// the existing spec.cloneFromSnapshot path.
+	if backupSnapshots {
+		backupScheduler := backup.NewScheduler(mgr.GetClient(), bootLogger, sandboxNamespace, backupInterval, backupRetention, backupSnapshotClass)
+		if err := mgr.Add(manager.RunnableFunc(func(ctx context.Context) error {
+			backupScheduler.RunLoop(ctx)
+			return nil
+		})); err != nil {
+			setupLog.Error(err, "unable to add backup scheduler")
+			os.Exit(1)
+		}
 	}
 
 	setupLog.Info("starting manager")

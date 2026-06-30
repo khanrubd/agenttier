@@ -41,6 +41,7 @@ import (
 
 	agenttierv1alpha1 "github.com/agenttier/agenttier/api/v1alpha1"
 	"github.com/agenttier/agenttier/pkg/controller/warmpool"
+	"github.com/agenttier/agenttier/pkg/notifications"
 	agentotel "github.com/agenttier/agenttier/pkg/otel"
 )
 
@@ -82,6 +83,36 @@ type SandboxReconciler struct {
 	// namespaces). Set from SANDBOX_NAMESPACE in the controller deployment;
 	// empty falls back to the warm pool's DefaultSandboxNamespace ("default").
 	PoolSandboxNamespace string
+	// Notifier, when non-nil, fans out lifecycle notifications (sandbox
+	// Error / Stopped) to the channels named in NotifyChannels. Constructed
+	// from Helm-driven channel config in cmd/controller; nil disables
+	// notifications entirely (the default — no user is blocked without it).
+	Notifier *notifications.Notifier
+	// NotifyChannels is the set of channel names (webhook / slack / email) to
+	// deliver lifecycle notifications to. Empty disables delivery even when
+	// Notifier is set.
+	NotifyChannels []string
+}
+
+// notify fans out a lifecycle notification for the sandbox to the configured
+// channels, addressed to the sandbox owner. A no-op when no Notifier or
+// channels are configured. Best-effort: delivery happens in background
+// goroutines inside the Notifier and never blocks or fails the reconcile.
+func (r *SandboxReconciler) notify(ctx context.Context, sandbox *agenttierv1alpha1.Sandbox, nType notifications.NotificationType, message string) {
+	if r.Notifier == nil || len(r.NotifyChannels) == 0 {
+		return
+	}
+	n := &notifications.Notification{
+		Type:        nType,
+		SandboxID:   string(sandbox.UID),
+		SandboxName: sandbox.Name,
+		Message:     message,
+	}
+	if sandbox.Spec.CreatedBy != nil {
+		n.UserID = sandbox.Spec.CreatedBy.Sub
+		n.UserEmail = sandbox.Spec.CreatedBy.Email
+	}
+	r.Notifier.Send(ctx, n, r.NotifyChannels)
 }
 
 func (r *SandboxReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -653,6 +684,7 @@ func (r *SandboxReconciler) stopSandbox(ctx context.Context, sandbox *agenttierv
 	}
 
 	r.Recorder.Event(sandbox, corev1.EventTypeNormal, "Stopped", reason)
+	r.notify(ctx, sandbox, notifications.NotifySandboxStopped, reason)
 	return ctrl.Result{}, nil
 }
 
@@ -765,6 +797,7 @@ func (r *SandboxReconciler) transitionToError(ctx context.Context, sandbox *agen
 		return ctrl.Result{}, err
 	}
 	r.Recorder.Event(sandbox, corev1.EventTypeWarning, "Error", message)
+	r.notify(ctx, sandbox, notifications.NotifyError, message)
 	return ctrl.Result{}, nil
 }
 

@@ -60,7 +60,6 @@ PACKAGES=(
   sandbox-openclaw
   sandbox-strands-bedrock
   sandbox-rl
-  sandbox-openhands
   otel-collector
 )
 

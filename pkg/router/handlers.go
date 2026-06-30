@@ -44,7 +44,9 @@ import (
 	"github.com/agenttier/agenttier/pkg/controller/warmpool"
 	"github.com/agenttier/agenttier/pkg/governance"
 	"github.com/agenttier/agenttier/pkg/router/portforward"
+	"github.com/agenttier/agenttier/pkg/router/sharelinks"
 	"github.com/agenttier/agenttier/pkg/router/terminal"
+	"github.com/agenttier/agenttier/pkg/storage"
 )
 
 var upgrader = websocket.Upgrader{
@@ -184,6 +186,7 @@ func (s *Server) handleCreateSandbox(w http.ResponseWriter, r *http.Request) {
 		"status":      "Creating",
 		"templateRef": sandbox.Spec.TemplateRef.Name,
 	})
+	s.recordAudit(r.Context(), claims, "create", "sandbox", sandbox.Name)
 }
 
 func (s *Server) handleListSandboxes(w http.ResponseWriter, r *http.Request) {
@@ -238,7 +241,7 @@ func (s *Server) handleGetSandbox(w http.ResponseWriter, r *http.Request) {
 	}
 
 	sandboxID := mux.Vars(r)["id"]
-	sandbox, err := s.getSandboxWithAuthCheck(r.Context(), sandboxID, claims)
+	sandbox, err := s.getSandboxForRead(r.Context(), sandboxID, claims)
 	if err != nil {
 		respondError(w, http.StatusNotFound, err.Error())
 		return
@@ -567,8 +570,8 @@ func (s *Server) handleTerminalWebSocket(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// Check ownership
-	if !claims.IsAdmin && (sandbox.Spec.CreatedBy == nil || sandbox.Spec.CreatedBy.Sub != claims.Sub) {
+	// Check access — owner, admin, or a user/group the sandbox is shared with.
+	if !userCanAccessSandbox(sandbox, claims) {
 		http.Error(w, "access denied", http.StatusForbidden)
 		return
 	}
@@ -1219,17 +1222,216 @@ func removeForwardedPort(sandbox *agenttierv1alpha1.Sandbox, port int32) bool {
 	}
 	return false
 }
+
+// handleGetSharing returns the sandbox's sharing config (users, groups, and
+// share-link metadata). Token hashes are never returned. Owner/admin only.
 func (s *Server) handleGetSharing(w http.ResponseWriter, r *http.Request) {
-	respondJSON(w, http.StatusOK, map[string]interface{}{"users": []interface{}{}})
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	sandbox, err := s.getSandboxWithAuthCheck(r.Context(), mux.Vars(r)["id"], claims)
+	if err != nil {
+		respondError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, sharingToJSON(sandbox.Spec.Sharing))
 }
+
+// handleShareSandbox grants a user or group access at a permission level.
+// Body: {"identity": "...", "level": "viewer|collaborator", "kind": "user|group"}.
+// Idempotent: re-sharing an identity updates its level. Owner/admin only.
 func (s *Server) handleShareSandbox(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "not yet implemented")
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	var req struct {
+		Identity string `json:"identity"`
+		Level    string `json:"level"`
+		Kind     string `json:"kind,omitempty"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		respondError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+		return
+	}
+	if req.Identity == "" {
+		respondError(w, http.StatusBadRequest, "identity is required")
+		return
+	}
+	if req.Level != "viewer" && req.Level != "collaborator" {
+		respondError(w, http.StatusBadRequest, "level must be \"viewer\" or \"collaborator\"")
+		return
+	}
+	sandbox, err := s.getSandboxWithAuthCheck(r.Context(), mux.Vars(r)["id"], claims)
+	if err != nil {
+		respondError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if sandbox.Spec.Sharing == nil {
+		sandbox.Spec.Sharing = &agenttierv1alpha1.SharingSpec{}
+	}
+	perm := agenttierv1alpha1.SharePermission{Identity: req.Identity, Level: req.Level}
+	if req.Kind == "group" {
+		sandbox.Spec.Sharing.Groups = upsertSharePermission(sandbox.Spec.Sharing.Groups, perm)
+	} else {
+		sandbox.Spec.Sharing.Users = upsertSharePermission(sandbox.Spec.Sharing.Users, perm)
+	}
+	if err := s.k8sClient.Update(r.Context(), sandbox); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to update sharing: "+err.Error())
+		return
+	}
+	respondJSON(w, http.StatusOK, sharingToJSON(sandbox.Spec.Sharing))
 }
+
+// handleRevokeShare removes a user's (or group's) access. The {userId} path
+// segment is the identity (URL-encoded email/group). Owner/admin only.
 func (s *Server) handleRevokeShare(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "not yet implemented")
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	identity := mux.Vars(r)["userId"]
+	sandbox, err := s.getSandboxWithAuthCheck(r.Context(), mux.Vars(r)["id"], claims)
+	if err != nil {
+		respondError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	if sandbox.Spec.Sharing != nil {
+		sandbox.Spec.Sharing.Users = removeSharePermission(sandbox.Spec.Sharing.Users, identity)
+		sandbox.Spec.Sharing.Groups = removeSharePermission(sandbox.Spec.Sharing.Groups, identity)
+		if err := s.k8sClient.Update(r.Context(), sandbox); err != nil {
+			respondError(w, http.StatusInternalServerError, "failed to update sharing: "+err.Error())
+			return
+		}
+	}
+	respondJSON(w, http.StatusOK, map[string]interface{}{"status": "revoked", "identity": identity})
 }
+
+// handleCreateShareLink mints an expiring share link. The raw token is
+// returned EXACTLY ONCE in this response; only its SHA-256 hash is persisted
+// on the CR. Body: {"level": "viewer|collaborator", "expiresIn": "24h",
+// "maxUses": 0}. Owner/admin only.
 func (s *Server) handleCreateShareLink(w http.ResponseWriter, r *http.Request) {
-	respondError(w, http.StatusNotImplemented, "not yet implemented")
+	claims := GetClaims(r.Context())
+	if claims == nil {
+		respondError(w, http.StatusUnauthorized, "authentication required")
+		return
+	}
+	var req struct {
+		Level     string `json:"level"`
+		ExpiresIn string `json:"expiresIn,omitempty"`
+		MaxUses   int    `json:"maxUses,omitempty"`
+	}
+	if r.ContentLength > 0 {
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+			respondError(w, http.StatusBadRequest, "invalid request body: "+err.Error())
+			return
+		}
+	}
+	if req.Level == "" {
+		req.Level = "viewer"
+	}
+	if req.Level != "viewer" && req.Level != "collaborator" {
+		respondError(w, http.StatusBadRequest, "level must be \"viewer\" or \"collaborator\"")
+		return
+	}
+	var expiresAt *metav1.Time
+	if req.ExpiresIn != "" {
+		d, err := time.ParseDuration(req.ExpiresIn)
+		if err != nil || d <= 0 {
+			respondError(w, http.StatusBadRequest, "expiresIn must be a positive Go duration (e.g. \"24h\")")
+			return
+		}
+		t := metav1.NewTime(time.Now().Add(d))
+		expiresAt = &t
+	}
+	if req.MaxUses < 0 {
+		respondError(w, http.StatusBadRequest, "maxUses must be >= 0 (0 = unlimited)")
+		return
+	}
+	sandbox, err := s.getSandboxWithAuthCheck(r.Context(), mux.Vars(r)["id"], claims)
+	if err != nil {
+		respondError(w, http.StatusForbidden, err.Error())
+		return
+	}
+	id, rawToken, hash, err := sharelinks.Generate()
+	if err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to generate share link")
+		return
+	}
+	if sandbox.Spec.Sharing == nil {
+		sandbox.Spec.Sharing = &agenttierv1alpha1.SharingSpec{}
+	}
+	sandbox.Spec.Sharing.ShareLinks = append(sandbox.Spec.Sharing.ShareLinks, agenttierv1alpha1.ShareLink{
+		ID:        id,
+		TokenHash: hash,
+		Level:     req.Level,
+		ExpiresAt: expiresAt,
+		MaxUses:   req.MaxUses,
+	})
+	if err := s.k8sClient.Update(r.Context(), sandbox); err != nil {
+		respondError(w, http.StatusInternalServerError, "failed to persist share link: "+err.Error())
+		return
+	}
+	// The raw token is returned once, here, and never again.
+	respondJSON(w, http.StatusCreated, map[string]interface{}{
+		"id":        id,
+		"token":     rawToken,
+		"level":     req.Level,
+		"expiresAt": expiresAt,
+		"maxUses":   req.MaxUses,
+		"warning":   "Store this token now — it is shown only once.",
+	})
+}
+
+// upsertSharePermission adds perm, or updates the level if the identity is
+// already present.
+func upsertSharePermission(perms []agenttierv1alpha1.SharePermission, perm agenttierv1alpha1.SharePermission) []agenttierv1alpha1.SharePermission {
+	for i := range perms {
+		if perms[i].Identity == perm.Identity {
+			perms[i].Level = perm.Level
+			return perms
+		}
+	}
+	return append(perms, perm)
+}
+
+// removeSharePermission drops any permission matching identity.
+func removeSharePermission(perms []agenttierv1alpha1.SharePermission, identity string) []agenttierv1alpha1.SharePermission {
+	out := perms[:0]
+	for _, p := range perms {
+		if p.Identity != identity {
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
+// sharingToJSON renders a SharingSpec for the API, omitting share-link token
+// hashes (only non-secret link metadata is exposed).
+func sharingToJSON(sharing *agenttierv1alpha1.SharingSpec) map[string]interface{} {
+	users := []map[string]interface{}{}
+	groups := []map[string]interface{}{}
+	links := []map[string]interface{}{}
+	if sharing != nil {
+		for _, u := range sharing.Users {
+			users = append(users, map[string]interface{}{"identity": u.Identity, "level": u.Level})
+		}
+		for _, g := range sharing.Groups {
+			groups = append(groups, map[string]interface{}{"identity": g.Identity, "level": g.Level})
+		}
+		for _, l := range sharing.ShareLinks {
+			links = append(links, map[string]interface{}{
+				"id": l.ID, "level": l.Level, "expiresAt": l.ExpiresAt,
+				"maxUses": l.MaxUses, "usedCount": l.UsedCount,
+			})
+		}
+	}
+	return map[string]interface{}{"users": users, "groups": groups, "shareLinks": links}
 }
 func (s *Server) handleListPolicies(w http.ResponseWriter, r *http.Request) {
 	policies, err := s.governanceStore.ListPolicies(r.Context())
@@ -1642,6 +1844,73 @@ func (s *Server) getSandboxWithAuthCheck(ctx context.Context, sandboxID string, 
 	}
 
 	return sandbox, nil
+}
+
+// userCanAccessSandbox reports whether claims may READ/use the sandbox:
+// admins and the owner always can, plus any user or group it's been shared
+// with (regardless of level — viewer and collaborator both get access). It is
+// the read-path counterpart to getSandboxWithAuthCheck, which stays
+// owner/admin-only for lifecycle and sharing-management mutations.
+func userCanAccessSandbox(sandbox *agenttierv1alpha1.Sandbox, claims *Claims) bool {
+	if claims == nil {
+		return false
+	}
+	if claims.IsAdmin {
+		return true
+	}
+	if sandbox.Spec.CreatedBy != nil && sandbox.Spec.CreatedBy.Sub == claims.Sub {
+		return true
+	}
+	if sandbox.Spec.Sharing == nil {
+		return false
+	}
+	for _, u := range sandbox.Spec.Sharing.Users {
+		if u.Identity != "" && (u.Identity == claims.Sub || u.Identity == claims.Email) {
+			return true
+		}
+	}
+	for _, g := range sandbox.Spec.Sharing.Groups {
+		for _, cg := range claims.Groups {
+			if g.Identity == cg {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// getSandboxForRead resolves a sandbox and authorizes read/use access for
+// the owner, admins, OR users/groups it's shared with.
+func (s *Server) getSandboxForRead(ctx context.Context, sandboxID string, claims *Claims) (*agenttierv1alpha1.Sandbox, error) {
+	sandbox, err := s.resolveSandbox(ctx, sandboxID, "")
+	if err != nil {
+		return nil, err
+	}
+	if !userCanAccessSandbox(sandbox, claims) {
+		return nil, fmt.Errorf("access denied to sandbox %s", sandboxID)
+	}
+	return sandbox, nil
+}
+
+// recordAudit writes an audit event to the optional historical-records
+// backend. Best-effort: a backend error is logged and never affects the
+// request. A no-op when no SQL backend is configured (the default).
+func (s *Server) recordAudit(ctx context.Context, claims *Claims, action, resource, sandboxID string) {
+	if s.store == nil {
+		return
+	}
+	actor := ""
+	if claims != nil {
+		actor = claims.Sub
+	}
+	if err := s.store.RecordAuditEvent(ctx, storage.AuditEvent{
+		Actor:     actor,
+		Action:    action,
+		Resource:  resource,
+		SandboxID: sandboxID,
+	}); err != nil {
+		s.logger.Warn("failed to record audit event", "action", action, "resource", resource, "error", err)
+	}
 }
 
 // resolveSandbox finds a Sandbox by ID (name) without assuming it lives in

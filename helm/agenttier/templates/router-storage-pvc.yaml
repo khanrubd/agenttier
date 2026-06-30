@@ -1,0 +1,25 @@
+{{- /*
+  Optional PVC backing the Router's SQLite historical-records store. Created
+  only when the SQL backend is enabled with the bundled sqlite driver and
+  persistence is on, so the audit/sandbox/cost records survive Router
+  restarts. Postgres/MySQL backends bring their own external database and
+  need no PVC.
+*/ -}}
+{{- if and .Values.optional.storage.enabled (eq .Values.optional.storage.driver "sqlite") .Values.optional.storage.sqlite.persistence.enabled }}
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {{ include "agenttier.fullname" . }}-router-storage
+  labels:
+    {{- include "agenttier.labels" . | nindent 4 }}
+    app.kubernetes.io/component: router
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {{ .Values.optional.storage.sqlite.persistence.size | quote }}
+  {{- with .Values.optional.storage.sqlite.persistence.storageClassName }}
+  storageClassName: {{ . | quote }}
+  {{- end }}
+{{- end }}
