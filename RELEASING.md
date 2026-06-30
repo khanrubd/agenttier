@@ -99,20 +99,24 @@ If any of these 404 or fail, investigate the workflow run before announcing.
 ## Post-release cleanup sweep
 
 The `release-retention` workflow job (and `hack/release-retention.sh <tag>`) runs after
-`github-release` and keeps the repo tidy. It keeps the **latest 5** releases and prunes the rest:
+`github-release` and keeps the repo tidy. It keeps the **latest 10** releases and **tags** and
+prunes the rest:
 
-- **GitHub Releases** older than the latest 5 are **deleted** (the git tag is preserved, so
-  by-tag `helm`/`docker`/`go install` still resolve — only the Release page + its CLI binaries go).
+- **GitHub Releases** older than the latest 10 are **deleted** (Release page + CLI binaries).
+- **Git tags** beyond the latest 10 versions are **deleted** (`go install`/`helm`/`docker`
+  by-tag stop resolving for those old versions; the underlying commits stay).
 - **ghcr.io images** for pruned release tags + untagged manifests >30 days are deleted.
-- **Helm chart index** (`gh-pages` `/charts/index.yaml`) is trimmed to the latest 5.
+- **Helm chart index** (`gh-pages` `/charts/index.yaml`) is trimmed to the latest 10.
 - **github-pages deployments** are pruned to the latest 10.
 - **`dependabot/*` branches** with no open PR are deleted.
-- **Never pruned:** git tags, PyPI versions, and cosign signatures/SBOMs of kept images — forever.
+- **Never pruned:** PyPI versions, cosign signatures/SBOMs of kept images, and the underlying
+  git commits — forever.
 
-Open **Dependabot PRs** are triaged *before* tagging (take safe bumps in-tree and supersede,
-defer held/blocked majors with a written reason) and closed in this sweep. The agent-side
-`release-workflow` skill has the full mechanics, env knobs (`KEEP_COUNT`, `KEEP_DEPLOYMENTS`),
-and `--dry-run`.
+**Open PRs are triaged on every release** — *always* list the open PRs *before* tagging and
+address each (take safe Dependabot bumps in-tree and supersede, merge ready human PRs, defer
+held/blocked majors with a written reason), then close the resolved ones in this sweep. The
+agent-side `release-workflow` skill has the full mechanics, env knobs (`KEEP_COUNT`,
+`KEEP_TAG_COUNT`, `KEEP_DEPLOYMENTS`), and `--dry-run`.
 
 ## First-release-only chores
 

@@ -128,7 +128,7 @@ AgentTier is a Kubernetes-native platform that provides isolated, persistent san
 - **Highly available** — multi-replica controllers with leader election; multi-replica router with HTTP-routed exec, files, and invoke so any replica can serve any request.
 - **Cluster autoscaling out of the box** — opt-in upstream Cluster Autoscaler installs cloud-neutral via Helm (works on EKS, GKE, AKS, OpenStack, Cluster API). Pair it with the `headroom` Deployment to keep N+1 spare-node capacity warm: pause Pods at negative priority squat on a spare node, real sandboxes preempt them instantly, the evicted Pods trigger CAS to add the next spare in the background. Sandboxes never wait on a cold ASG round-trip.
 - **Container images you can verify** — every image is multi-arch, cosign-signed via GitHub Actions OIDC, and ships SPDX + CycloneDX SBOMs as OCI attestations.
-- **Automated post-release retention** — every release run prunes container manifests + GitHub Releases older than the latest 5 GA tags (older Releases deleted, plus `github-pages` deployments trimmed to 10 and stale `dependabot/*` branches removed); git tags, PyPI versions, and active cosign signatures are never pruned.
+- **Automated post-release retention** — every release run prunes container manifests, GitHub Releases, and **git tags** older than the latest 10 (plus `github-pages` deployments trimmed to 10 and stale `dependabot/*` branches removed); PyPI versions, active cosign signatures, and the underlying git commits are never pruned.
 
 ### On the roadmap
 

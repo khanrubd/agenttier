@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- **Release retention now keeps the latest 10 (was 5) and prunes old git tags.** `hack/release-retention.sh` raises the release/image/Helm-index keep window to 10 (`KEEP_COUNT`) and adds a new step that deletes git tags beyond the latest 10 versions (`KEEP_TAG_COUNT`, default 10) — reversing the previous "tags kept forever" policy now that old by-tag installs for ancient versions aren't worth the unbounded tag list (underlying commits and PyPI versions are still kept). The `release-workflow` skill's open-PR triage is now a standing "always look for and resolve open PRs every release" task covering human PRs too, not just Dependabot.
+
 ## [v0.8.1] — 2026-06-30
 
 ### Fixed

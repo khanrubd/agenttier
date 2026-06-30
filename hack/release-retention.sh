@@ -8,12 +8,15 @@
 # release workflow, AFTER github-release has succeeded — so the just-shipped
 # release is verifiably reachable before we touch anything older.
 #
-# What gets pruned (keep the latest N, default 5):
-#  * GitHub Release entries older than the latest N GA → DELETED (the git tag
-#    is preserved, so `go install ...@vX` and `helm`/`docker` by-tag still
-#    resolve; only the Release page + its CLI-binary assets go).
-#  * Pre-release Release entries older than the latest GA → DELETED (tag kept).
-#    Active RCs newer than the latest GA are retained until their GA ships.
+# What gets pruned (keep the latest N, default 10):
+#  * GitHub Release entries older than the latest N GA → DELETED (the Release
+#    page + its CLI-binary assets). The matching git tag may also be pruned by
+#    the tag step below if it falls outside the latest-N tag window.
+#  * Pre-release Release entries older than the latest GA → DELETED (Release
+#    page). Active RCs newer than the latest GA are retained until their GA ships.
+#  * Git tags beyond the latest N versions → DELETED (older `go install ...@vX`
+#    and `helm`/`docker` by-tag stop resolving for pruned versions; the latest
+#    N tags stay, so current + recent releases remain installable by tag).
 #  * Container package versions on ghcr.io tagged for releases that fell out
 #    of the latest-N window → deleted.
 #  * Untagged container manifests older than 30 days → deleted.
@@ -25,10 +28,10 @@
 #    Dependabot PRs leave their branches behind otherwise).
 #
 # What is NEVER pruned:
-#  * Git tags. Forever — the immutable version record.
 #  * PyPI versions of the agenttier wheel. PEP 449 antisocial-deletion.
 #  * Cosign signatures + SBOM attestations whose target manifests are kept.
 #  * The `main` and `gh-pages` branches.
+#  * The underlying git commits (only the tag refs beyond the latest N go).
 #
 # Usage:
 #   hack/release-retention.sh <current-tag> [--dry-run]
@@ -65,7 +68,8 @@ PACKAGES=(
   otel-collector
 )
 
-KEEP_COUNT="${KEEP_COUNT:-5}"
+KEEP_COUNT="${KEEP_COUNT:-10}"
+KEEP_TAG_COUNT="${KEEP_TAG_COUNT:-10}"
 KEEP_DEPLOYMENTS="${KEEP_DEPLOYMENTS:-10}"
 UNTAGGED_PRUNE_AGE_SECONDS="${UNTAGGED_PRUNE_AGE_SECONDS:-$((30 * 24 * 3600))}"
 
@@ -83,7 +87,7 @@ run_or_dry() {
   fi
 }
 
-log "starting retention; current=${CURRENT_TAG} keep-releases=${KEEP_COUNT} keep-deployments=${KEEP_DEPLOYMENTS} dry-run=${DRY_RUN}"
+log "starting retention; current=${CURRENT_TAG} keep-releases=${KEEP_COUNT} keep-tags=${KEEP_TAG_COUNT} keep-deployments=${KEEP_DEPLOYMENTS} dry-run=${DRY_RUN}"
 
 # -------- Step 1: identify GA releases, newest first --------
 
@@ -135,6 +139,27 @@ if [[ -n "${LATEST_GA_DATE}" ]]; then
   done < <(gh release list --repo "${REPO}" --limit 200 \
     --json tagName,isPrerelease,publishedAt \
     --jq '.[] | select(.isPrerelease==true) | "\(.tagName)\t\(.publishedAt)"' 2>/dev/null)
+fi
+
+# -------- Step 2c: prune git tags beyond the latest N versions -------------
+# Keep only the most recent KEEP_TAG_COUNT version tags; delete older ones.
+# This bounds the tag list at the cost of deep-link stability for old versions
+# (go install ...@vX, and helm/docker by-tag for pruned versions, stop
+# resolving once their tag is gone). The kept window always covers the current
+# release plus the previous KEEP_TAG_COUNT-1. PyPI versions and the commits
+# themselves are unaffected.
+
+mapfile -t ALL_TAGS < <(gh api --paginate "/repos/${REPO}/tags" --jq '.[].name' 2>/dev/null \
+  | grep -E '^v[0-9]' | sort -Vr)
+if (( ${#ALL_TAGS[@]} > KEEP_TAG_COUNT )); then
+  log "keeping latest ${KEEP_TAG_COUNT} tags; pruning $(( ${#ALL_TAGS[@]} - KEEP_TAG_COUNT )) older"
+  for tag in "${ALL_TAGS[@]:${KEEP_TAG_COUNT}}"; do
+    [[ -z "${tag}" ]] && continue
+    log "deleting git tag ${tag} (beyond latest ${KEEP_TAG_COUNT})"
+    run_or_dry "gh api -X DELETE /repos/${REPO}/git/refs/tags/${tag}"
+  done
+else
+  log "${#ALL_TAGS[@]} tags ≤ ${KEEP_TAG_COUNT}; nothing to prune"
 fi
 
 # -------- Step 3: prune untagged + out-of-window container versions --------
