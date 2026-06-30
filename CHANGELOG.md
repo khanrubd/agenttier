@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- **Helm chart: `helm upgrade --reuse-values` from a pre-0.8.0 release no longer crashes.** The new `optional.storage`, `optional.backup`, and `optional.notifications` value sub-trees are absent from older releases' stored values, so `--reuse-values` left them nil and the new templates failed with `nil pointer evaluating interface {}.enabled`. The guards are now nil-safe (`| default dict`), so an upgrade that reuses old values renders cleanly with the new features defaulting to off.
+- **Release: the post-release retention job no longer aborts on a permissions gap.** Granted the `release-retention` job `deployments: write` (needed to prune github-pages deployments) and made `run_or_dry` non-fatal so one failed prune can't stop the rest of the sweep (branches, chart-index trim).
+
 ## [v0.8.0] — 2026-06-29
 
 ### Added

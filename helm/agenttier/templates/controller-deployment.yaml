@@ -32,7 +32,7 @@ spec:
             - --metrics-bind-address=:8081
             - --health-probe-bind-address=:8082
             - --manage-crds={{ .Values.controller.manageCRDs }}
-            {{- if .Values.optional.backup.snapshots.enabled }}
+            {{- if ((.Values.optional.backup | default dict).snapshots | default dict).enabled }}
             - --backup-snapshots
             - --backup-interval={{ .Values.optional.backup.snapshots.intervalHours | default 6 }}h
             - --backup-retention={{ mul (.Values.optional.backup.snapshots.retentionDays | default 14) 24 }}h
@@ -64,7 +64,7 @@ spec:
             - name: OTEL_EXPORTER_OTLP_INSECURE
               value: "true"
             {{- end }}
-            {{- if .Values.optional.notifications.enabled }}
+            {{- if (.Values.optional.notifications | default dict).enabled }}
             {{- with .Values.optional.notifications.webhook }}
             {{- if .secretName }}
             - name: NOTIFY_WEBHOOK_URL
