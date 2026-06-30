@@ -38,6 +38,7 @@ coverage.html
 
 # Claude Code repo guide (local working file, not shipped to upstream)
 /CLAUDE.md
+.claude/
 
 # Node.js (web-ui)
 web-ui/node_modules/
