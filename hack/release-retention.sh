@@ -73,7 +73,11 @@ run_or_dry() {
   if $DRY_RUN; then
     printf '\033[1;35m[dry-run]\033[0m %s\n' "$*"
   else
-    eval "$@"
+    # Every run_or_dry call is a best-effort prune of an expendable resource.
+    # A single failure (404 already-gone, transient 5xx, or a permission gap
+    # on one resource type) must NOT abort the whole sweep under `set -e` —
+    # log it and carry on so later steps (branches, chart trim) still run.
+    eval "$@" || warn "command failed (continuing): $*"
   fi
 }
 
