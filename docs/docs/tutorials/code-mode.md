@@ -57,7 +57,7 @@ pytest
 
 Everything under `/workspace` lives on the PVC. `/tmp` is ephemeral on the Pod and clears on resume.
 
-The general-coding image preinstalls Python 3.11, Node 20, Go 1.22, build-essential, jq, and curl. For other languages, build a custom image with the additions you need and reference it in a SandboxTemplate.
+The general-coding image preinstalls Python 3.11, Node 20, Go 1.25, build-essential, jq, and curl. For other languages, build a custom image with the additions you need and reference it in a SandboxTemplate.
 
 ## 5. Persistence across stop / resume
 

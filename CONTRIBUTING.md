@@ -6,7 +6,7 @@ Thank you for your interest in contributing to AgentTier! This document provides
 
 ### Prerequisites
 
-- Go 1.22+
+- Go 1.25+ (matches `go.mod`; the toolchain pin is 1.25.x)
 - Docker (for building container images)
 - Kind (for local Kubernetes testing)
 - kubectl
@@ -47,7 +47,7 @@ helm/          - Helm chart
 images/        - Reference Dockerfiles
 docs/          - Documentation (MkDocs)
 hack/          - Scripts (code generation, load testing)
-test/          - Integration, e2e, and property-based tests
+test/          - Integration, e2e, and property-based tests (planned; not present yet)
 terraform/     - Infrastructure as Code modules
 ```
 
@@ -83,21 +83,34 @@ chore: update Go dependencies
 
 ## Testing Requirements
 
-All PRs must include appropriate tests:
+All PRs must include appropriate tests. Today that means **unit tests**, written
+as `_test.go` files colocated with the code under `pkg/` and `api/` (run by
+`make test`):
 
 - **Bug fixes**: Include a test that reproduces the bug
-- **New features**: Include unit tests and integration tests
-- **Controller changes**: Include property-based tests where applicable
-- **API changes**: Include OpenAPI spec updates and API integration tests
+- **New features**: Include unit tests covering the new behavior and its edge cases
+- **Controller changes**: Table-driven reconcile tests against a fake client (see the existing `pkg/controller/*_test.go`)
+- **API changes**: Run `make verify-codegen` and commit the regenerated `api/`, `config/`, and `pkg/crds/` files
+
+The integration, e2e, and property tiers described under "Running Tests" are
+planned; once the `test/` tree lands, feature and controller PRs will be
+expected to exercise them too.
 
 ### Running Tests
 
 ```bash
-make test              # Unit tests
-make test-integration  # Integration tests (requires a Kubernetes cluster)
-make test-property     # Property-based tests
-make test-e2e          # End-to-end tests (requires Kind cluster)
-make test-all          # All tests except e2e
+make test              # Unit tests (pkg/ + api/) — this is what CI runs
+```
+
+The integration, e2e, and property tiers are planned but not implemented yet —
+the `test/` tree doesn't exist, so these targets no-op with a notice rather than
+running anything:
+
+```bash
+make test-integration  # planned — skips until test/integration/ exists
+make test-property     # planned — skips until test/property/ exists
+make test-e2e          # planned — skips until test/e2e/ exists (requires Kind)
+make test-all          # unit tests plus any tiers that are present
 ```
 
 ### Test Coverage

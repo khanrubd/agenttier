@@ -58,20 +58,35 @@ run-router: ## Run the router locally
 test: ## Run unit tests
 	go test -race -coverprofile=coverage.out ./pkg/... ./api/...
 
+# test-integration / test-e2e / test-property are planned test tiers. The
+# test/ tree does not exist yet, so each target no-ops with a notice instead of
+# failing on a missing package path. CI today runs only `make test` (unit).
 .PHONY: test-integration
-test-integration: ## Run integration tests (requires MongoDB, K8s)
-	go test -race -tags=integration ./test/integration/...
+test-integration: ## Run integration tests (requires a K8s cluster); skips if test/integration/ is absent
+	@if [ -d ./test/integration ]; then \
+		go test -race -tags=integration ./test/integration/...; \
+	else \
+		echo "test-integration: no test/integration/ yet — skipping (planned tier)"; \
+	fi
 
 .PHONY: test-e2e
-test-e2e: ## Run end-to-end tests (requires Kind cluster)
-	go test -race -tags=e2e -timeout=30m ./test/e2e/...
+test-e2e: ## Run end-to-end tests (requires Kind cluster); skips if test/e2e/ is absent
+	@if [ -d ./test/e2e ]; then \
+		go test -race -tags=e2e -timeout=30m ./test/e2e/...; \
+	else \
+		echo "test-e2e: no test/e2e/ yet — skipping (planned tier)"; \
+	fi
 
 .PHONY: test-property
-test-property: ## Run property-based tests
-	go test -race -tags=property -count=1 ./test/property/...
+test-property: ## Run property-based tests; skips if test/property/ is absent
+	@if [ -d ./test/property ]; then \
+		go test -race -tags=property -count=1 ./test/property/...; \
+	else \
+		echo "test-property: no test/property/ yet — skipping (planned tier)"; \
+	fi
 
 .PHONY: test-all
-test-all: test test-integration test-property ## Run all tests except e2e
+test-all: test test-integration test-property ## Run unit tests plus any present integration/property tiers
 
 .PHONY: coverage
 coverage: test ## Generate coverage report
