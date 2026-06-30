@@ -12,6 +12,8 @@
 #  * GitHub Release entries older than the latest N GA → DELETED (the git tag
 #    is preserved, so `go install ...@vX` and `helm`/`docker` by-tag still
 #    resolve; only the Release page + its CLI-binary assets go).
+#  * Pre-release Release entries older than the latest GA → DELETED (tag kept).
+#    Active RCs newer than the latest GA are retained until their GA ships.
 #  * Container package versions on ghcr.io tagged for releases that fell out
 #    of the latest-N window → deleted.
 #  * Untagged container manifests older than 30 days → deleted.
@@ -113,6 +115,27 @@ for tag in "${PRUNE_TAGS[@]}"; do
   # --cleanup-tag is intentionally omitted so the tag survives.
   run_or_dry "gh release delete ${tag} --repo ${REPO} --yes"
 done
+
+# -------- Step 2b: prune pre-release entries older than the latest GA -------
+# Pre-releases (RC builds, or early-stage versions that were flagged
+# pre-release) are superseded once a GA ships. Keep only pre-releases newer
+# than the latest GA — i.e. active RCs for an upcoming version — and delete
+# everything older. Git tags are preserved, same as the GA path above.
+
+LATEST_GA_DATE=$(gh release view "${GA_NEWEST_FIRST[0]}" --repo "${REPO}" \
+  --json publishedAt --jq '.publishedAt' 2>/dev/null || echo "")
+if [[ -n "${LATEST_GA_DATE}" ]]; then
+  while IFS=$'\t' read -r tag pub; do
+    [[ -z "${tag}" ]] && continue
+    # Lexical compare is correct for same-format ISO-8601 timestamps.
+    if [[ "${pub}" < "${LATEST_GA_DATE}" ]]; then
+      log "deleting stale pre-release Release ${tag} (keeping the git tag)"
+      run_or_dry "gh release delete ${tag} --repo ${REPO} --yes"
+    fi
+  done < <(gh release list --repo "${REPO}" --limit 200 \
+    --json tagName,isPrerelease,publishedAt \
+    --jq '.[] | select(.isPrerelease==true) | "\(.tagName)\t\(.publishedAt)"' 2>/dev/null)
+fi
 
 # -------- Step 3: prune untagged + out-of-window container versions --------
 
