@@ -36,6 +36,9 @@ coverage.html
 # Local working todo (not shipped)
 /todo.md
 
+# Claude Code repo guide (local working file, not shipped to upstream)
+/CLAUDE.md
+
 # Node.js (web-ui)
 web-ui/node_modules/
 web-ui/dist/
