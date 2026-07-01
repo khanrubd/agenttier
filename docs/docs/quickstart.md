@@ -50,7 +50,7 @@ helm install agenttier agenttier/agenttier \
   --namespace agenttier --create-namespace
 ```
 
-Images pull anonymously from `ghcr.io/agenttier/*`. CRDs and the two reference templates (`general-coding`, `claude-code-bedrock`) are installed automatically.
+Images pull anonymously from `ghcr.io/agenttier/*`. CRDs and the six bundled templates (`general-coding`, `claude-code-bedrock`, `openclaw-bedrock`, `strands-bedrock`, `langgraph-agent`, `rl-rollout`) are installed automatically.
 
 ## 2. Verify
 

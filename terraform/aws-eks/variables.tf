@@ -142,9 +142,9 @@ variable "aws_load_balancer_controller_chart_version" {
 # =============================================================================
 
 variable "install_agenttier" {
-  description = "Install the AgentTier Helm chart from the published chart repo."
+  description = "Install the AgentTier Helm chart from the published chart repo. Off by default — the canonical install path is ./deploy.sh --target=eks (D1/D20). Set to true only when deploying the published Helm chart directly without deploy.sh."
   type        = bool
-  default     = true
+  default     = false
 }
 
 variable "agenttier_chart_version" {

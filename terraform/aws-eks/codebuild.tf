@@ -148,11 +148,19 @@ data "aws_iam_policy_document" "codebuild_permissions" {
       "ecr:GetDownloadUrlForLayer",
       "ecr:BatchGetImage",
     ]
+    # All nine ECR repos that buildspec.yml pushes to — scoped to exact ARNs
+    # (least privilege; no wildcard). Adding all sandbox repos here so every
+    # ClusterSandboxTemplate image can be pushed via the CodeBuild opt-in path.
     resources = [
       aws_ecr_repository.controller.arn,
       aws_ecr_repository.router.arn,
       aws_ecr_repository.webui.arn,
       aws_ecr_repository.sandbox_general.arn,
+      aws_ecr_repository.sandbox_claude_code.arn,
+      aws_ecr_repository.sandbox_openclaw.arn,
+      aws_ecr_repository.sandbox_strands_bedrock.arn,
+      aws_ecr_repository.sandbox_langgraph.arn,
+      aws_ecr_repository.sandbox_rl.arn,
     ]
   }
 

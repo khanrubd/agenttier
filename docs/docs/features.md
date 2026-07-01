@@ -23,7 +23,7 @@ What AgentTier ships today, grouped by what you probably need first.
 - **Harness config** — tell AgentTier which shell, tools, system prompt, and hooks to run. Hooks fire on start / idle / stop / resume.
 - **Init scripts** — run cluster-approved setup commands before the container becomes Running (install extra tooling, clone a repo, wait for a service).
 - **Embedded files** — templates can seed files into the workspace (e.g. a default `.tmux.conf`, a README, a code-of-conduct).
-- **Reference images** — `general-coding` (Ubuntu + Node + Python + Go), `claude-code-bedrock` (Claude Code CLI wired to AWS Bedrock via IRSA), `openclaw-bedrock` (OpenClaw CLI wired to AWS Bedrock via IRSA), `strands-bedrock` (Strands Agents Python SDK wired to AWS Bedrock via IRSA), `minimal-shell` (Alpine + bash + git + curl), and `langgraph-agent` (Python + LangGraph + LangChain for `mode: agent`). All published on `ghcr.io/agenttier/sandbox-*`.
+- **Reference images** — `general-coding` (Ubuntu + Node + Python + Go), `claude-code-bedrock` (Claude Code CLI wired to AWS Bedrock via IRSA), `openclaw-bedrock` (OpenClaw CLI wired to AWS Bedrock via IRSA), `strands-bedrock` (Strands Agents Python SDK wired to AWS Bedrock via IRSA), `langgraph-agent` (Python + LangGraph + LangChain for `mode: agent`), and `rl-rollout` (PyTorch + Ray RLlib + Gymnasium + Stable-Baselines3). All published on `ghcr.io/agenttier/sandbox-*`.
 
 ## Security and isolation
 

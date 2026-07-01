@@ -23,6 +23,17 @@
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
+# Bash version guard (belt-and-suspenders; script requires bash 3.2+).
+# On macOS the system bash at /bin/bash is 3.2; both bash 3.2 and 4+ are
+# supported — no bash-4 features (declare -A) are used.
+# ---------------------------------------------------------------------------
+if [[ "${BASH_VERSINFO[0]:-0}" -lt 3 ]]; then
+  echo "ERROR: deploy.sh requires bash 3.2 or newer." >&2
+  echo "       On macOS run with: /bin/bash deploy.sh ${*}" >&2
+  exit 1
+fi
+
+# ---------------------------------------------------------------------------
 # Resolve repo root regardless of CWD.
 # ---------------------------------------------------------------------------
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -280,24 +291,32 @@ if [[ "${DEPLOY_TARGET}" == "local" ]]; then
   docker build -t "${WEBUI_IMG}" -f "${REPO_ROOT}/web-ui/Dockerfile" \
     "${REPO_ROOT}/web-ui"
 
-  # Build all 6 sandbox images. Each entry is:
-  #   <short-name>:<image-dir-relative-to-images/> (same dir unless noted)
-  # general-coding lives at images/general-coding and is the default sandbox.
-  declare -A SANDBOX_IMAGE_DIRS
-  SANDBOX_IMAGE_DIRS=(
-    ["sandbox-general"]="general-coding"
-    ["sandbox-claude-code"]="claude-code"
-    ["sandbox-openclaw"]="openclaw"
-    ["sandbox-langgraph"]="langgraph"
-    ["sandbox-rl"]="rl"
-    ["sandbox-strands-bedrock"]="strands-bedrock"
+  # Build all 6 sandbox images.
+  # Bash-3.2-compatible: parallel indexed arrays replace declare -A maps.
+  # SANDBOX_NAMES[i] → image short-name; SANDBOX_DIRS[i] → subdirectory under images/.
+  SANDBOX_NAMES=(
+    sandbox-general
+    sandbox-claude-code
+    sandbox-openclaw
+    sandbox-langgraph
+    sandbox-rl
+    sandbox-strands-bedrock
   )
-  declare -A SANDBOX_IMGS
-  for sbx_name in sandbox-general sandbox-claude-code sandbox-openclaw \
-                  sandbox-langgraph sandbox-rl sandbox-strands-bedrock; do
-    sbx_dir="${SANDBOX_IMAGE_DIRS[${sbx_name}]}"
+  SANDBOX_DIRS=(
+    general-coding
+    claude-code
+    openclaw
+    langgraph
+    rl
+    strands-bedrock
+  )
+  # Resolved image refs are stored in the same positional order.
+  SANDBOX_IMGS=()
+  for _i in 0 1 2 3 4 5; do
+    sbx_name="${SANDBOX_NAMES[${_i}]}"
+    sbx_dir="${SANDBOX_DIRS[${_i}]}"
     sbx_img="${REGISTRY}/${sbx_name}:${IMAGE_TAG}"
-    SANDBOX_IMGS["${sbx_name}"]="${sbx_img}"
+    SANDBOX_IMGS+=("${sbx_img}")
     at::log "Building ${sbx_name}: ${sbx_img}"
     docker build -t "${sbx_img}" \
       -f "${REPO_ROOT}/images/${sbx_dir}/Dockerfile" \
@@ -311,9 +330,8 @@ if [[ "${DEPLOY_TARGET}" == "local" ]]; then
     kind load docker-image "${CONTROLLER_IMG}" --name "${AGENTTIER_KIND_CLUSTER}"
     kind load docker-image "${ROUTER_IMG}"     --name "${AGENTTIER_KIND_CLUSTER}"
     kind load docker-image "${WEBUI_IMG}"      --name "${AGENTTIER_KIND_CLUSTER}"
-    for sbx_name in sandbox-general sandbox-claude-code sandbox-openclaw \
-                    sandbox-langgraph sandbox-rl sandbox-strands-bedrock; do
-      kind load docker-image "${SANDBOX_IMGS[${sbx_name}]}" \
+    for _i in 0 1 2 3 4 5; do
+      kind load docker-image "${SANDBOX_IMGS[${_i}]}" \
         --name "${AGENTTIER_KIND_CLUSTER}"
     done
   else
@@ -321,9 +339,8 @@ if [[ "${DEPLOY_TARGET}" == "local" ]]; then
     minikube image load "${CONTROLLER_IMG}"
     minikube image load "${ROUTER_IMG}"
     minikube image load "${WEBUI_IMG}"
-    for sbx_name in sandbox-general sandbox-claude-code sandbox-openclaw \
-                    sandbox-langgraph sandbox-rl sandbox-strands-bedrock; do
-      minikube image load "${SANDBOX_IMGS[${sbx_name}]}"
+    for _i in 0 1 2 3 4 5; do
+      minikube image load "${SANDBOX_IMGS[${_i}]}"
     done
   fi
 
@@ -344,12 +361,12 @@ if [[ "${DEPLOY_TARGET}" == "local" ]]; then
     --set "router.image.tag=${IMAGE_TAG}" \
     --set "webui.image.repository=${REGISTRY}/web-ui" \
     --set "webui.image.tag=${IMAGE_TAG}" \
-    --set "defaults.sandbox.image=${SANDBOX_IMGS[sandbox-general]}" \
-    --set "defaults.claudeCode.image=${SANDBOX_IMGS[sandbox-claude-code]}" \
-    --set "defaults.openclaw.image=${SANDBOX_IMGS[sandbox-openclaw]}" \
-    --set "defaults.langgraph.image=${SANDBOX_IMGS[sandbox-langgraph]}" \
-    --set "defaults.rl.image=${SANDBOX_IMGS[sandbox-rl]}" \
-    --set "defaults.strandsBedrock.image=${SANDBOX_IMGS[sandbox-strands-bedrock]}" \
+    --set "defaults.sandbox.image=${SANDBOX_IMGS[0]}" \
+    --set "defaults.claudeCode.image=${SANDBOX_IMGS[1]}" \
+    --set "defaults.openclaw.image=${SANDBOX_IMGS[2]}" \
+    --set "defaults.langgraph.image=${SANDBOX_IMGS[3]}" \
+    --set "defaults.rl.image=${SANDBOX_IMGS[4]}" \
+    --set "defaults.strandsBedrock.image=${SANDBOX_IMGS[5]}" \
     --wait \
     --timeout 180s
 
@@ -388,22 +405,25 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
   cd "${REPO_ROOT}"
 
   # Step 2: Read ECR registry and cluster info from Terraform outputs.
+  # F15: stderr NOT suppressed — real terraform errors are surfaced to the caller
+  # so misconfigurations (wrong state dir, missing output, etc.) are diagnosable.
+  # The C5 empty-guard below catches the "output key missing / empty" case.
   at::step "Reading Terraform outputs"
   cd "${TF_DIR}"
-  ECR_REGISTRY="$(terraform output -raw ecr_registry --no-cli-pager 2>/dev/null)"
-  ECR_CONTROLLER_URL="$(terraform output -raw ecr_controller_url --no-cli-pager 2>/dev/null)"
-  ECR_ROUTER_URL="$(terraform output -raw ecr_router_url --no-cli-pager 2>/dev/null)"
-  ECR_WEBUI_URL="$(terraform output -raw ecr_webui_url --no-cli-pager 2>/dev/null)"
-  ECR_SANDBOX_URL="$(terraform output -raw ecr_sandbox_general_url --no-cli-pager 2>/dev/null)"
-  ECR_SANDBOX_CLAUDE_CODE_URL="$(terraform output -raw ecr_sandbox_claude_code_url --no-cli-pager 2>/dev/null)"
-  ECR_SANDBOX_OPENCLAW_URL="$(terraform output -raw ecr_sandbox_openclaw_url --no-cli-pager 2>/dev/null)"
-  ECR_SANDBOX_LANGGRAPH_URL="$(terraform output -raw ecr_sandbox_langgraph_url --no-cli-pager 2>/dev/null)"
-  ECR_SANDBOX_RL_URL="$(terraform output -raw ecr_sandbox_rl_url --no-cli-pager 2>/dev/null)"
-  ECR_SANDBOX_STRANDS_BEDROCK_URL="$(terraform output -raw ecr_sandbox_strands_bedrock_url --no-cli-pager 2>/dev/null)"
-  CLUSTER_NAME="$(terraform output -raw cluster_name --no-cli-pager 2>/dev/null)"
-  COGNITO_ISSUER="$(terraform output -raw cognito_issuer_url --no-cli-pager 2>/dev/null)"
-  COGNITO_CLIENT_ID="$(terraform output -raw cognito_client_id --no-cli-pager 2>/dev/null)"
-  COGNITO_ADMIN_GROUP="$(terraform output -raw cognito_admin_group --no-cli-pager 2>/dev/null)"
+  ECR_REGISTRY="$(terraform output -raw ecr_registry --no-cli-pager)"
+  ECR_CONTROLLER_URL="$(terraform output -raw ecr_controller_url --no-cli-pager)"
+  ECR_ROUTER_URL="$(terraform output -raw ecr_router_url --no-cli-pager)"
+  ECR_WEBUI_URL="$(terraform output -raw ecr_webui_url --no-cli-pager)"
+  ECR_SANDBOX_URL="$(terraform output -raw ecr_sandbox_general_url --no-cli-pager)"
+  ECR_SANDBOX_CLAUDE_CODE_URL="$(terraform output -raw ecr_sandbox_claude_code_url --no-cli-pager)"
+  ECR_SANDBOX_OPENCLAW_URL="$(terraform output -raw ecr_sandbox_openclaw_url --no-cli-pager)"
+  ECR_SANDBOX_LANGGRAPH_URL="$(terraform output -raw ecr_sandbox_langgraph_url --no-cli-pager)"
+  ECR_SANDBOX_RL_URL="$(terraform output -raw ecr_sandbox_rl_url --no-cli-pager)"
+  ECR_SANDBOX_STRANDS_BEDROCK_URL="$(terraform output -raw ecr_sandbox_strands_bedrock_url --no-cli-pager)"
+  CLUSTER_NAME="$(terraform output -raw cluster_name --no-cli-pager)"
+  COGNITO_ISSUER="$(terraform output -raw cognito_issuer_url --no-cli-pager)"
+  COGNITO_CLIENT_ID="$(terraform output -raw cognito_client_id --no-cli-pager)"
+  COGNITO_ADMIN_GROUP="$(terraform output -raw cognito_admin_group --no-cli-pager)"
 
   # C5: fail loudly if any MANDATORY output is empty. terraform output -raw
   # returns "" (with 2>/dev/null swallowing the error) when the state is stale,

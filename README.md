@@ -72,7 +72,7 @@ Key variables (see `config/config.env.example` for the full list):
 
 ### Path 1: Local cluster (kind or minikube)
 
-**Prerequisites:** `docker`, `kubectl`, `helm`, `go` 1.25+, and `kind` or `minikube`.
+**Prerequisites:** `docker`, `kubectl`, `helm`, `go` 1.25+, and `kind` or `minikube`. The deploy script requires **bash 3.2+** (standard on macOS).
 
 ```bash
 git clone https://github.com/agenttier/agenttier.git
@@ -83,7 +83,7 @@ cd agenttier
 What this does:
 
 1. Creates a `kind` (or `minikube`) cluster named `agenttier-local` if one does not exist.
-2. Builds all four container images (controller, router, web-ui, sandbox-general) from source for your local architecture.
+2. Builds all nine container images from source for your local architecture: 3 core images (controller, router, web-ui) and 6 sandbox images (sandbox-general, sandbox-claude-code, sandbox-openclaw, sandbox-langgraph, sandbox-rl, sandbox-strands-bedrock).
 3. Side-loads images into the cluster — no registry or push required.
 4. Installs the Helm chart from the local `helm/agenttier/` tree with `auth.devAuth=true` (local development only; never set in production).
 5. Runs `hack/smoke-test.sh` — creates a test sandbox, waits for `Phase=Running`, runs an exec, then cleans up.
@@ -102,10 +102,12 @@ What this does:
 ==> Installing / upgrading Helm chart
 [agenttier] Helm release: agenttier → namespace: agenttier
 ==> Running smoke test
-[smoke] controller Available
-[smoke] sandbox phase=Running
-[smoke] exec OK
-[smoke] PASSED
+[smoke 12:34:56] PASS: Controller deployment Available.
+[smoke 12:34:57] PASS: Found 6 ClusterSandboxTemplate(s).
+[smoke 12:35:10] PASS: Sandbox 'smoke-test-12345' is Running.
+[smoke 12:35:11] PASS: exec round-trip via Router API succeeded.
+[smoke 12:35:11] PASS: PTY WebSocket upgrade handshake succeeded (101 Switching Protocols).
+[smoke 12:35:11] PASS: ALL SMOKE TESTS PASSED.
 
 [agenttier] Local deploy complete!
 [agenttier] Access the web UI:   kubectl port-forward -n agenttier svc/agenttier-webui 8080:80
@@ -146,7 +148,7 @@ What this does:
 2. Runs `terraform apply` in `terraform/aws-eks/` — provisions VPC, EKS cluster, managed node groups (including an optional gVisor group), EBS CSI, AWS Load Balancer Controller, IRSA roles, ECR repositories, and a Cognito User Pool for OIDC auth.
 3. Reads ECR registry URLs and Cognito OIDC settings from Terraform outputs. Any empty mandatory output fails immediately with a clear message.
 4. Authenticates Docker to ECR via `aws ecr get-login-password`.
-5. Builds and pushes all four images to ECR using `docker buildx` at `$AGENTTIER_EKS_PLATFORM` (default: `linux/amd64`).
+5. Builds and pushes all nine images to ECR using `docker buildx` at `$AGENTTIER_EKS_PLATFORM` (default: `linux/amd64`): 3 core images (controller, router, web-ui) and 6 sandbox images (sandbox-general, sandbox-claude-code, sandbox-openclaw, sandbox-langgraph, sandbox-rl, sandbox-strands-bedrock).
 6. Configures `kubectl` for the new cluster.
 7. Installs the Helm chart from the local `helm/agenttier/` tree, wiring Cognito OIDC auth and deploying a default gp3 EBS StorageClass so sandbox PVCs bind immediately. Dev-auth is never set on the EKS path.
 8. Runs `hack/smoke-test.sh`.
@@ -165,7 +167,7 @@ What this does:
 ...
 ==> Installing / upgrading Helm chart
 ==> Running smoke test
-[smoke] PASSED
+[smoke 12:34:56] PASS: ALL SMOKE TESTS PASSED.
 
 [agenttier] EKS deploy complete!
 [agenttier] Cluster         : agenttier-eks
@@ -244,8 +246,8 @@ print(result.stdout)  # Hello from AgentTier!
 sandbox.files.write("/workspace/hello.py", "print('works!')")
 content = sandbox.files.read("/workspace/hello.py")
 
-# Open a terminal (returns a WebSocket URL)
-terminal_url = sandbox.terminal_url()
+# Open a browser terminal via port-forward + the web UI
+# (use `kubectl port-forward -n agenttier svc/agenttier-webui 8080:80`)
 
 # Stop and resume (all files are preserved)
 sandbox.stop()
@@ -268,12 +270,18 @@ pip install agenttier           # from PyPI
 make build && export PATH="$PATH:$(pwd)/bin"   # from source
 ```
 
-```bash
-export AGENTTIER_URL=http://localhost:8081
+Two CLIs share the `agenttier` binary name:
 
-# List and create sandboxes
+- **Python CLI** (`pip install agenttier`) — full sandbox lifecycle: `sandbox create/list/stop/resume/delete/exec/clone`, `template list/get`, `login`, `whoami`.
+- **Go CLI** (`make build`) — agent-mode only: `configure`, `invoke`, `version`.
+
+```bash
+# Python CLI — sandbox lifecycle
+export AGENTTIER_API_URL=http://localhost:8081
+
+# List and create sandboxes (positional name, required --template)
 agenttier sandbox list
-agenttier sandbox create --template general-coding --name my-sandbox
+agenttier sandbox create my-sandbox --template general-coding
 
 # Exec, stop, resume, delete
 agenttier sandbox exec my-sandbox -- echo "Hello"
@@ -288,13 +296,16 @@ agenttier template list
 ### Agent mode
 
 ```bash
-# Configure a sandbox with your agent code
-agenttier agent configure my-sandbox \
-  --code ./my_agent.py \
+# Go CLI (make build) — agent mode, top-level subcommands
+export AGENTTIER_API_URL=http://localhost:8081
+
+# Configure a sandbox with your agent code (--file remote-path=local-path)
+agenttier configure my-sandbox \
+  --file /workspace/my_agent.py=./my_agent.py \
   --install "pip install -r requirements.txt"
 
 # Invoke (streams output as Server-Sent Events; closing the connection cancels the run)
-agenttier agent invoke my-sandbox --prompt "Summarize the README"
+agenttier invoke my-sandbox --prompt "Summarize the README"
 ```
 
 ---
@@ -323,7 +334,7 @@ Templates define reusable sandbox configurations. Built-in templates installed b
 | `openclaw-bedrock` | OpenClaw CLI on AWS Bedrock (IRSA) |
 | `strands-bedrock` | Strands Agents Python SDK on AWS Bedrock (IRSA) |
 | `langgraph-agent` | LangGraph agent-mode reference |
-| `minimal-shell` | Minimal shell, no pre-installed tooling |
+| `rl-rollout` | RL rollout worker (PyTorch, Ray RLlib, Gymnasium, Stable-Baselines3) |
 
 Example template manifest:
 

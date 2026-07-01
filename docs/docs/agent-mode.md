@@ -141,7 +141,7 @@ Argv and stdin payloads are deliberately not recorded — they may contain secre
 - **CPU only.** Phase 10 explicitly does not add GPU support. Resource overrides at `/configure` time are also deferred. Both are tracked for follow-up releases.
 - **Single Router replica for cancel routing.** The in-process invoke registry means `/invoke/cancel` only works against the Router instance that started the invoke. Multi-replica routers would need a sticky-session ALB or a shared registry (tracked for a future release).
 - **No payload audit by default.** Argv and stdin are intentionally excluded from audit logs to avoid recording secrets. A Helm-flagged `audit.includeInvokePayloads=true` toggle is planned for a future release.
-- **Reference images.** The current release ships `sandbox-langgraph`, `sandbox-strands-bedrock`, `sandbox-openclaw`, `sandbox-minimal`, `sandbox-rl`, and `sandbox-claude-code`. Additional images are added each release cycle.
+- **Reference images.** The current release ships six bundled templates: `sandbox-general` (`general-coding`), `sandbox-claude-code` (`claude-code-bedrock`), `sandbox-openclaw` (`openclaw-bedrock`), `sandbox-strands-bedrock` (`strands-bedrock`), `sandbox-langgraph` (`langgraph-agent`), and `sandbox-rl` (`rl-rollout`). Additional images are added each release cycle.
 
 ## See also
 

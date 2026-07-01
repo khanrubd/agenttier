@@ -60,15 +60,15 @@ phases:
       - echo "Building sandbox-general (with in-pod runtime)..."
       - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-general:${IMAGE_TAG}" -f images/general-coding/Dockerfile --push .
       - echo "Building sandbox-claude-code..."
-      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-claude-code:${IMAGE_TAG}" -f images/claude-code/Dockerfile --push . || echo "WARN sandbox-claude-code build failed (optional)"
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-claude-code:${IMAGE_TAG}" -f images/claude-code/Dockerfile --push .
       - echo "Building sandbox-openclaw..."
-      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-openclaw:${IMAGE_TAG}" -f images/openclaw/Dockerfile --push . || echo "WARN sandbox-openclaw build failed (optional)"
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-openclaw:${IMAGE_TAG}" -f images/openclaw/Dockerfile --push .
       - echo "Building sandbox-strands-bedrock..."
-      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-strands-bedrock:${IMAGE_TAG}" -f images/strands-bedrock/Dockerfile --push . || echo "WARN sandbox-strands-bedrock build failed (optional)"
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-strands-bedrock:${IMAGE_TAG}" -f images/strands-bedrock/Dockerfile --push .
       - echo "Building sandbox-langgraph..."
       - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-langgraph:${IMAGE_TAG}" -f images/langgraph/Dockerfile --push .
       - echo "Building sandbox-rl..."
-      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-rl:${IMAGE_TAG}" -f images/rl/Dockerfile --push . || echo "WARN sandbox-rl build failed (optional)"
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-rl:${IMAGE_TAG}" -f images/rl/Dockerfile --push .
 
   post_build:
     commands:

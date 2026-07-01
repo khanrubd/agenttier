@@ -57,17 +57,23 @@ terraform apply      # ~15-20 minutes (control plane + nodes + ECR repos + add-o
 $(terraform output -raw kubeconfig_command)
 
 # Build and push images to ECR (deploy.sh handles this automatically)
+# Use the actual Terraform output values — the prefix follows cluster_name /
+# ecr_repo_prefix and is NOT always "agenttier". Always derive from outputs:
 ECR_REGISTRY=$(terraform output -raw ecr_registry)
+ECR_CONTROLLER_URL=$(terraform output -raw ecr_controller_url)
 IMAGE_TAG=$(git rev-parse --short HEAD)
 aws ecr get-login-password --region us-east-1 \
   | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 docker buildx build --platform linux/amd64 \
-  -t "$ECR_REGISTRY/agenttier/controller:$IMAGE_TAG" \
+  -t "${ECR_CONTROLLER_URL}:${IMAGE_TAG}" \
   -f Dockerfile.controller --push .
+# Similarly, use terraform output -raw ecr_router_url, ecr_webui_url,
+# ecr_sandbox_*_url for the remaining images. deploy.sh does all of this
+# automatically — the manual commands above are illustrative only.
 
 # Verify
 kubectl get nodes -L agenttier.io/runtime
-kubectl get pods -n agenttier          # if install_agenttier = true (default)
+kubectl get pods -n agenttier          # if install_agenttier = true
 ```
 
 ### ECR repositories
@@ -124,8 +130,8 @@ When enabled, the following additional resources are created:
 | `codebuild_timeout_minutes` | Max build duration (default 30 min; deploy.sh respects this) |
 
 The S3 bucket enforces TLS-only access and blocks all public access. The
-CodeBuild IAM role has least-privilege permissions (ECR push to the four repos,
-S3 read for source, CloudWatch Logs write).
+CodeBuild IAM role has least-privilege permissions (ECR push to all nine repos
+— scoped to exact ARNs, no wildcard — S3 read for source, CloudWatch Logs write).
 
 ### Authentication
 
@@ -161,7 +167,7 @@ terraform apply \
 | `gvisor_node_taint` | `false` | Taint gVisor nodes so only gVisor pods land there |
 | `install_aws_load_balancer_controller` | `true` | Install the AWS LB Controller |
 | `aws_load_balancer_controller_chart_version` | `1.8.1` | LB controller chart version |
-| `install_agenttier` | `true` | Install the AgentTier Helm chart |
+| `install_agenttier` | `false` | Install the AgentTier Helm chart (off by default — canonical path is `./deploy.sh --target=eks`) |
 | `agenttier_chart_version` | `""` (latest) | Pin the AgentTier chart version |
 | `agenttier_oidc_auth` | `true` | Wire AgentTier auth to the Cognito pool |
 | `agenttier_extra_values` | `[]` | Extra Helm values (raw YAML) for the AgentTier release |
