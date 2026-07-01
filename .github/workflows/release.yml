@@ -5,7 +5,15 @@ on:
     tags: ["v*"]
 
 env:
-  REGISTRY: ghcr.io/agenttier
+  # Override AGENTTIER_REGISTRY in a fork's repository variables (Settings →
+  # Variables → New repository variable) to publish to a different registry
+  # without editing the workflow. Default: ghcr.io/<owner> so a fork
+  # automatically uses ghcr.io/<fork-owner>/agenttier images.
+  #
+  # Security note: vars.AGENTTIER_REGISTRY is a repository variable (set by
+  # maintainers via Settings → Variables), not user-supplied input — safe in
+  # an env: expression. github.repository_owner is a trusted context value.
+  REGISTRY: ${{ vars.AGENTTIER_REGISTRY || format('ghcr.io/{0}/agenttier', github.repository_owner) }}
 
 jobs:
   # ------------------------------------------------------------------
@@ -104,15 +112,15 @@ jobs:
       # ----------------------------------------------------------------
       # Supply-chain hardening: keyless cosign signature + syft SBOM.
       # Signatures and SBOMs are published as OCI artifacts alongside the
-      # image in the same ghcr.io repository, so consumers can verify with:
+      # image in the same registry, so consumers can verify with:
       #
       #   cosign verify --certificate-identity-regexp \
       #     'https://github.com/agenttier/agenttier/.*' \
       #     --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-      #     ghcr.io/agenttier/<image>:<version>
+      #     $REGISTRY/<image>:<version>
       #
       # and pull the SBOM with:
-      #   cosign download sbom ghcr.io/agenttier/<image>:<version>
+      #   cosign download sbom $REGISTRY/<image>:<version>
       # ----------------------------------------------------------------
       - name: Install cosign
         uses: sigstore/cosign-installer@v3
@@ -436,16 +444,16 @@ jobs:
 
           **Container images** (multi-arch amd64 + arm64):
           \`\`\`
-          ghcr.io/agenttier/controller:${VERSION}
-          ghcr.io/agenttier/router:${VERSION}
-          ghcr.io/agenttier/web-ui:${VERSION}
-          ghcr.io/agenttier/sandbox-general:${VERSION}
-          ghcr.io/agenttier/sandbox-claude-code:${VERSION}
-          ghcr.io/agenttier/sandbox-openclaw:${VERSION}
-          ghcr.io/agenttier/sandbox-strands-bedrock:${VERSION}
-          ghcr.io/agenttier/sandbox-minimal:${VERSION}
-          ghcr.io/agenttier/sandbox-langgraph:${VERSION}
-          ghcr.io/agenttier/sandbox-rl:${VERSION}
+          ${REGISTRY}/controller:${VERSION}
+          ${REGISTRY}/router:${VERSION}
+          ${REGISTRY}/web-ui:${VERSION}
+          ${REGISTRY}/sandbox-general:${VERSION}
+          ${REGISTRY}/sandbox-claude-code:${VERSION}
+          ${REGISTRY}/sandbox-openclaw:${VERSION}
+          ${REGISTRY}/sandbox-strands-bedrock:${VERSION}
+          ${REGISTRY}/sandbox-minimal:${VERSION}
+          ${REGISTRY}/sandbox-langgraph:${VERSION}
+          ${REGISTRY}/sandbox-rl:${VERSION}
           \`\`\`
 
           **CLI:**

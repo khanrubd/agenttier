@@ -137,11 +137,15 @@ is the Kubernetes Event TTL (typically ~1 hour).
 ## Security model
 
 - **Identity** — OIDC (multi-user, multi-group) + optional API keys. Dev mode with no OIDC grants anonymous admin for local use.
-- **Authorization** — non-admin users see only sandboxes they own (or are shared with — sharing lands in 0.2.x). Admins see everything. Governance-sensitive endpoints (cluster policy edit, namespace policy edit/delete) are admin-gated.
+- **Authorization** — non-admin users see only sandboxes they own (or are shared with). Admins see everything. Governance-sensitive endpoints (cluster policy edit, namespace policy edit/delete) are admin-gated.
 - **Pod isolation** — per-sandbox ServiceAccount with zero cluster permissions, non-root user, read-only root filesystem, drop all capabilities, `seccomp=RuntimeDefault`, optional gVisor RuntimeClass.
 - **Network isolation** — NetworkPolicy deny-all egress by default; DNS always allowed; opt-in egress rules per template.
 - **Credentials** — not baked into images; injected per session at exec open time.
 - **Supply chain** — every released image is cosign-signed and carries SPDX + CycloneDX SBOMs.
+- **Exec transport trust model** — HTTP-exec mode uses plain HTTP in-cluster, secured by NetworkPolicy. See [Security](security.md#in-cluster-exec-transport) for details and trade-offs.
+- **CRD management** — the controller manages its own CRDs on startup. See [Security](security.md#crd-source-of-truth) for the GitOps opt-out path.
+
+For the full security reference including trust boundaries, accepted risks, and hardening guidance, see [Security](security.md).
 
 ## Why these choices
 

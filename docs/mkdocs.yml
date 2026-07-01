@@ -68,6 +68,7 @@ nav:
     - Performance: performance.md
     - Observability: observability.md
     - Troubleshooting: troubleshooting.md
+    - Security: security.md
 
 markdown_extensions:
   - pymdownx.highlight

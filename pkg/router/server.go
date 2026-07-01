@@ -67,6 +67,17 @@ type Config struct {
 	// deployment; empty falls back to the warm pool's DefaultSandboxNamespace
 	// ("default").
 	SandboxNamespace string
+	// CORSAllowedOrigins is the list of origins permitted to make
+	// cross-origin requests. An incoming Origin header must exactly match
+	// one of these values for the response to carry
+	// Access-Control-Allow-Origin with that origin. An empty list disables
+	// CORS entirely (no Access-Control-Allow-Origin header is emitted).
+	// Never use "*" here — the authenticated API accepts Authorization and
+	// X-API-Key headers, so wildcard CORS would strip the browser's
+	// same-origin guard on response reading.
+	// Set via --cors-allowed-origins (comma-separated) or
+	// AGENTTIER_CORS_ALLOWED_ORIGINS env var; Helm value cors.allowedOrigins.
+	CORSAllowedOrigins []string
 	// DevAuth, when true, bypasses authentication and stamps every request
 	// with a default admin identity. This is the local-development
 	// convenience path. It is OFF by default so a misconfigured production
@@ -183,7 +194,9 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	}
 
 	if config.DevAuth {
-		logger.Warn("DEV AUTH ENABLED — all requests are stamped with a default admin identity and authentication is bypassed. Never run this in production.")
+		// Intentionally loud: operators misconfiguring prod installs must
+		// see this immediately in logs and understand the risk (M2).
+		logger.Warn("AUTHENTICATION DISABLED — LOCAL DEV ONLY. All requests are granted admin identity; no credentials are verified. Never use --dev-auth or AGENTTIER_DEV_AUTH in production.")
 	} else if config.OIDCIssuerURL == "" {
 		logger.Warn("no OIDC issuer configured and --dev-auth is off — all API requests will be rejected with 401. Set auth.oidc.issuerUrl (prod) or --dev-auth (local dev).")
 	}
@@ -195,6 +208,21 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	// Per-IP rate limiting runs before auth so anonymous abuse gets
 	// throttled even without a valid token. No-op when rateLimiter is nil.
 	r.Use(s.rateLimitMiddleware)
+
+	// Global OPTIONS catch-all for CORS preflight. Gorilla/mux routes
+	// method-mismatch requests to MethodNotAllowedHandler which bypasses
+	// middleware, so we register an explicit OPTIONS route for all paths
+	// here. The corsMiddleware installed above handles the actual preflight
+	// response (204 for allowed origins, 403 for disallowed) and returns
+	// before this handler body is ever executed.
+	r.PathPrefix("/").Methods(http.MethodOptions).HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		// corsMiddleware already wrote the response for OPTIONS requests
+		// that carry an Origin header. This handler body is only reached
+		// for OPTIONS requests without an Origin header, which are not
+		// browser CORS preflights — respond 204 so tools like curl and
+		// Postman still work.
+		w.WriteHeader(http.StatusNoContent)
+	})
 
 	// Health and metrics (no auth required)
 	r.HandleFunc("/healthz", s.handleHealthz).Methods("GET")
@@ -275,9 +303,10 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 	api.Handle("/analytics/usage", s.requireAdmin(http.HandlerFunc(s.handleGetUsageAnalytics))).Methods("GET")
 	api.Handle("/analytics/costs", s.requireAdmin(http.HandlerFunc(s.handleGetCostEstimates))).Methods("GET")
 
-	// Admin
-	api.HandleFunc("/admin/sandboxes", s.handleAdminListSandboxes).Methods("GET")
-	api.HandleFunc("/admin/sharing", s.handleAdminListSharing).Methods("GET")
+	// Admin — both routes are admin-gated (M1): they enumerate or aggregate
+	// cross-tenant data, so a non-admin must never reach them.
+	api.Handle("/admin/sandboxes", s.requireAdmin(http.HandlerFunc(s.handleAdminListSandboxes))).Methods("GET")
+	api.Handle("/admin/sharing", s.requireAdmin(http.HandlerFunc(s.handleAdminListSharing))).Methods("GET")
 
 	// User preferences
 	api.HandleFunc("/user/me", s.handleGetMe).Methods("GET")
@@ -380,10 +409,15 @@ func NewServer(config *Config, k8sClient client.Client, bridge *terminal.Bridge)
 }
 
 // Start begins serving HTTP requests and blocks until shutdown.
+//
+// It uses signal.NotifyContext so that SIGTERM/SIGINT cancel the root
+// context and trigger a graceful shutdown. The shutdown drain then runs on
+// its own fresh 30 s timeout so in-flight requests keep their full drain
+// budget even though the root context is already cancelled (M10).
 func (s *Server) Start() error {
-	// Graceful shutdown on SIGTERM/SIGINT
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGTERM, syscall.SIGINT)
+	// Root context cancelled on SIGTERM or SIGINT.
+	rootCtx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
+	defer stop()
 
 	go func() {
 		s.logger.Info("router starting", "addr", s.config.ListenAddr)
@@ -393,9 +427,13 @@ func (s *Server) Start() error {
 		}
 	}()
 
-	<-stop
+	<-rootCtx.Done()
 	s.logger.Info("shutting down gracefully")
 
+	// Use a fresh background context (NOT the already-cancelled rootCtx) for
+	// the drain, so in-flight requests get the full 30 s budget after the
+	// signal fires. 30 s is generous; typical HTTP long-polling and WebSocket
+	// connections are drained before that.
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 

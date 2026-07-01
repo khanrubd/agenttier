@@ -1,8 +1,8 @@
 # Copyright 2024 AgentTier Authors
 # SPDX-License-Identifier: Apache-2.0
 
-# Build stage
-FROM public.ecr.aws/docker/library/golang:1.25-alpine AS builder
+# Build stage — digest-pinned for supply-chain security (M5).
+FROM public.ecr.aws/docker/library/golang:1.25.11-alpine@sha256:523c3effe300580ed375e43f43b1c9b091b68e935a7c3a92bfcc4e7ed55b18c2 AS builder
 
 RUN apk add --no-cache git ca-certificates
 
@@ -13,6 +13,9 @@ RUN apk add --no-cache git ca-certificates
 # normal network.
 ARG GOPROXY=https://proxy.golang.org,direct
 ENV GOPROXY=${GOPROXY}
+# GOTOOLCHAIN=local: never auto-download a toolchain; build with the image's
+# Go (matches go.mod toolchain go1.25.11) so builds stay hermetic/offline (M5).
+ENV GOTOOLCHAIN=local
 
 WORKDIR /workspace
 
@@ -33,8 +36,8 @@ RUN CGO_ENABLED=0 GOOS=linux go build \
     -ldflags="-s -w -X github.com/agenttier/agenttier/pkg/version.Version=${VERSION} -X github.com/agenttier/agenttier/pkg/version.GitCommit=${GIT_COMMIT}" \
     -o controller ./cmd/controller/
 
-# Runtime stage
-FROM gcr.io/distroless/static:nonroot
+# Runtime stage — digest-pinned for supply-chain security (M5).
+FROM gcr.io/distroless/static:nonroot@sha256:963fa6c544fe5ce420f1f54fb88b6fb01479f054c8056d0f74cc2c6000df5240
 
 WORKDIR /
 

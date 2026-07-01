@@ -85,7 +85,7 @@ What AgentTier ships today, grouped by what you probably need first.
 
 ## What is not here yet
 
-Roadmap items that are *not* shipped in v0.5.0 and will return real errors or missing features if you rely on them:
+Roadmap items that are *not* shipped in the current release and will return real errors or missing features if you rely on them:
 
 - Sharing and collaboration (viewer/collaborator roles, expiring share links) — planned for 0.2.x.
 - File transfer API — planned for 0.2.x.

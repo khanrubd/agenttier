@@ -66,6 +66,9 @@ python-sdk/.ruff_cache/
 kubeconfig
 *.kubeconfig
 
+# Config env (user-local; copy from config/config.env.example)
+config/config.env
+
 # Terraform
 terraform/**/.terraform/
 terraform/**/*.tfstate

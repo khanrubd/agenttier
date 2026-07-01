@@ -199,3 +199,34 @@ variable "test_user_password" {
   default     = ""
   sensitive   = true
 }
+
+# =============================================================================
+# ECR
+# =============================================================================
+
+variable "ecr_repo_prefix" {
+  description = "Name prefix for ECR repositories. Defaults to cluster_name. Override to share a registry namespace across clusters."
+  type        = string
+  default     = ""
+}
+
+# =============================================================================
+# CodeBuild (opt-in — off by default per decision D6)
+# =============================================================================
+
+variable "enable_codebuild" {
+  description = "Enable the optional CodeBuild path for building and pushing images. Off by default — the primary build path is local Docker buildx pushed to ECR. Enable only when a local Docker daemon is unavailable."
+  type        = bool
+  default     = false
+}
+
+variable "codebuild_timeout_minutes" {
+  description = "Maximum wall-clock minutes for a single CodeBuild run. The deploy.sh CodeBuild polling loop respects this limit and exits non-zero if exceeded (fixes audit M6)."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.codebuild_timeout_minutes >= 5 && var.codebuild_timeout_minutes <= 480
+    error_message = "codebuild_timeout_minutes must be between 5 and 480."
+  }
+}

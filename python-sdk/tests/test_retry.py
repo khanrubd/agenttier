@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import time
 from collections import Counter
-from typing import Optional
 
 import httpx
 import pytest

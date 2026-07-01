@@ -21,8 +21,12 @@
 # dockerfile: images/rl/Dockerfile.
 
 # ---- Stage 1: in-pod runtime binary ----------------------------------------
-FROM public.ecr.aws/docker/library/golang:1.25 AS runtime-build
+# Digest-pinned for supply-chain security (M5).
+FROM public.ecr.aws/docker/library/golang:1.25.11-alpine@sha256:523c3effe300580ed375e43f43b1c9b091b68e935a7c3a92bfcc4e7ed55b18c2 AS runtime-build
 ARG TARGETARCH
+# GOTOOLCHAIN=local: never auto-download a toolchain; build with the image's
+# Go (matches go.mod toolchain go1.25.11) so builds stay hermetic/offline (M5).
+ENV GOTOOLCHAIN=local
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -33,12 +37,12 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags='-s -w' \
     -o /out/agenttier-sandbox-runtime ./cmd/sandbox-runtime
 
-# ---- Stage 2: RL sandbox ---------------------------------------------------
+# ---- Stage 2: RL sandbox — digest-pinned for supply-chain security (M5).
 # Multi-arch build (linux/amd64, linux/arm64). PyTorch ships official CPU
 # wheels for both arches at the pinned version; Ray ships wheels for both
 # arches via PyPI + nightly wheel hosts. Base image is ECR Public to dodge
 # Docker Hub rate-limits on EKS nodes.
-FROM public.ecr.aws/docker/library/python:3.11-slim
+FROM public.ecr.aws/docker/library/python:3.11.13-slim@sha256:9bffe4353b925a1656688797ebc68f9c525e79b1d377a764d232182a519eeec4
 
 ARG TARGETARCH
 

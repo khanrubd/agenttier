@@ -12,8 +12,12 @@
 
 # ---- Stage 1: in-pod runtime binary ----------------------------------------
 # See pkg/sandboxruntime for design rationale.
-FROM public.ecr.aws/docker/library/golang:1.25 AS runtime-build
+# Digest-pinned for supply-chain security (M5).
+FROM public.ecr.aws/docker/library/golang:1.25.11-alpine@sha256:523c3effe300580ed375e43f43b1c9b091b68e935a7c3a92bfcc4e7ed55b18c2 AS runtime-build
 ARG TARGETARCH
+# GOTOOLCHAIN=local: never auto-download a toolchain; build with the image's
+# Go (matches go.mod toolchain go1.25.11) so builds stay hermetic/offline (M5).
+ENV GOTOOLCHAIN=local
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -24,8 +28,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags='-s -w' \
     -o /out/agenttier-sandbox-runtime ./cmd/sandbox-runtime
 
-# ---- Stage 2: claude-code sandbox ------------------------------------------
-FROM public.ecr.aws/docker/library/node:20-bookworm
+# ---- Stage 2: claude-code sandbox — digest-pinned for supply-chain security (M5).
+FROM public.ecr.aws/docker/library/node:20.19-bookworm@sha256:e034ee75c646d425d5986eb0be4ce53846b61f97390125ce5c37da904ca0ee56
 
 ARG TARGETARCH
 

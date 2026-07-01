@@ -127,9 +127,9 @@ manifests: ## Generate CRD manifests
 
 .PHONY: verify-codegen
 verify-codegen: generate manifests ## Verify generated code is up to date
-	@if [ -n "$$(git status --porcelain api/ config/ pkg/crds/)" ]; then \
+	@if [ -n "$$(git status --porcelain api/ config/crd/ config/rbac/ pkg/crds/)" ]; then \
 		echo "Generated files are out of date. Run 'make generate manifests' and commit."; \
-		git diff api/ config/ pkg/crds/; \
+		git diff api/ config/crd/ config/rbac/ pkg/crds/; \
 		exit 1; \
 	fi
 
@@ -161,6 +161,24 @@ docker-buildx: ## Build and push multi-arch images
 	docker buildx build --platform linux/amd64,linux/arm64 -t $(CONTROLLER_IMG) -f Dockerfile.controller --push .
 	docker buildx build --platform linux/amd64,linux/arm64 -t $(ROUTER_IMG) -f Dockerfile.router --push .
 	docker buildx build --platform linux/amd64,linux/arm64 -t $(WEBUI_IMG) -f web-ui/Dockerfile --push web-ui/
+
+##@ Local Cluster
+
+.PHONY: kind-load
+kind-load: docker-build ## Load all images into the kind cluster (CLUSTER=<name> to override)
+	kind load docker-image $(CONTROLLER_IMG) --name $${CLUSTER:-agenttier-local}
+	kind load docker-image $(ROUTER_IMG) --name $${CLUSTER:-agenttier-local}
+	kind load docker-image $(WEBUI_IMG) --name $${CLUSTER:-agenttier-local}
+
+.PHONY: minikube-load
+minikube-load: docker-build ## Load all images into the minikube cluster (PROFILE=<name> to override)
+	minikube image load $(CONTROLLER_IMG) $${PROFILE:+--profile=$$PROFILE}
+	minikube image load $(ROUTER_IMG) $${PROFILE:+--profile=$$PROFILE}
+	minikube image load $(WEBUI_IMG) $${PROFILE:+--profile=$$PROFILE}
+
+.PHONY: smoke
+smoke: ## Run the smoke test against the currently configured cluster
+	bash hack/smoke-test.sh
 
 ##@ Helm
 

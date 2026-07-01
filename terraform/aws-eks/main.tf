@@ -31,6 +31,16 @@ locals {
     },
     var.tags,
   )
+
+  # ECR registry hostname — <account>.dkr.ecr.<region>.amazonaws.com.
+  # Consumed by deploy.sh and the optional CodeBuild project.
+  ecr_registry = "${data.aws_caller_identity.current.account_id}.dkr.ecr.${var.region}.amazonaws.com"
+
+  # ECR repository name prefix. When var.ecr_repo_prefix is non-empty it is
+  # used as-is; otherwise falls back to cluster_name so repos are namespaced
+  # by cluster (e.g. "agenttier-prod/controller"). Override to share a registry
+  # namespace across multiple clusters (D2).
+  ecr_prefix = var.ecr_repo_prefix != "" ? var.ecr_repo_prefix : var.cluster_name
 }
 
 # =============================================================================

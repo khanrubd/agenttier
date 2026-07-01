@@ -4,10 +4,19 @@ AgentTier installs as a single Helm chart. CRDs, RBAC, and reference templates a
 
 ## Requirements
 
+**Build tools (build-from-source path):**
+
+- **Go 1.25+**
+- **Docker with buildx**
+- **Helm 3.x**
+- **kubectl**
+- **kind** (local) or **Terraform >= 1.5** + **AWS CLI v2** (EKS)
+
+**Cluster requirements:**
+
 - Kubernetes **1.27+**
 - CNI that supports NetworkPolicy (Calico, Cilium, AWS VPC CNI with NetworkPolicy enabled)
-- A CSI storage driver (EBS CSI, PD CSI, Azure Disk CSI, or any RWO-capable CSI)
-- Helm **3.x**
+- A CSI storage driver with a default StorageClass (EBS CSI, PD CSI, Azure Disk CSI, or any RWO-capable CSI)
 
 Optional but recommended:
 
@@ -15,7 +24,23 @@ Optional but recommended:
 - An OIDC identity provider (Cognito, Okta, Azure AD, Auth0) for multi-user auth
 - gVisor `RuntimeClass` (for running untrusted agent workloads with kernel-level isolation)
 
-## Quick install
+## Deploy from source (recommended)
+
+The recommended install path builds from source:
+
+```bash
+# Local — kind/minikube, dev-auth on, no AWS required:
+./deploy.sh --target=local
+
+# EKS — Terraform + ECR + Cognito OIDC:
+./deploy.sh --target=eks
+```
+
+See the [Quickstart](quickstart.md) for a full walkthrough.
+
+## Install from a published release
+
+If you prefer to install a released version without building from source:
 
 ```bash
 helm repo add agenttier https://agenttier.github.io/agenttier/charts
@@ -50,7 +75,7 @@ security:
 
 defaults:
   sandbox:
-    image: "ghcr.io/agenttier/sandbox-general:v0.5.0"
+    image: "ghcr.io/agenttier/sandbox-general:v0.8.1"  # pin to the release you deployed
     resources:
       requests:
         cpu: "500m"

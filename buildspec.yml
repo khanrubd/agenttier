@@ -1,55 +1,75 @@
 version: 0.2
 
-# CodeBuild buildspec for the live `agentloft-e2e` EKS cluster.
-# Pushes images into the `agentloft/*` ECR repos that the cluster's Helm
-# release references. Override IMAGE_TAG in the project settings or via the
-# `--environment-variables-override` flag on `aws codebuild start-build`.
+# CodeBuild buildspec for the opt-in CI build path.
+# This file is only used when `enable_codebuild = true` in Terraform.
+# The default build path is local Docker buildx -> ECR push (no CodeBuild needed).
 #
-# Sandbox images depend on Go source under `cmd/sandbox-runtime/` and
-# `pkg/sandboxruntime/`, so their build context is the repo root.
+# Tag derivation: IMAGE_TAG is supplied by deploy.sh --target=eks from
+# hack/lib/version.sh (VERSION file for releases, sha-<hash> for dev).
+# Do NOT use the default "dev" tag in production -- pass IMAGE_TAG via
+# --environment-variables-override when starting the build.
+#
+# Platform: BUILD_PLATFORM controls the --platform flag for buildx.
+# Default linux/amd64 matches the standard EKS x86-64 node group.
+# Override to linux/arm64 for Graviton node groups.
+#
+# ECR_REPO_PREFIX: the ECR registry prefix emitted by Terraform output
+# ecr_registry (e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com/agenttier).
+# deploy.sh passes this automatically.
 env:
   variables:
     AWS_DEFAULT_REGION: "us-east-1"
-    IMAGE_TAG: "dev"
-    ECR_NAMESPACE: "agentloft"
+    # IMAGE_TAG must be overridden at build-start via --environment-variables-override.
+    # Having a non-empty default here only for buildspec YAML validity; deploy.sh
+    # always supplies the derived tag so this fallback is never used on the EKS path.
+    IMAGE_TAG: "sha-unknown"
+    # ECR_REPO_PREFIX is the full registry+prefix without a trailing slash:
+    # e.g. 123456789012.dkr.ecr.us-east-1.amazonaws.com/agenttier
+    # Supplied by deploy.sh from `terraform output -raw ecr_registry`.
+    ECR_REPO_PREFIX: ""
+    # Build platform (must match EKS node arch).
+    BUILD_PLATFORM: "linux/amd64"
 
 phases:
+  install:
+    commands:
+      - docker buildx create --use --name agenttier-builder || docker buildx use agenttier-builder
+      - docker buildx inspect --bootstrap
+
   pre_build:
     commands:
-      - echo Logging in to ECR...
-      - AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text)
-      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
-      - REPO_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      - echo "Logging in to ECR..."
+      - AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --no-cli-pager)
+      - REGISTRY_HOST="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+      - aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" | docker login --username AWS --password-stdin "${REGISTRY_HOST}"
+      - |
+        if [ -z "${ECR_REPO_PREFIX}" ]; then
+          ECR_REPO_PREFIX="${REGISTRY_HOST}/agenttier"
+          echo "WARNING: ECR_REPO_PREFIX not set; using fallback ${ECR_REPO_PREFIX}"
+        fi
+      - echo "Building with tag=${IMAGE_TAG} platform=${BUILD_PLATFORM} registry=${ECR_REPO_PREFIX}"
+
   build:
     commands:
       - echo "Building controller..."
-      - docker build -t $REPO_URI/$ECR_NAMESPACE/controller:$IMAGE_TAG -f Dockerfile.controller --build-arg VERSION=$IMAGE_TAG .
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/controller:${IMAGE_TAG}" -f Dockerfile.controller --build-arg VERSION="${IMAGE_TAG}" --push .
       - echo "Building router..."
-      - docker build -t $REPO_URI/$ECR_NAMESPACE/router:$IMAGE_TAG -f Dockerfile.router --build-arg VERSION=$IMAGE_TAG .
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/router:${IMAGE_TAG}" -f Dockerfile.router --build-arg VERSION="${IMAGE_TAG}" --push .
       - echo "Building web-ui..."
-      - docker build -t $REPO_URI/$ECR_NAMESPACE/web-ui:$IMAGE_TAG -f web-ui/Dockerfile web-ui/
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/web-ui:${IMAGE_TAG}" -f web-ui/Dockerfile --push web-ui/
       - echo "Building sandbox-general (with in-pod runtime)..."
-      - docker build -t $REPO_URI/$ECR_NAMESPACE/sandbox-general:$IMAGE_TAG -f images/general-coding/Dockerfile .
-      - echo "Building sandbox-claude-code (with in-pod runtime)..."
-      - docker build -t $REPO_URI/$ECR_NAMESPACE/sandbox-claude-code:$IMAGE_TAG -f images/claude-code/Dockerfile . || true
-      - echo "Building sandbox-openclaw (with in-pod runtime)..."
-      - docker build -t $REPO_URI/$ECR_NAMESPACE/sandbox-openclaw:$IMAGE_TAG -f images/openclaw/Dockerfile . || true
-      - echo "Building sandbox-strands-bedrock (with in-pod runtime)..."
-      - docker build -t $REPO_URI/$ECR_NAMESPACE/sandbox-strands-bedrock:$IMAGE_TAG -f images/strands-bedrock/Dockerfile . || true
-      - echo "Building sandbox-langgraph (agent-mode reference)..."
-      - docker build -t $REPO_URI/$ECR_NAMESPACE/sandbox-langgraph:$IMAGE_TAG -f images/langgraph/Dockerfile .
-      - echo "Building sandbox-rl (RL rollout reference)..."
-      - docker build -t $REPO_URI/$ECR_NAMESPACE/sandbox-rl:$IMAGE_TAG -f images/rl/Dockerfile . || true
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-general:${IMAGE_TAG}" -f images/general-coding/Dockerfile --push .
+      - echo "Building sandbox-claude-code..."
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-claude-code:${IMAGE_TAG}" -f images/claude-code/Dockerfile --push . || echo "WARN sandbox-claude-code build failed (optional)"
+      - echo "Building sandbox-openclaw..."
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-openclaw:${IMAGE_TAG}" -f images/openclaw/Dockerfile --push . || echo "WARN sandbox-openclaw build failed (optional)"
+      - echo "Building sandbox-strands-bedrock..."
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-strands-bedrock:${IMAGE_TAG}" -f images/strands-bedrock/Dockerfile --push . || echo "WARN sandbox-strands-bedrock build failed (optional)"
+      - echo "Building sandbox-langgraph..."
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-langgraph:${IMAGE_TAG}" -f images/langgraph/Dockerfile --push .
+      - echo "Building sandbox-rl..."
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-rl:${IMAGE_TAG}" -f images/rl/Dockerfile --push . || echo "WARN sandbox-rl build failed (optional)"
+
   post_build:
     commands:
-      - echo "Pushing images..."
-      - docker push $REPO_URI/$ECR_NAMESPACE/controller:$IMAGE_TAG
-      - docker push $REPO_URI/$ECR_NAMESPACE/router:$IMAGE_TAG
-      - docker push $REPO_URI/$ECR_NAMESPACE/web-ui:$IMAGE_TAG
-      - docker push $REPO_URI/$ECR_NAMESPACE/sandbox-general:$IMAGE_TAG
-      - docker push $REPO_URI/$ECR_NAMESPACE/sandbox-claude-code:$IMAGE_TAG || true
-      - docker push $REPO_URI/$ECR_NAMESPACE/sandbox-openclaw:$IMAGE_TAG || true
-      - docker push $REPO_URI/$ECR_NAMESPACE/sandbox-strands-bedrock:$IMAGE_TAG || true
-      - docker push $REPO_URI/$ECR_NAMESPACE/sandbox-langgraph:$IMAGE_TAG
-      - docker push $REPO_URI/$ECR_NAMESPACE/sandbox-rl:$IMAGE_TAG || true
-      - echo "Build complete. Tagged $IMAGE_TAG in $ECR_NAMESPACE/* on $REPO_URI."
+      - echo "All images pushed with tag=${IMAGE_TAG} to ${ECR_REPO_PREFIX}/*"

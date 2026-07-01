@@ -23,6 +23,7 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	snapshotv1 "github.com/kubernetes-csi/external-snapshotter/client/v6/apis/volumesnapshot/v1"
@@ -56,20 +57,21 @@ func init() {
 
 func main() {
 	var (
-		listenAddr        string
-		oidcIssuer        string
-		oidcClientID      string
-		adminGroup        string
-		groupClaim        string
-		previewDomain     string
-		ingressClassName  string
-		namespace         string
-		sandboxNamespace  string
-		rateLimitPerIP    float64
-		rateLimitPerUser  float64
-		rateLimitTrustXFF bool
-		devAuth           bool
-		showVersion       bool
+		listenAddr         string
+		oidcIssuer         string
+		oidcClientID       string
+		adminGroup         string
+		groupClaim         string
+		previewDomain      string
+		ingressClassName   string
+		namespace          string
+		sandboxNamespace   string
+		rateLimitPerIP     float64
+		rateLimitPerUser   float64
+		rateLimitTrustXFF  bool
+		corsAllowedOrigins string
+		devAuth            bool
+		showVersion        bool
 	)
 
 	flag.StringVar(&listenAddr, "listen-addr", ":8080", "HTTP listen address")
@@ -105,6 +107,14 @@ func main() {
 	flag.BoolVar(&rateLimitTrustXFF, "ratelimit-trust-forwarded-headers",
 		os.Getenv("RATE_LIMIT_TRUST_FORWARDED_HEADERS") == "true",
 		"Trust X-Forwarded-For/X-Real-IP for per-IP rate limiting. Enable only behind a trusted proxy/LB.")
+	// CORS allowed origins — comma-separated list of origins that may make
+	// cross-origin requests. The incoming Origin header is reflected only
+	// when it exactly matches one of these values. An empty list disables
+	// CORS. Never use "*" — the API accepts auth headers.
+	// Also honored via AGENTTIER_CORS_ALLOWED_ORIGINS (same CSV format).
+	corsDefault := os.Getenv("AGENTTIER_CORS_ALLOWED_ORIGINS")
+	flag.StringVar(&corsAllowedOrigins, "cors-allowed-origins", corsDefault,
+		"Comma-separated list of allowed CORS origins (e.g. https://dashboard.example.com). Empty disables CORS.")
 	// Dev-auth — explicit opt-in to bypass authentication and treat every
 	// request as admin. OFF by default so a prod install that forgot to set
 	// an OIDC issuer fails closed (401) rather than open. Also honors
@@ -183,18 +193,30 @@ func main() {
 		PerUserBurst:          100, // generous so an interactive admin doesn't trip
 		TrustForwardedHeaders: rateLimitTrustXFF,
 	}
+	// Parse the comma-separated CORS origins into a slice. Empty string →
+	// empty slice → CORS disabled (no Access-Control-Allow-Origin emitted).
+	var parsedCORSOrigins []string
+	if corsAllowedOrigins != "" {
+		for _, o := range strings.Split(corsAllowedOrigins, ",") {
+			if trimmed := strings.TrimSpace(o); trimmed != "" {
+				parsedCORSOrigins = append(parsedCORSOrigins, trimmed)
+			}
+		}
+	}
+
 	config := &router.Config{
-		ListenAddr:       listenAddr,
-		OIDCIssuerURL:    oidcIssuer,
-		OIDCClientID:     oidcClientID,
-		AdminGroup:       adminGroup,
-		GroupClaim:       groupClaim,
-		PreviewDomain:    previewDomain,
-		IngressClassName: ingressClassName,
-		InstallNamespace: namespace,
-		SandboxNamespace: sandboxNamespace,
-		DevAuth:          devAuth,
-		RateLimit:        rateLimitCfg,
+		ListenAddr:         listenAddr,
+		OIDCIssuerURL:      oidcIssuer,
+		OIDCClientID:       oidcClientID,
+		AdminGroup:         adminGroup,
+		GroupClaim:         groupClaim,
+		PreviewDomain:      previewDomain,
+		IngressClassName:   ingressClassName,
+		InstallNamespace:   namespace,
+		SandboxNamespace:   sandboxNamespace,
+		CORSAllowedOrigins: parsedCORSOrigins,
+		DevAuth:            devAuth,
+		RateLimit:          rateLimitCfg,
 	}
 
 	// Optional SQL historical-records backend. Off by default — Kubernetes

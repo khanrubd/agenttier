@@ -88,10 +88,10 @@ Watch the `Release` workflow run. It produces:
 Anonymous checks a user would run:
 
 ```bash
-docker pull ghcr.io/agenttier/controller:vX.Y.Z
+docker pull ghcr.io/agenttier/controller:vX.Y.Z   # replace X.Y.Z with the new version
 helm repo update && helm search repo agenttier --versions
 curl -sL https://agenttier.github.io/agenttier/ | grep -q AgentTier
-pip install agenttier==X.Y.Z   # if PyPI publish is on
+pip install agenttier==X.Y.Z   # if PyPI publish is on; replace X.Y.Z
 ```
 
 If any of these 404 or fail, investigate the workflow run before announcing.

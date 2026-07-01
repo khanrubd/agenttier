@@ -124,6 +124,83 @@ output "cognito_admin_group" {
   value       = aws_cognito_user_group.admins.name
 }
 
+# =============================================================================
+# ECR
+# =============================================================================
+
+output "ecr_registry" {
+  description = "ECR registry hostname (<account>.dkr.ecr.<region>.amazonaws.com). Pass to deploy.sh as REGISTRY or --set *.image.registry."
+  value       = local.ecr_registry
+}
+
+output "ecr_controller_url" {
+  description = "Full ECR repository URL for the controller image."
+  value       = aws_ecr_repository.controller.repository_url
+}
+
+output "ecr_router_url" {
+  description = "Full ECR repository URL for the router image."
+  value       = aws_ecr_repository.router.repository_url
+}
+
+output "ecr_webui_url" {
+  description = "Full ECR repository URL for the web-ui image."
+  value       = aws_ecr_repository.webui.repository_url
+}
+
+output "ecr_sandbox_general_url" {
+  description = "Full ECR repository URL for the sandbox-general image."
+  value       = aws_ecr_repository.sandbox_general.repository_url
+}
+
+output "ecr_sandbox_claude_code_url" {
+  description = "Full ECR repository URL for the sandbox-claude-code image."
+  value       = aws_ecr_repository.sandbox_claude_code.repository_url
+}
+
+output "ecr_sandbox_openclaw_url" {
+  description = "Full ECR repository URL for the sandbox-openclaw image."
+  value       = aws_ecr_repository.sandbox_openclaw.repository_url
+}
+
+output "ecr_sandbox_langgraph_url" {
+  description = "Full ECR repository URL for the sandbox-langgraph image."
+  value       = aws_ecr_repository.sandbox_langgraph.repository_url
+}
+
+output "ecr_sandbox_rl_url" {
+  description = "Full ECR repository URL for the sandbox-rl image."
+  value       = aws_ecr_repository.sandbox_rl.repository_url
+}
+
+output "ecr_sandbox_strands_bedrock_url" {
+  description = "Full ECR repository URL for the sandbox-strands-bedrock image."
+  value       = aws_ecr_repository.sandbox_strands_bedrock.repository_url
+}
+
+# =============================================================================
+# CodeBuild (only populated when enable_codebuild = true)
+# =============================================================================
+
+output "codebuild_project" {
+  description = "CodeBuild project name. Empty string when enable_codebuild = false."
+  value       = var.enable_codebuild ? aws_codebuild_project.agenttier[0].name : ""
+}
+
+output "codebuild_s3_bucket" {
+  description = "S3 bucket name for CodeBuild source artifacts. Empty string when enable_codebuild = false."
+  value       = var.enable_codebuild ? aws_s3_bucket.codebuild_source[0].bucket : ""
+}
+
+output "codebuild_timeout_minutes" {
+  description = "Maximum wall-clock minutes per CodeBuild run (used by deploy.sh polling loop)."
+  value       = var.codebuild_timeout_minutes
+}
+
+# =============================================================================
+# Cognito
+# =============================================================================
+
 output "agenttier_helm_auth_values" {
   description = "Helm values snippet wiring AgentTier auth to this Cognito user pool."
   value       = <<-EOT

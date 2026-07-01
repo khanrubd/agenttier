@@ -25,7 +25,23 @@ instant (~800 ms in our measurements vs ~10 s cold).
 - [Governance](governance.md) — cluster-wide and per-namespace policy enforcement.
 - [Port forwarding](port-forwarding.md) — exposing sandbox ports via Services and Ingresses.
 
-## Install in three commands
+## Deploy from source
+
+The recommended path builds from source — no dependency on published artifacts or the GitHub chart repo:
+
+```bash
+# Local (kind or minikube):
+./deploy.sh --target=local
+
+# AWS EKS (Terraform → ECR push → Helm):
+./deploy.sh --target=eks
+```
+
+See the [Quickstart](quickstart.md) for the full prerequisite list and step-by-step walkthrough.
+
+## Install from the published chart (secondary)
+
+If you want to install a released version without building from source:
 
 ```bash
 helm repo add agenttier https://agenttier.github.io/agenttier/charts
@@ -33,8 +49,7 @@ helm repo update
 helm install agenttier agenttier/agenttier --namespace agenttier --create-namespace
 ```
 
-Then create a sandbox from the bundled `general-coding` template and open it in
-your browser. See the [Quickstart](quickstart.md).
+Images pull anonymously from `ghcr.io/agenttier/*`. See the [Installation guide](installation.md) for production values.
 
 ## License
 

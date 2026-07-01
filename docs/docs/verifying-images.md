@@ -1,9 +1,10 @@
 # Verifying released images
 
-From **v0.2.0** onwards, every container image published to `ghcr.io/agenttier/*`
+Every container image published to `ghcr.io/agenttier/*` on a `v*` release tag
 is keyless-signed with [cosign](https://docs.sigstore.dev/cosign/) using GitHub
 Actions' OIDC identity, and ships with SPDX + CycloneDX SBOMs attached as OCI
-artifacts.
+artifacts. Signatures and attestations are present from v0.2.0 onwards; earlier
+releases shipped without them.
 
 ## Verify a signature
 
@@ -13,7 +14,7 @@ Requires cosign v2+.
 cosign verify \
   --certificate-identity-regexp 'https://github.com/agenttier/agenttier/.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
-  ghcr.io/agenttier/controller:v0.5.0
+  ghcr.io/agenttier/controller:v0.8.1
 ```
 
 The command prints the certificate chain on success and exits non-zero if the
@@ -24,14 +25,14 @@ workflow.
 
 ```bash
 # Unsigned download (convenient, not tamper-proof):
-cosign download sbom ghcr.io/agenttier/controller:v0.5.0 > controller.spdx.json
+cosign download sbom ghcr.io/agenttier/controller:v0.8.1 > controller.spdx.json
 
 # Signed attestation (recommended):
 cosign verify-attestation \
   --certificate-identity-regexp 'https://github.com/agenttier/agenttier/.*' \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com' \
   --type spdx \
-  ghcr.io/agenttier/controller:v0.5.0
+  ghcr.io/agenttier/controller:v0.8.1
 ```
 
 ## Policy engines

@@ -63,22 +63,67 @@ v{{ $.Chart.AppVersion }}
 {{- end -}}
 {{- end }}
 
+{{/* Resolve a repository name against global.registry.
+     If the repository already contains a "/" it is treated as a fully-qualified
+     registry/repo path and returned as-is (enables per-component registry
+     overrides). Otherwise, it is a short name and is prefixed with the
+     global.registry value.
+
+     Usage: {{ include "agenttier.resolveRepo" (dict "repo" .Values.controller.image.repository "global" .Values.global) }}
+*/}}
+{{- define "agenttier.resolveRepo" -}}
+{{- $repo := .repo -}}
+{{- $registry := .global.registry | default "ghcr.io/agenttier" -}}
+{{- if contains "/" $repo -}}
+{{- $repo -}}
+{{- else -}}
+{{- printf "%s/%s" $registry $repo -}}
+{{- end -}}
+{{- end }}
+
+{{/* Resolve a sandbox image (short name or full override) to registry/name:tag.
+     A value that already contains ":" is treated as a full image ref and
+     returned unchanged. A value that contains "/" but no ":" is a bare full
+     path and gets the appVersion tag appended. A short name (no "/" or ":")
+     gets the global registry prefix and the appVersion tag.
+
+     Usage: {{ include "agenttier.resolveSandboxImage" (dict "image" .Values.defaults.sandbox.image "global" .Values.global "appVersion" .Chart.AppVersion) }}
+*/}}
+{{- define "agenttier.resolveSandboxImage" -}}
+{{- $image := .image -}}
+{{- $registry := .global.registry | default "ghcr.io/agenttier" -}}
+{{- $tag := printf "v%s" .appVersion -}}
+{{- if contains ":" $image -}}
+{{- /* full image:tag override — pass through unchanged */ -}}
+{{- $image -}}
+{{- else if contains "/" $image -}}
+{{- /* full path without tag — append appVersion tag */ -}}
+{{- printf "%s:%s" $image $tag -}}
+{{- else -}}
+{{- /* short name — prepend registry and append appVersion tag */ -}}
+{{- printf "%s/%s:%s" $registry $image $tag -}}
+{{- end -}}
+{{- end }}
+
 {{/* Controller image */}}
 {{- define "agenttier.controllerImage" -}}
+{{- $repo := include "agenttier.resolveRepo" (dict "repo" .Values.controller.image.repository "global" .Values.global) }}
 {{- $tag := .Values.controller.image.tag | default (printf "v%s" .Chart.AppVersion) }}
-{{- printf "%s:%s" .Values.controller.image.repository $tag }}
+{{- printf "%s:%s" $repo $tag }}
 {{- end }}
 
 {{/* Router image */}}
 {{- define "agenttier.routerImage" -}}
+{{- $repo := include "agenttier.resolveRepo" (dict "repo" .Values.router.image.repository "global" .Values.global) }}
 {{- $tag := .Values.router.image.tag | default (printf "v%s" .Chart.AppVersion) }}
-{{- printf "%s:%s" .Values.router.image.repository $tag }}
+{{- printf "%s:%s" $repo $tag }}
 {{- end }}
 
 {{/* Web UI image */}}
 {{- define "agenttier.webuiImage" -}}
+{{- $repo := include "agenttier.resolveRepo" (dict "repo" .Values.webui.image.repository "global" .Values.global) }}
 {{- $tag := .Values.webui.image.tag | default (printf "v%s" .Chart.AppVersion) }}
-{{- printf "%s:%s" .Values.webui.image.repository $tag }}
+{{- printf "%s:%s" $repo $tag }}
 {{- end }}
 
 {{/* Service account name

@@ -4,14 +4,44 @@ Get from zero to a running sandbox in under ten minutes.
 
 ## Prerequisites
 
-- Kubernetes **1.27+** (EKS, GKE, AKS, kind, or any CNI/CSI-capable cluster)
-- **Helm 3.x** and **kubectl** configured for that cluster
+**Build tools (required for building from source):**
+
+- **Go 1.25+** — `go version`
+- **Docker with buildx** — `docker buildx version`
+- **Helm 3.x** — `helm version`
+- **kubectl** configured for your target cluster
+- **kind** (local path) or **Terraform >= 1.5** + **AWS CLI v2** (EKS path)
+
+**Cluster requirements:**
+
+- Kubernetes **1.27+**
 - CNI with NetworkPolicy support (Calico, Cilium, AWS VPC CNI with NetworkPolicy enabled)
-- A CSI storage driver (EBS CSI, PD CSI, Azure Disk CSI, or any RWO-capable CSI)
+- A CSI storage driver with a default StorageClass (EBS CSI, PD CSI, or local-path on kind)
 
-If you just want to see it work, a local `kind` cluster with the default CNI + local-path-provisioner is enough.
+## 1. Deploy AgentTier
 
-## 1. Install AgentTier
+### Option A — Local (kind or minikube)
+
+```bash
+# Clone and deploy in one shot — creates a kind cluster, builds images, loads them, installs Helm chart
+git clone https://github.com/agenttier/agenttier.git
+cd agenttier
+./deploy.sh --target=local
+```
+
+This creates a kind cluster (if none exists), builds the controller/router/web-ui/sandbox images from source, loads them, and installs the Helm chart with dev-auth enabled. Smoke test runs at the end.
+
+### Option B — AWS EKS (Terraform + ECR)
+
+```bash
+./deploy.sh --target=eks
+```
+
+Runs `terraform apply` (VPC + EKS + ECR + Cognito), builds and pushes images to ECR, installs the Helm chart wired to Cognito OIDC, and runs the smoke test. See [terraform/aws-eks/README.md](https://github.com/agenttier/agenttier/tree/main/terraform/aws-eks) for variables and cost estimates.
+
+### Option C — Install from a published release
+
+If you want to install a released version without building from source:
 
 ```bash
 helm repo add agenttier https://agenttier.github.io/agenttier/charts
@@ -20,7 +50,7 @@ helm install agenttier agenttier/agenttier \
   --namespace agenttier --create-namespace
 ```
 
-That's it. Images pull anonymously from `ghcr.io/agenttier/*`. CRDs and the two reference templates (`general-coding`, `claude-code-bedrock`) are installed automatically.
+Images pull anonymously from `ghcr.io/agenttier/*`. CRDs and the two reference templates (`general-coding`, `claude-code-bedrock`) are installed automatically.
 
 ## 2. Verify
 
