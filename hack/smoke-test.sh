@@ -325,7 +325,7 @@ if [[ -n "${ROUTER_URL}" ]] && command -v curl >/dev/null 2>&1; then
     --max-time 15 \
     -X POST \
     -H "Content-Type: application/json" \
-    "${_EXEC_AUTH_ARGS[@]}" \
+    ${_EXEC_AUTH_ARGS[@]+"${_EXEC_AUTH_ARGS[@]}"} \
     -d '{"command":"/bin/sh -c \"echo smoke-test-ok\""}' \
     "${ROUTER_URL}/api/v1/sandboxes/${TEST_SANDBOX_NAME}/exec" \
     2>/dev/null || echo "000")
@@ -427,7 +427,7 @@ else
     -H "Connection: Upgrade" \
     -H "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==" \
     -H "Sec-WebSocket-Version: 13" \
-    "${_PTY_AUTH_ARGS[@]}" \
+    ${_PTY_AUTH_ARGS[@]+"${_PTY_AUTH_ARGS[@]}"} \
     "${PTY_HTTP_URL}" \
     2>/dev/null || echo "000")
   PTY_RESPONSE=$(cat /tmp/smoke_pty_resp.txt 2>/dev/null || true)

@@ -237,9 +237,32 @@ resource "aws_codebuild_project" "agenttier" {
     image_pull_credentials_type = "CODEBUILD"
     privileged_mode             = true # required for docker-in-docker builds
 
+    # ECR_REPO_PREFIX is the name buildspec.yml actually reads (D1d). It must be
+    # the registry host + repo namespace: "<account>.dkr.ecr.<region>.amazonaws.com/<prefix>".
+    # buildspec builds "${ECR_REPO_PREFIX}/controller" and the ECR repos are named
+    # "<prefix>/controller", so the bare registry host (local.ecr_registry) would
+    # push to a non-existent "<host>/controller" repo. Include local.ecr_prefix.
+    # This makes a standalone/manual build push to the correct repos. When
+    # deploy.sh drives the build it passes ECR_REPO_PREFIX via
+    # --environment-variables-override, which takes precedence over this default.
     environment_variable {
-      name  = "ECR_REGISTRY"
-      value = local.ecr_registry
+      name  = "ECR_REPO_PREFIX"
+      value = "${local.ecr_registry}/${local.ecr_prefix}"
+    }
+
+    # IMAGE_TAG default so a manually-triggered build is deterministic rather
+    # than pushing :sha-unknown. deploy.sh overrides this with the version.sh tag
+    # at start-build time (override precedence: override > project env > buildspec).
+    environment_variable {
+      name  = "IMAGE_TAG"
+      value = "manual"
+    }
+
+    # BUILD_PLATFORM default (matches the standard EKS x86-64 node group).
+    # deploy.sh overrides this from AGENTTIER_EKS_PLATFORM at start-build time.
+    environment_variable {
+      name  = "BUILD_PLATFORM"
+      value = "linux/amd64"
     }
 
     environment_variable {

@@ -107,11 +107,17 @@ at::check_local_prereqs() {
 }
 
 # at::check_eks_prereqs  — all tools needed for --target=eks
+#
+# Docker / docker buildx are required ONLY for the default local-build path.
+# When the CodeBuild path is selected (AGENTTIER_USE_CODEBUILD=true — set by
+# deploy.sh either via explicit opt-in or no-Docker auto-detect), images are
+# built in the cloud, so a local Docker daemon is NOT required. In that case we
+# skip the docker/buildx checks (D1a). All other tools (aws, terraform, kubectl,
+# helm, jq, zip) and the AWS-credential check remain unconditional.
 at::check_eks_prereqs() {
   at::step "Checking EKS prerequisites"
   at::require_cmd aws        "Install AWS CLI v2: https://docs.aws.amazon.com/cli/latest/userguide/install-cliv2.html"
   at::require_cmd terraform  "Install Terraform >=1.5: https://developer.hashicorp.com/terraform/install"
-  at::require_cmd docker     "Install Docker: https://docs.docker.com/get-docker/"
   at::require_cmd kubectl    "Install kubectl: https://kubernetes.io/docs/tasks/tools/"
   at::require_cmd helm       "Install Helm: https://helm.sh/docs/intro/install/"
   # jq: used by the teardown path to enumerate LoadBalancer services.
@@ -119,9 +125,15 @@ at::check_eks_prereqs() {
   # zip: used by the CodeBuild opt-in path to package source into an S3 zip.
   at::require_cmd zip        "Install zip: apt-get install zip  OR  brew install zip"
 
-  # Verify Docker buildx (required for --platform cross-arch push).
-  if ! docker buildx version >/dev/null 2>&1; then
-    at::fatal "Docker buildx not available. Upgrade Docker Desktop or install the buildx plugin."
+  if [[ "${AGENTTIER_USE_CODEBUILD:-false}" == "true" ]]; then
+    # Cloud build path — images are built in AWS CodeBuild. No local Docker needed.
+    at::log "CodeBuild path selected — skipping local Docker/buildx checks."
+  else
+    # Local build path — require Docker + buildx (for --platform cross-arch push).
+    at::require_cmd docker   "Install Docker: https://docs.docker.com/get-docker/  (or set AGENTTIER_USE_CODEBUILD=true to build in AWS CodeBuild)"
+    if ! docker buildx version >/dev/null 2>&1; then
+      at::fatal "Docker buildx not available. Upgrade Docker Desktop or install the buildx plugin, or set AGENTTIER_USE_CODEBUILD=true to build in AWS CodeBuild."
+    fi
   fi
 
   # Verify AWS credentials.

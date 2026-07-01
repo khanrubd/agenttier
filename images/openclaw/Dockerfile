@@ -5,10 +5,13 @@
 #
 # Why OpenClaw needs Node 22 (and we ship Node 22 here, vs Node 20 in
 # sandbox-claude-code): OpenClaw's runtime makes heavy use of features
-# introduced in Node 22.16 — older Node versions hit unpredictable
-# `SyntaxError`s in the Gateway boot path. Node 24 is the upstream
-# recommendation; we run on Node 22 to keep the Debian Bookworm package
-# story simple while still meeting the floor.
+# introduced in Node 22 — older Node versions hit unpredictable
+# `SyntaxError`s in the Gateway boot path. openclaw@2026.6.5 hard-requires
+# Node >= 22.19.0 (its `plugins install` engine check exits non-zero below
+# that), so we pin 22.23-bookworm — comfortably above the floor. Node 24 is
+# the upstream recommendation; we stay on Node 22 to keep the Debian Bookworm
+# package story simple. NOTE: keep this >= the openclaw npm engines floor when
+# bumping the pinned openclaw version.
 #
 # Why we bake a baseline OpenClaw config (vs running `openclaw onboard`
 # at runtime): the onboarding wizard is interactive and assumes an
@@ -52,7 +55,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     -o /out/agenttier-sandbox-runtime ./cmd/sandbox-runtime
 
 # ---- Stage 2: openclaw sandbox — digest-pinned for supply-chain security (M5).
-FROM public.ecr.aws/docker/library/node:22.16-bookworm@sha256:71bcbb3b215b3fa84b5b167585675072f4c270855e37a599803f1a58141a0716
+FROM public.ecr.aws/docker/library/node:22.23-bookworm@sha256:c601a46abb4d2ab80a9dc3da208d50d1122642d53f17a101926ace71e5a9bf1c
 
 ARG TARGETARCH
 

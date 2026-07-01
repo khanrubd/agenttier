@@ -117,6 +117,37 @@ if [[ -z "${AGENTTIER_IMAGE_TAG:-}" ]]; then
 fi
 IMAGE_TAG="${AGENTTIER_IMAGE_TAG}"
 
+# ---------------------------------------------------------------------------
+# Decide the EKS image-build path (D1b): CodeBuild (in-cloud) vs local buildx.
+#
+# USE_CODEBUILD=true when EITHER:
+#   - AGENTTIER_USE_CODEBUILD=true is set explicitly, OR
+#   - no local Docker buildx is available (auto-detect Docker-less machines).
+#
+# When true, deploy.sh passes -var=enable_codebuild=true to terraform apply
+# (so the CodeBuild project + S3 source bucket exist) and takes the CodeBuild
+# branch in Step 4. When false, the unchanged local-buildx path is used.
+#
+# Exported so hack/lib/common.sh::check_eks_prereqs can skip the docker/buildx
+# hard-requirement on the CodeBuild path (D1a).
+# ---------------------------------------------------------------------------
+if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
+  if [[ "${AGENTTIER_USE_CODEBUILD:-}" == "true" ]]; then
+    USE_CODEBUILD=true
+    at::log "CodeBuild path : enabled (AGENTTIER_USE_CODEBUILD=true)"
+  elif ! docker buildx version >/dev/null 2>&1; then
+    USE_CODEBUILD=true
+    at::log "CodeBuild path : enabled (auto-detected — no local docker buildx)"
+  else
+    USE_CODEBUILD=false
+    at::log "CodeBuild path : disabled (using local docker buildx)"
+  fi
+else
+  USE_CODEBUILD=false
+fi
+# Export so check_eks_prereqs (sourced from common.sh) sees the decision.
+export AGENTTIER_USE_CODEBUILD="${USE_CODEBUILD}"
+
 at::log "Deploy target : ${DEPLOY_TARGET}"
 at::log "Image tag     : ${IMAGE_TAG}"
 at::log "Namespace     : ${AGENTTIER_NAMESPACE}"
@@ -397,11 +428,18 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
   # published release competing with our source-built one.
   at::step "Provisioning infrastructure via Terraform"
   at::log "Terraform directory: ${TF_DIR}"
+  at::log "CodeBuild enabled  : ${USE_CODEBUILD}"
   cd "${TF_DIR}"
   terraform init -input=false
+  # D1b: pass enable_codebuild so the CodeBuild project + S3 source bucket are
+  # created when the CodeBuild path is selected. Without this the
+  # codebuild_project output is "" and the CodeBuild branch below is dead.
+  # Any extra terraform vars (e.g. create_test_user, test_user_password) are
+  # supplied via TF_VAR_* environment variables, so they are picked up here too.
   terraform apply -auto-approve \
     -var="region=${AGENTTIER_AWS_REGION}" \
-    -var="install_agenttier=false"
+    -var="install_agenttier=false" \
+    -var="enable_codebuild=${USE_CODEBUILD}"
   cd "${REPO_ROOT}"
 
   # Step 2: Read ECR registry and cluster info from Terraform outputs.
@@ -410,20 +448,20 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
   # The C5 empty-guard below catches the "output key missing / empty" case.
   at::step "Reading Terraform outputs"
   cd "${TF_DIR}"
-  ECR_REGISTRY="$(terraform output -raw ecr_registry --no-cli-pager)"
-  ECR_CONTROLLER_URL="$(terraform output -raw ecr_controller_url --no-cli-pager)"
-  ECR_ROUTER_URL="$(terraform output -raw ecr_router_url --no-cli-pager)"
-  ECR_WEBUI_URL="$(terraform output -raw ecr_webui_url --no-cli-pager)"
-  ECR_SANDBOX_URL="$(terraform output -raw ecr_sandbox_general_url --no-cli-pager)"
-  ECR_SANDBOX_CLAUDE_CODE_URL="$(terraform output -raw ecr_sandbox_claude_code_url --no-cli-pager)"
-  ECR_SANDBOX_OPENCLAW_URL="$(terraform output -raw ecr_sandbox_openclaw_url --no-cli-pager)"
-  ECR_SANDBOX_LANGGRAPH_URL="$(terraform output -raw ecr_sandbox_langgraph_url --no-cli-pager)"
-  ECR_SANDBOX_RL_URL="$(terraform output -raw ecr_sandbox_rl_url --no-cli-pager)"
-  ECR_SANDBOX_STRANDS_BEDROCK_URL="$(terraform output -raw ecr_sandbox_strands_bedrock_url --no-cli-pager)"
-  CLUSTER_NAME="$(terraform output -raw cluster_name --no-cli-pager)"
-  COGNITO_ISSUER="$(terraform output -raw cognito_issuer_url --no-cli-pager)"
-  COGNITO_CLIENT_ID="$(terraform output -raw cognito_client_id --no-cli-pager)"
-  COGNITO_ADMIN_GROUP="$(terraform output -raw cognito_admin_group --no-cli-pager)"
+  ECR_REGISTRY="$(terraform output -raw ecr_registry)"
+  ECR_CONTROLLER_URL="$(terraform output -raw ecr_controller_url)"
+  ECR_ROUTER_URL="$(terraform output -raw ecr_router_url)"
+  ECR_WEBUI_URL="$(terraform output -raw ecr_webui_url)"
+  ECR_SANDBOX_URL="$(terraform output -raw ecr_sandbox_general_url)"
+  ECR_SANDBOX_CLAUDE_CODE_URL="$(terraform output -raw ecr_sandbox_claude_code_url)"
+  ECR_SANDBOX_OPENCLAW_URL="$(terraform output -raw ecr_sandbox_openclaw_url)"
+  ECR_SANDBOX_LANGGRAPH_URL="$(terraform output -raw ecr_sandbox_langgraph_url)"
+  ECR_SANDBOX_RL_URL="$(terraform output -raw ecr_sandbox_rl_url)"
+  ECR_SANDBOX_STRANDS_BEDROCK_URL="$(terraform output -raw ecr_sandbox_strands_bedrock_url)"
+  CLUSTER_NAME="$(terraform output -raw cluster_name)"
+  COGNITO_ISSUER="$(terraform output -raw cognito_issuer_url)"
+  COGNITO_CLIENT_ID="$(terraform output -raw cognito_client_id)"
+  COGNITO_ADMIN_GROUP="$(terraform output -raw cognito_admin_group)"
 
   # C5: fail loudly if any MANDATORY output is empty. terraform output -raw
   # returns "" (with 2>/dev/null swallowing the error) when the state is stale,
@@ -442,9 +480,9 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
   done
 
   # CodeBuild outputs (only meaningful when enable_codebuild=true).
-  CODEBUILD_PROJECT="$(terraform output -raw codebuild_project --no-cli-pager 2>/dev/null || true)"
-  CODEBUILD_S3_BUCKET="$(terraform output -raw codebuild_s3_bucket --no-cli-pager 2>/dev/null || true)"
-  CODEBUILD_TIMEOUT="$(terraform output -raw codebuild_timeout_minutes --no-cli-pager 2>/dev/null || echo "30")"
+  CODEBUILD_PROJECT="$(terraform output -raw codebuild_project 2>/dev/null || true)"
+  CODEBUILD_S3_BUCKET="$(terraform output -raw codebuild_s3_bucket 2>/dev/null || true)"
+  CODEBUILD_TIMEOUT="$(terraform output -raw codebuild_timeout_minutes 2>/dev/null || echo "30")"
 
   cd "${REPO_ROOT}"
 
@@ -453,9 +491,16 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
   at::log "Cognito issuer   : ${COGNITO_ISSUER}"
 
   # Step 3: Authenticate Docker to ECR.
-  at::step "Authenticating Docker to ECR"
-  aws ecr get-login-password --region "${AGENTTIER_AWS_REGION}" --no-cli-pager \
-    | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+  # Only needed for the local docker-buildx path. On the CodeBuild path there is
+  # no local Docker daemon (that is the whole reason CodeBuild is used) and the
+  # buildspec performs its own `aws ecr get-login-password | docker login` inside
+  # the build container — so a local docker login here would fail with
+  # set -euo pipefail and abort the deploy. Skip it when using CodeBuild.
+  if [[ "${USE_CODEBUILD}" != "true" ]]; then
+    at::step "Authenticating Docker to ECR"
+    aws ecr get-login-password --region "${AGENTTIER_AWS_REGION}" --no-cli-pager \
+      | docker login --username AWS --password-stdin "${ECR_REGISTRY}"
+  fi
 
   # Step 4: Build + push images to ECR.
   #
@@ -475,10 +520,22 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
     at::log "Build timeout      : ${CODEBUILD_TIMEOUT} minutes"
 
     # Upload source zip.
+    #
+    # Exclude VCS, terraform state, build artifacts, and dependency dirs at ANY
+    # depth. Note zip's -x globs must match the full stored path: 'node_modules/*'
+    # only matches a TOP-LEVEL node_modules, so nested ones (e.g.
+    # web-ui/node_modules) also need '*/node_modules/*'. Shipping a host-built
+    # node_modules would both bloat the upload and (via COPY . .) break the
+    # in-container npm build with a platform/stale mismatch.
     at::log "Packaging source..."
     SOURCE_ZIP="/tmp/agenttier-source-$$.zip"
     zip -r "${SOURCE_ZIP}" . \
-      -x '.git/*' 'terraform/*' 'node_modules/*' '*.DS_Store' '.venv/*' \
+      -x '.git/*' 'terraform/*' \
+         'node_modules/*' '*/node_modules/*' \
+         'web-ui/dist/*' \
+         '.venv/*' '*/.venv/*' \
+         'bin/*' '_output/*' \
+         '*.DS_Store' '*.log' \
       >/dev/null
     at::log "Uploading source to s3://${CODEBUILD_S3_BUCKET}/source.zip..."
     aws s3 cp "${SOURCE_ZIP}" \
@@ -488,9 +545,27 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
     rm -f "${SOURCE_ZIP}"
 
     # Start build.
+    #
+    # D1c: pass IMAGE_TAG, ECR_REPO_PREFIX, and BUILD_PLATFORM as environment
+    # overrides. Without these, buildspec.yml falls back to IMAGE_TAG=sha-unknown
+    # (→ CodeBuild pushes :sha-unknown while Helm Step 6 references the real
+    # version.sh tag → guaranteed ImagePullBackOff) and an empty ECR_REPO_PREFIX.
+    #
+    # ECR_REPO_PREFIX must be the registry host + repo namespace, e.g.
+    # <acct>.dkr.ecr.<region>.amazonaws.com/agenttier — NOT the bare registry host
+    # (the ecr_registry output). buildspec.yml builds "${ECR_REPO_PREFIX}/controller"
+    # and the ECR repos are named "<prefix>/controller", so the host alone would
+    # push to a non-existent "<host>/controller" repo. Derive it by stripping the
+    # image name from a full repo URL (ecr_controller_url = "<host>/<prefix>/controller").
+    ECR_REPO_PREFIX="${ECR_CONTROLLER_URL%/controller}"
+    at::log "Build overrides    : IMAGE_TAG=${IMAGE_TAG} ECR_REPO_PREFIX=${ECR_REPO_PREFIX} BUILD_PLATFORM=${PLATFORM}"
     BUILD_ID="$(aws codebuild start-build \
       --project-name "${CODEBUILD_PROJECT}" \
       --region "${AGENTTIER_AWS_REGION}" \
+      --environment-variables-override \
+        "name=IMAGE_TAG,value=${IMAGE_TAG},type=PLAINTEXT" \
+        "name=ECR_REPO_PREFIX,value=${ECR_REPO_PREFIX},type=PLAINTEXT" \
+        "name=BUILD_PLATFORM,value=${PLATFORM},type=PLAINTEXT" \
       --no-cli-pager \
       --output text \
       --query 'build.id')"
