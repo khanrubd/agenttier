@@ -209,6 +209,24 @@ resource "aws_iam_role_policy" "codebuild" {
 }
 
 # ---------------------------------------------------------------------------
+# CloudWatch log group for build output.
+#
+# Declared explicitly (rather than letting CodeBuild auto-create it on first
+# build) so `terraform destroy` cleans it up — an auto-created group survives
+# destroy and lingers as an orphan on every teardown. Retention bounds cost.
+# ---------------------------------------------------------------------------
+resource "aws_cloudwatch_log_group" "codebuild" {
+  count = var.enable_codebuild ? 1 : 0
+
+  name              = "/aws/codebuild/${var.cluster_name}-build"
+  retention_in_days = 14
+
+  tags = merge(local.tags, {
+    service = "agenttier-codebuild"
+  })
+}
+
+# ---------------------------------------------------------------------------
 # CodeBuild project
 # ---------------------------------------------------------------------------
 
@@ -278,7 +296,7 @@ resource "aws_codebuild_project" "agenttier" {
 
   logs_config {
     cloudwatch_logs {
-      group_name  = "/aws/codebuild/${var.cluster_name}-build"
+      group_name  = aws_cloudwatch_log_group.codebuild[0].name
       stream_name = "build"
     }
   }
