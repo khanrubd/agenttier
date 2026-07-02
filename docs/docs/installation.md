@@ -10,7 +10,7 @@ AgentTier installs as a single Helm chart. CRDs, RBAC, and reference templates a
 - **Docker with buildx** — required for the local (kind) path and the default EKS build path. **Not required for the EKS CodeBuild path**, which builds images in AWS instead (auto-selected by `deploy.sh` when Docker is unavailable, or forced with `AGENTTIER_USE_CODEBUILD=true`).
 - **Helm 3.x**
 - **kubectl**
-- **kind** (local) or **Terraform >= 1.5** + **AWS CLI v2** + **jq** + **zip** (EKS)
+- **kind** (local) or **Terraform >= 1.10** + **AWS CLI v2** + **jq** + **zip** (EKS). The >= 1.10 floor is required by the module's S3 state backend, which uses the native S3 lockfile (`use_lockfile = true`) instead of a DynamoDB lock table — see [State backend](#eks-state-backend) below. `deploy.sh` checks this and fails loudly with an install hint if your `terraform` is older.
 
 **Cluster requirements:**
 
@@ -37,6 +37,56 @@ The recommended install path builds from source:
 ```
 
 See the [Quickstart](quickstart.md) for a full walkthrough.
+
+## EKS: endpoint modes and private-mode prerequisites
+
+The `terraform/aws-eks` module supports two API endpoint exposure modes via
+`endpoint_access_mode` (see [Security: EKS API endpoint
+modes](security.md#eks-api-endpoint-modes) for the full rationale):
+
+- **`public-restricted` (default)** — no extra prerequisites beyond the
+  standard ones above. You must supply a CIDR allowlist in
+  `cluster_endpoint_public_access_cidrs`; `0.0.0.0/0` is rejected.
+- **`private`** — the cluster's API server has no public endpoint. Additional
+  requirements:
+  - `enable_codebuild = true` (enforced by a Terraform precondition) — the
+    on-cluster deploy steps (AWS Load Balancer Controller + AgentTier Helm
+    chart install, smoke test) run inside a VPC-configured CodeBuild project
+    instead of locally, since there is no other path to the API server during
+    a `deploy.sh` run.
+  - A human operator reaching the cluster (`kubectl`, the SSM tunnel) needs
+    `ssm:StartSession` on a managed node instance — see [Port
+    forwarding](port-forwarding.md) for the full access runbook.
+  - `terraform apply` itself has **no extra prerequisite** for private mode —
+    it only calls AWS APIs, so it works the same from a laptop in either mode.
+
+```bash
+# Private mode: deploy.sh owns the terraform apply, so set the mode via the
+# AGENTTIER_ENDPOINT_MODE env var (mirrors terraform's endpoint_access_mode
+# var) rather than calling terraform directly — deploy.sh passes it through
+# as -var="endpoint_access_mode=..." and forces the CodeBuild path
+# automatically (design.md#4).
+export AGENTTIER_ENDPOINT_MODE=private
+./deploy.sh --target=eks
+```
+
+### EKS state backend
+
+The module's `backend.tf` configures an S3 backend with the native S3
+lockfile (`use_lockfile = true`, no DynamoDB table) — required so a human's
+laptop and the CodeBuild deploy actor can share the same state. Bootstrap the
+bucket once:
+
+```bash
+./hack/bootstrap-tfstate.sh                       # versioned, SSE-KMS, Block Public Access, TLS-only policy
+cp terraform/aws-eks/backend.hcl.example terraform/aws-eks/backend.hcl
+# edit backend.hcl with your bucket name, then:
+cd terraform/aws-eks && terraform init -backend-config=backend.hcl
+```
+
+For a quick local-only eval, `terraform init -backend=false` works without
+ever creating the bucket (state stays local, same as before this backend was
+added).
 
 ## Install from a published release
 

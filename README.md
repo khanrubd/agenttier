@@ -127,9 +127,35 @@ Uninstalls the Helm release and deletes the kind/minikube cluster.
 
 ### Path 2: AWS EKS
 
-**Prerequisites:** `aws` CLI (configured with credentials), `terraform` >= 1.5, `kubectl`, `helm`, `jq`, `zip`. **Docker with `buildx` is required only for the default local-build path** — if you have no local Docker daemon, use the [CodeBuild path](#codebuild-in-cloud-image-builds-eks-only) (images are built in AWS), which `deploy.sh` selects automatically when `docker buildx` is unavailable.
+**Prerequisites:** `aws` CLI (configured with credentials), `terraform` >= 1.10 (the S3 state backend's native lockfile requires it — see [state backend](#terraform-state-backend) below), `kubectl`, `helm`, `jq`, `zip`. **Docker with `buildx` is required only for the default local-build path** — if you have no local Docker daemon, use the [CodeBuild path](#codebuild-in-cloud-image-builds-eks-only) (images are built in AWS), which `deploy.sh` selects automatically when `docker buildx` is unavailable.
 
 **Cost note:** an EKS cluster with the default Terraform configuration costs approximately $8-10/day. Run `./deploy.sh --target=eks --teardown` when done to avoid ongoing charges.
+
+**EKS API endpoint exposure.** The Terraform module's `endpoint_access_mode` variable controls how the cluster's Kubernetes API server is reachable:
+
+- **`public-restricted` (default):** the public endpoint stays on, but you must supply a narrow CIDR allowlist — `cluster_endpoint_public_access_cidrs` defaults to `[]` and **rejects `0.0.0.0/0`** (a breaking change from earlier versions of this module, which defaulted to the whole internet). Laptop-friendly: `terraform apply`, `kubectl`, and `helm` all work directly from wherever you run `deploy.sh`.
+- **`private`:** the public endpoint is off entirely. `terraform apply` still runs fine from a laptop (it's pure AWS-API calls — creating a private-endpoint cluster doesn't require reaching its API), but the on-cluster steps (installing the AWS Load Balancer Controller + the AgentTier Helm chart, running the smoke test) have no public path to the API server, so `deploy.sh` delegates them to a **CodeBuild project running inside the VPC** instead of running `kubectl`/`helm` locally. Requires `enable_codebuild = true` (enforced by a Terraform precondition). Human operators reach the private API via an **SSM Session Manager port-forward** — see [Accessing a private-mode cluster](#accessing-a-private-mode-cluster-ssm-port-forward) below.
+
+```bash
+terraform apply -var="endpoint_access_mode=private" -var="enable_codebuild=true"   # private mode
+```
+
+#### Terraform state backend
+
+Earlier versions of this module shipped with **no backend block** (state stayed local, so the module was drop-in). That changed: `terraform/aws-eks/backend.tf` now configures an **S3 backend with the native S3 lockfile** (`use_lockfile = true`, no DynamoDB table) — required because private-mode's CodeBuild-in-VPC deploy actor and a human's laptop both need to read/write the *same* state, which local state can't do. Bootstrap the bucket once (versioned, SSE-KMS encrypted, Block Public Access, TLS-only policy, `data-classification=confidential` tagged):
+
+```bash
+./hack/bootstrap-tfstate.sh                      # defaults to agenttier-tfstate-<account-id>
+cp terraform/aws-eks/backend.hcl.example terraform/aws-eks/backend.hcl
+# edit backend.hcl with the bucket name AND kms_key_id printed above, then:
+cd terraform/aws-eks && terraform init -backend-config=backend.hcl
+```
+
+`kms_key_id` is required for `terraform.tfstate` itself to land under SSE-KMS
+— Terraform's S3 backend otherwise encrypts every state write with its own
+explicit AES256 (SSE-S3), independent of the bucket's default encryption.
+
+For a quick local-only eval with no shared state, `terraform init -backend=false` still works and the module falls back to local state — you never have to run the bootstrap script just to try it out.
 
 ```bash
 git clone https://github.com/agenttier/agenttier.git
@@ -145,14 +171,15 @@ cp config/config.env.example config/config.env
 What this does:
 
 1. Verifies AWS credentials via `aws sts get-caller-identity`.
-2. Runs `terraform apply` in `terraform/aws-eks/` — provisions VPC, EKS cluster, managed node groups (including an optional gVisor group), EBS CSI, AWS Load Balancer Controller, IRSA roles, ECR repositories, and a Cognito User Pool for OIDC auth.
-3. Reads ECR registry URLs and Cognito OIDC settings from Terraform outputs. Any empty mandatory output fails immediately with a clear message.
+2. Runs `terraform apply` in `terraform/aws-eks/` — provisions VPC, EKS cluster, managed node groups (including an optional gVisor group), EBS CSI, IRSA roles (including for the AWS Load Balancer Controller — the controller itself is installed by `deploy.sh`, not Terraform), ECR repositories, a Cognito User Pool for OIDC auth, scoped EKS Access Entries (replacing blanket creator-admin), control-plane logging (api/audit/authenticator to a managed CloudWatch log group), and optionally GuardDuty EKS Protection.
+3. Reads ECR registry URLs, cluster/VPC info, and Cognito OIDC settings from Terraform outputs. Any empty mandatory output fails immediately with a clear message.
 4. Builds and pushes all nine images to ECR — 3 core images (controller, router, web-ui) and 6 sandbox images (sandbox-general, sandbox-claude-code, sandbox-openclaw, sandbox-langgraph, sandbox-rl, sandbox-strands-bedrock) — via one of two paths:
    - **Local buildx (default):** authenticates Docker to ECR and builds+pushes with `docker buildx` at `$AGENTTIER_EKS_PLATFORM` (default `linux/amd64`).
-   - **AWS CodeBuild (no local Docker):** zips the source, uploads it to the CodeBuild S3 bucket, and runs the in-cloud build — see [CodeBuild path](#codebuild-in-cloud-image-builds-eks-only). The core images are hard-required; the four extra agent-sandbox images (openclaw, langgraph, rl, strands-bedrock) build best-effort so one upstream failure does not block the deploy.
-5. Configures `kubectl` for the new cluster.
-6. Installs the Helm chart from the local `helm/agenttier/` tree. The chart's `crds/` directory installs the AgentTier CRDs first (so the bundled default `ClusterSandboxTemplate`s apply cleanly on a fresh install), then wires Cognito OIDC auth and deploys a default gp3 EBS StorageClass so sandbox PVCs bind immediately. Dev-auth is never set on the EKS path.
-7. Runs `hack/smoke-test.sh`.
+   - **AWS CodeBuild (no local Docker, or always in `private` endpoint mode):** zips the source, uploads it to the CodeBuild S3 bucket, and runs the in-cloud build — see [CodeBuild path](#codebuild-in-cloud-image-builds-eks-only). The core images are hard-required; the four extra agent-sandbox images (openclaw, langgraph, rl, strands-bedrock) build best-effort so one upstream failure does not block the deploy.
+5. Installs the AWS Load Balancer Controller and the AgentTier Helm chart, then runs `hack/smoke-test.sh`:
+   - **`public-restricted` (default):** runs locally — `aws eks update-kubeconfig`, `helm upgrade --install` for both releases, then the smoke test, exactly as `kubectl`/`helm` would from your machine.
+   - **`private`:** delegates the same three steps to a second CodeBuild run inside the VPC (`buildspec-deploy.yml`), passing cluster/ECR/Cognito values as environment overrides and polling to completion with the same bounded-timeout loop used for image builds.
+   The AgentTier chart's `crds/` directory installs the CRDs first (so the bundled default `ClusterSandboxTemplate`s apply cleanly on a fresh install), then wires Cognito OIDC auth and deploys a default gp3 EBS StorageClass so sandbox PVCs bind immediately. Dev-auth is never set on the EKS path.
 
 **Expected output** (abbreviated):
 
@@ -184,6 +211,41 @@ What this does:
 ```
 
 This uninstalls the Helm release, deletes sandbox PVCs and LoadBalancer services (waiting for AWS LB deprovisioning), then runs `terraform destroy -auto-approve`. No orphaned resources are left behind.
+
+---
+
+### Accessing a private-mode cluster (SSM port-forward)
+
+In `endpoint_access_mode = private`, there is no public path to the Kubernetes API — CI/deploy reaches it via CodeBuild-in-VPC (above), and **human operators reach it via an SSM Session Manager port-forward** through one of the managed node group instances (no bastion, no inbound security-group rule, no SSH key; IAM-gated and outbound-initiated only). The node instance role already carries `AmazonSSMManagedInstanceCore` for this purpose.
+
+```bash
+# 1. Find a running managed-node instance in the cluster (cluster_name comes
+#    from the terraform output, not hardcoded — a non-default cluster_name
+#    would otherwise match zero instances).
+cd terraform/aws-eks
+CLUSTER_NAME=$(terraform output -raw cluster_name)
+INSTANCE=$(aws ec2 describe-instances \
+  --filters "Name=tag:eks:cluster-name,Values=${CLUSTER_NAME}" "Name=instance-state-name,Values=running" \
+  --query 'Reservations[0].Instances[0].InstanceId' --output text)
+
+# 2. Resolve the private API endpoint host (terraform output, scheme stripped).
+APISERVER=$(terraform output -raw cluster_endpoint_private_host)
+cd -
+
+# 3. Tunnel local :6443 -> apiserver:443 through the node via SSM.
+aws ssm start-session --target "$INSTANCE" \
+  --document-name AWS-StartPortForwardingSessionToRemoteHost \
+  --parameters "{\"host\":[\"$APISERVER\"],\"portNumber\":[\"443\"],\"localPortNumber\":[\"6443\"]}"
+
+# 4. In a second terminal, point kubectl at the tunnel. The API server's cert is
+#    issued for $APISERVER, not "localhost" — set tls-server-name so TLS
+#    validation still succeeds through the tunnel (avoids insecure-skip-tls-verify).
+kubectl config set-cluster agenttier-private --server="https://localhost:6443"
+kubectl config set-cluster agenttier-private --tls-server-name="$APISERVER"
+kubectl --context <your-context-using-agenttier-private> get nodes
+```
+
+The same tunnel technique reaches the web UI: once the API tunnel is up, `kubectl port-forward -n agenttier svc/agenttier-webui 8080:80` works exactly as it does in `public-restricted` mode. See `docs/docs/port-forwarding.md` and `docs/docs/security.md` for the full runbook and TLS/SNI details.
 
 ---
 
@@ -223,6 +285,16 @@ sandbox-claude-code — a failure aborts the deploy) and **optional** agent sand
 strands-bedrock, langgraph, rl — built best-effort; a single upstream failure is reported but does
 not block the deploy). A failed optional image surfaces later as `ImagePullBackOff` only if you
 create a sandbox from that specific template.
+
+**Deploy-build path (`endpoint_access_mode = private` only).** This CodeBuild project also runs a
+*second*, separate build for the on-cluster deploy steps when the API endpoint is private (see
+[Path 2: AWS EKS](#path-2-aws-eks) step 5) — same project and source zip, different buildspec
+(`buildspec-deploy.yml` instead of `buildspec.yml`). `deploy.sh` starts it with the cluster/ECR/
+Cognito values as `--environment-variables-override` after the image build succeeds, and polls it
+to completion the same way. It installs the AWS Load Balancer Controller + the AgentTier Helm chart
+and runs `hack/smoke-test.sh` from inside the VPC, since a private endpoint has no other path to
+reach the cluster during a build. In `public-restricted` mode this second build never runs — those
+steps execute locally instead.
 
 ---
 

@@ -112,6 +112,84 @@ Every sandbox Pod gets:
 These defaults are set by the controller and cannot be weakened via the Sandbox
 spec. Templates may tighten them further but not loosen them.
 
+## AWS EKS deployment hardening
+
+The `terraform/aws-eks` reference module (see its
+[README](https://github.com/agenttier/agenttier/blob/main/terraform/aws-eks/README.md))
+supports a hardened deployment posture on top of the defaults documented
+above. These controls apply to the Kubernetes control plane and AWS
+infrastructure, not the AgentTier application itself.
+
+### EKS API endpoint modes
+
+`var.endpoint_access_mode` controls how the cluster's Kubernetes API server is
+reachable:
+
+- **`public-restricted` (default):** the public endpoint stays enabled, but
+  `cluster_endpoint_public_access_cidrs` must be a narrow allowlist —
+  `0.0.0.0/0` is rejected by both a variable-level `validation` block and a
+  belt-and-suspenders `precondition` on the cluster resource. This is a
+  breaking default change from earlier module versions, which defaulted the
+  CIDR list to the whole internet.
+- **`private`:** the public endpoint is off entirely; only in-VPC principals
+  (nodes, CodeBuild, an SSM tunnel) can reach the API. Requires
+  `enable_codebuild = true` (also enforced by a `precondition`) because the
+  on-cluster deploy steps (installing the AWS Load Balancer Controller and the
+  AgentTier Helm chart, running the smoke test) have no other path to the
+  cluster — they run inside a CodeBuild project configured with `vpc_config`
+  instead of on the operator's laptop.
+
+Creating a `private`-mode cluster itself works fine from a laptop —
+`terraform apply` only ever talks to AWS APIs, never to the Kubernetes API
+server directly (the `helm` and `kubernetes` Terraform providers were removed
+from the module for exactly this reason; the Helm releases that used to run
+during `terraform apply` now run from `deploy.sh` after the cluster exists).
+
+### Scoped EKS Access Entries
+
+The module replaces the blanket `enable_cluster_creator_admin_permissions`
+convenience flag with an explicit `access_entries` map: the identity running
+`terraform apply` (normalized from an STS session ARN to its underlying
+role/user ARN via `aws_iam_session_context`, so an assumed-role caller still
+gets a valid entry — an unnormalized session ARN is rejected by the EKS API
+as an invalid Access Entry principal, which for a private-mode cluster with
+no other admin path would leave the cluster orphaned) and, when
+`enable_codebuild = true`, the CodeBuild deploy role. Both carry the
+`AmazonEKSClusterAdminPolicy` cluster-scope association for v1;
+namespace-scoping either principal further is a documented tightening
+opportunity, not yet implemented.
+
+### Control-plane logging and GuardDuty
+
+- `cluster_enabled_log_types = ["api", "audit", "authenticator"]` ships a
+  managed CloudWatch log group (`eks_log_retention_days`, default 14) so
+  `terraform destroy` cleans it up instead of leaving an EKS-auto-created
+  group behind. Audit logs can be a meaningful cost driver on a busy cluster —
+  tune retention accordingly.
+- `enable_guardduty_eks_protection` (default `false`) turns on GuardDuty's EKS
+  Audit Log and Runtime Monitoring detectors. Left off by default because
+  GuardDuty is frequently managed centrally at the organization/account level
+  rather than per-workload; enabling it here when an org-wide detector already
+  exists is redundant, not additive.
+
+### MFA
+
+The module does not mint any human-assumable IAM role, so there is no trust
+policy to attach an `aws:MultiFactorAuthPresent` condition to. MFA enforcement
+for the identity running `terraform apply` (and therefore holding the
+`deployer` Access Entry) is the caller's own IAM/SSO configuration — Terraform
+cannot retroactively require MFA on a pre-existing principal it didn't create.
+
+### Network isolation
+
+Nodes and the CodeBuild deploy actor run in private subnets behind a NAT
+gateway; CodeBuild has no inbound rule at all (egress-only security group) and
+reaches the private API endpoint via a dedicated ingress rule on the
+EKS-managed cluster security group. Human operator access uses an SSM
+Session Manager port-forward through a worker node — no bastion host, no
+inbound rule, no SSH key. See [Port forwarding](port-forwarding.md) for the
+full runbook.
+
 ## Supply chain
 
 Every image published to `ghcr.io/agenttier/*` on a `v*` tag is:
