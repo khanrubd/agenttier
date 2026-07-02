@@ -127,7 +127,7 @@ Uninstalls the Helm release and deletes the kind/minikube cluster.
 
 ### Path 2: AWS EKS
 
-**Prerequisites:** `aws` CLI (configured with credentials), `terraform` >= 1.5, `docker` with `buildx`, `kubectl`, `helm`, `jq`, `zip`.
+**Prerequisites:** `aws` CLI (configured with credentials), `terraform` >= 1.5, `kubectl`, `helm`, `jq`, `zip`. **Docker with `buildx` is required only for the default local-build path** — if you have no local Docker daemon, use the [CodeBuild path](#codebuild-in-cloud-image-builds-eks-only) (images are built in AWS), which `deploy.sh` selects automatically when `docker buildx` is unavailable.
 
 **Cost note:** an EKS cluster with the default Terraform configuration costs approximately $8-10/day. Run `./deploy.sh --target=eks --teardown` when done to avoid ongoing charges.
 
@@ -147,11 +147,12 @@ What this does:
 1. Verifies AWS credentials via `aws sts get-caller-identity`.
 2. Runs `terraform apply` in `terraform/aws-eks/` — provisions VPC, EKS cluster, managed node groups (including an optional gVisor group), EBS CSI, AWS Load Balancer Controller, IRSA roles, ECR repositories, and a Cognito User Pool for OIDC auth.
 3. Reads ECR registry URLs and Cognito OIDC settings from Terraform outputs. Any empty mandatory output fails immediately with a clear message.
-4. Authenticates Docker to ECR via `aws ecr get-login-password`.
-5. Builds and pushes all nine images to ECR using `docker buildx` at `$AGENTTIER_EKS_PLATFORM` (default: `linux/amd64`): 3 core images (controller, router, web-ui) and 6 sandbox images (sandbox-general, sandbox-claude-code, sandbox-openclaw, sandbox-langgraph, sandbox-rl, sandbox-strands-bedrock).
-6. Configures `kubectl` for the new cluster.
-7. Installs the Helm chart from the local `helm/agenttier/` tree, wiring Cognito OIDC auth and deploying a default gp3 EBS StorageClass so sandbox PVCs bind immediately. Dev-auth is never set on the EKS path.
-8. Runs `hack/smoke-test.sh`.
+4. Builds and pushes all nine images to ECR — 3 core images (controller, router, web-ui) and 6 sandbox images (sandbox-general, sandbox-claude-code, sandbox-openclaw, sandbox-langgraph, sandbox-rl, sandbox-strands-bedrock) — via one of two paths:
+   - **Local buildx (default):** authenticates Docker to ECR and builds+pushes with `docker buildx` at `$AGENTTIER_EKS_PLATFORM` (default `linux/amd64`).
+   - **AWS CodeBuild (no local Docker):** zips the source, uploads it to the CodeBuild S3 bucket, and runs the in-cloud build — see [CodeBuild path](#codebuild-in-cloud-image-builds-eks-only). The core images are hard-required; the four extra agent-sandbox images (openclaw, langgraph, rl, strands-bedrock) build best-effort so one upstream failure does not block the deploy.
+5. Configures `kubectl` for the new cluster.
+6. Installs the Helm chart from the local `helm/agenttier/` tree. The chart's `crds/` directory installs the AgentTier CRDs first (so the bundled default `ClusterSandboxTemplate`s apply cleanly on a fresh install), then wires Cognito OIDC auth and deploys a default gp3 EBS StorageClass so sandbox PVCs bind immediately. Dev-auth is never set on the EKS path.
+7. Runs `hack/smoke-test.sh`.
 
 **Expected output** (abbreviated):
 
@@ -186,9 +187,42 @@ This uninstalls the Helm release, deletes sandbox PVCs and LoadBalancer services
 
 ---
 
-### CodeBuild opt-in (EKS only)
+### CodeBuild (in-cloud image builds, EKS only)
 
-For air-gapped or slow-network environments, image builds can be offloaded to AWS CodeBuild. This is disabled by default (`enable_codebuild=false`). Enable it in `terraform/aws-eks/variables.tf` or by passing `-var="enable_codebuild=true"` to `terraform apply`. `deploy.sh` detects the CodeBuild project via Terraform outputs and switches automatically.
+If you have **no local Docker daemon** (or want to offload builds in an air-gapped / slow-network
+environment), `deploy.sh --target=eks` can build and push all images in **AWS CodeBuild** instead of
+local `docker buildx`.
+
+**How the path is selected.** `deploy.sh` sets `USE_CODEBUILD=true` when **either**:
+
+- you export `AGENTTIER_USE_CODEBUILD=true`, **or**
+- `docker buildx` is not available on the machine (auto-detected).
+
+When selected, `deploy.sh`:
+
+1. Passes `-var=enable_codebuild=true` to `terraform apply`, which provisions the CodeBuild project
+   and an encrypted S3 source bucket (both destroyed on teardown).
+2. Skips the local Docker prerequisite checks and the local `docker login` to ECR (the in-cloud
+   build authenticates itself).
+3. Zips the working tree (excluding `.git`, `terraform/`, and any `node_modules`/`.venv`/`dist`/`bin`),
+   uploads it to the S3 bucket, starts the build, and polls to completion (bounded by
+   `codebuild_timeout_minutes`).
+4. Passes `IMAGE_TAG`, `ECR_REPO_PREFIX`, and `BUILD_PLATFORM` as build-time environment overrides so
+   CodeBuild pushes the **same tag** the Helm install references (no `ImagePullBackOff`).
+
+```bash
+# No local Docker? Just run the normal command — CodeBuild is auto-selected.
+./deploy.sh --target=eks
+
+# Or force it explicitly:
+AGENTTIER_USE_CODEBUILD=true ./deploy.sh --target=eks
+```
+
+The build classifies images as **core** (controller, router, web-ui, sandbox-general,
+sandbox-claude-code — a failure aborts the deploy) and **optional** agent sandboxes (openclaw,
+strands-bedrock, langgraph, rl — built best-effort; a single upstream failure is reported but does
+not block the deploy). A failed optional image surfaces later as `ImagePullBackOff` only if you
+create a sandbox from that specific template.
 
 ---
 

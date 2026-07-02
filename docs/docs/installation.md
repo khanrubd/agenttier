@@ -7,10 +7,10 @@ AgentTier installs as a single Helm chart. CRDs, RBAC, and reference templates a
 **Build tools (build-from-source path):**
 
 - **Go 1.25+**
-- **Docker with buildx**
+- **Docker with buildx** — required for the local (kind) path and the default EKS build path. **Not required for the EKS CodeBuild path**, which builds images in AWS instead (auto-selected by `deploy.sh` when Docker is unavailable, or forced with `AGENTTIER_USE_CODEBUILD=true`).
 - **Helm 3.x**
 - **kubectl**
-- **kind** (local) or **Terraform >= 1.5** + **AWS CLI v2** (EKS)
+- **kind** (local) or **Terraform >= 1.5** + **AWS CLI v2** + **jq** + **zip** (EKS)
 
 **Cluster requirements:**
 

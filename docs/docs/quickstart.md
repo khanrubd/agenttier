@@ -7,10 +7,10 @@ Get from zero to a running sandbox in under ten minutes.
 **Build tools (required for building from source):**
 
 - **Go 1.25+** — `go version`
-- **Docker with buildx** — `docker buildx version`
+- **Docker with buildx** — `docker buildx version` (local path and default EKS path; **not needed** for the EKS CodeBuild path, which builds in AWS — auto-selected when Docker is absent or forced with `AGENTTIER_USE_CODEBUILD=true`)
 - **Helm 3.x** — `helm version`
 - **kubectl** configured for your target cluster
-- **kind** (local path) or **Terraform >= 1.5** + **AWS CLI v2** (EKS path)
+- **kind** (local path) or **Terraform >= 1.5** + **AWS CLI v2** + **jq** + **zip** (EKS path)
 
 **Cluster requirements:**
 
