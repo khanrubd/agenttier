@@ -184,7 +184,10 @@ data "aws_iam_policy_document" "codebuild_permissions" {
     resources = ["${aws_s3_bucket.codebuild_source[0].arn}/build-logs/*"]
   }
 
-  # CloudWatch Logs for build output.
+  # CloudWatch Logs for build output. Reference the managed log group's ARN
+  # directly (rather than rebuilding the ARN string) so the policy can never
+  # desync from the group's actual name — a mismatch would silently deny
+  # logs:PutLogEvents and lose all build logs.
   statement {
     sid    = "CloudWatchLogs"
     effect = "Allow"
@@ -194,8 +197,8 @@ data "aws_iam_policy_document" "codebuild_permissions" {
       "logs:PutLogEvents",
     ]
     resources = [
-      "arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/codebuild/${var.cluster_name}-build",
-      "arn:aws:logs:${var.region}:${data.aws_caller_identity.current.account_id}:log-group:/aws/codebuild/${var.cluster_name}-build:*",
+      aws_cloudwatch_log_group.codebuild[0].arn,
+      "${aws_cloudwatch_log_group.codebuild[0].arn}:*",
     ]
   }
 }

@@ -88,6 +88,7 @@ spec:
       value: "us-east-1"
   timeout: 24h
   idleTimeout: 2h
+---
 {{- if .Values.defaults.openclaw }}
 apiVersion: agenttier.io/v1alpha1
 kind: ClusterSandboxTemplate

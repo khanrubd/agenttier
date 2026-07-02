@@ -14,9 +14,11 @@ version: 0.2
 # IMAGE_TAG: supplied by deploy.sh --target=eks from hack/lib/version.sh
 #   (v<VERSION> for releases, sha-<hash> for dev). Never use "sha-unknown" for a
 #   real deploy — deploy.sh always overrides it so both CodeBuild and Helm agree.
-# ECR_REPO_PREFIX: the full ECR registry+prefix without a trailing slash, e.g.
-#   123456789012.dkr.ecr.us-east-1.amazonaws.com/agenttier — this is the Terraform
-#   `ecr_registry` output. Set by codebuild.tf (project env) and by deploy.sh.
+# ECR_REPO_PREFIX: registry host + repo namespace, without a trailing slash, e.g.
+#   123456789012.dkr.ecr.us-east-1.amazonaws.com/agenttier. This is NOT the bare
+#   `ecr_registry` output (host only) — it is `ecr_registry`/`ecr_prefix`, i.e. the
+#   `ecr_controller_url` output with the trailing `/controller` stripped. Set by
+#   codebuild.tf (project env) and by deploy.sh at start-build.
 # BUILD_PLATFORM: --platform flag for buildx. linux/amd64 matches the standard
 #   x86-64 EKS node group; override to linux/arm64 for Graviton node groups.
 env:
@@ -41,10 +43,14 @@ phases:
       - AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --no-cli-pager)
       - REGISTRY_HOST="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
       - aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" | docker login --username AWS --password-stdin "${REGISTRY_HOST}"
+      # Fail loudly if ECR_REPO_PREFIX is unset rather than guessing a repo path:
+      # a guessed prefix silently pushes to the wrong (or non-existent) repos.
+      # Both codebuild.tf (project env) and deploy.sh (start-build override) set
+      # it, so an empty value here means a real misconfiguration.
       - |
         if [ -z "${ECR_REPO_PREFIX}" ]; then
-          ECR_REPO_PREFIX="${REGISTRY_HOST}/agenttier"
-          echo "WARNING: ECR_REPO_PREFIX not set; using fallback ${ECR_REPO_PREFIX}"
+          echo "ERROR: ECR_REPO_PREFIX is empty — neither the codebuild.tf project env nor the deploy.sh start-build override was applied. Refusing to guess a repo path." >&2
+          exit 1
         fi
       - echo "Building with tag=${IMAGE_TAG} platform=${BUILD_PLATFORM} registry=${ECR_REPO_PREFIX}"
 
@@ -75,12 +81,13 @@ phases:
       # systemic is wrong rather than one flaky package).
       - |
         echo "=== Building OPTIONAL agent-sandbox images (best-effort) ==="
-        OPTIONAL_NAMES="sandbox-openclaw sandbox-strands-bedrock sandbox-langgraph sandbox-rl"
-        OPTIONAL_DIRS="openclaw strands-bedrock langgraph rl"
-        set -- $OPTIONAL_DIRS
+        # image-name : source-dir pairs, coupled into one token each so the
+        # name and dir can never desync (a desync + `shift` on an exhausted
+        # positional list would abort the whole phase under `set -e`).
+        OPTIONAL_IMAGES="sandbox-openclaw:openclaw sandbox-strands-bedrock:strands-bedrock sandbox-langgraph:langgraph sandbox-rl:rl"
         FAILED=""; OK=""
-        for name in $OPTIONAL_NAMES; do
-          dir="$1"; shift
+        for pair in $OPTIONAL_IMAGES; do
+          name="${pair%%:*}"; dir="${pair#*:}"
           echo "Building ${name} (from images/${dir}) ..."
           if docker buildx build --platform "${BUILD_PLATFORM}" \
                -t "${ECR_REPO_PREFIX}/${name}:${IMAGE_TAG}" \
