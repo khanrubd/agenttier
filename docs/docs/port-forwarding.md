@@ -84,6 +84,26 @@ inbound security-group rule, no SSH key — access is IAM-gated and
 outbound-initiated only, via the SSM agent already present on EKS-optimized
 AL2/AL2023 AMIs).
 
+!!! note "Prerequisite: the Session Manager plugin (operator workstation only)"
+    `aws ssm start-session` streams bytes through a separate
+    [`session-manager-plugin`](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
+    binary that the AWS CLI does **not** bundle — without it the command fails
+    immediately with `SessionManagerPlugin is not found`. Install it once on the
+    machine you run `kubectl` from. It is **not** needed to deploy: `deploy.sh`
+    reaches a `private` cluster via CodeBuild-in-VPC, not SSM — this is purely an
+    operator-access tool.
+
+    ```bash
+    # macOS
+    brew install --cask session-manager-plugin
+    # Debian/Ubuntu
+    curl -o /tmp/smp.deb "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/ubuntu_64bit/session-manager-plugin.deb" && sudo dpkg -i /tmp/smp.deb
+    # RHEL / Amazon Linux
+    sudo yum install -y "https://s3.amazonaws.com/session-manager-downloads/plugin/latest/linux_64bit/session-manager-plugin.rpm"
+
+    session-manager-plugin --version   # verify
+    ```
+
 ```bash
 # 1. Find a running managed-node instance in the cluster (cluster_name comes
 #    from the terraform output, not hardcoded — a non-default cluster_name

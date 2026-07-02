@@ -138,6 +138,14 @@ inbound security-group rule (SSM is outbound-initiated over the existing NAT
 egress). This is the primary way to reach a `private`-mode cluster's API
 server (and the AgentTier web UI) from outside the VPC:
 
+> **Prerequisite:** these commands need the
+> [`session-manager-plugin`](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html)
+> on your workstation — the AWS CLI does not bundle it (without it,
+> `aws ssm start-session` fails with `SessionManagerPlugin is not found`).
+> macOS: `brew install --cask session-manager-plugin`; Linux: see the AWS docs.
+> Operator-only — not needed by `deploy.sh`, which reaches a private cluster via
+> CodeBuild-in-VPC.
+
 ```bash
 # 1. Find a running managed node instance
 INSTANCE=$(aws ec2 describe-instances \

@@ -218,6 +218,8 @@ This uninstalls the Helm release, deletes sandbox PVCs and LoadBalancer services
 
 In `endpoint_access_mode = private`, there is no public path to the Kubernetes API — CI/deploy reaches it via CodeBuild-in-VPC (above), and **human operators reach it via an SSM Session Manager port-forward** through one of the managed node group instances (no bastion, no inbound security-group rule, no SSH key; IAM-gated and outbound-initiated only). The node instance role already carries `AmazonSSMManagedInstanceCore` for this purpose.
 
+> **Operator prerequisite:** `aws ssm start-session` needs the [`session-manager-plugin`](https://docs.aws.amazon.com/systems-manager/latest/userguide/session-manager-working-with-install-plugin.html) installed on your workstation (the AWS CLI does not bundle it; without it you get `SessionManagerPlugin is not found`). Install once — macOS: `brew install --cask session-manager-plugin`; Linux: see the AWS docs. Not required to deploy — only for this operator port-forward. Full runbook (with the `tls-server-name` kubeconfig step): [docs/port-forwarding.md](docs/docs/port-forwarding.md).
+
 ```bash
 # 1. Find a running managed-node instance in the cluster (cluster_name comes
 #    from the terraform output, not hardcoded — a non-default cluster_name
