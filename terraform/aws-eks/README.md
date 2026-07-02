@@ -38,7 +38,10 @@ workloads off these nodes.
 - AWS CLI v2, configured with credentials that can create VPC/EKS/IAM/ECR resources
   (`aws configure`). The `kubernetes`/`helm` providers authenticate to the new
   cluster by shelling out to `aws eks get-token`, so the AWS CLI must be on `PATH`.
-- Docker with buildx support (for the default local-build → ECR push path).
+- Docker with buildx support — required **only** for the default local-build →
+  ECR push path. Not required when building in-cloud via CodeBuild
+  (`enable_codebuild = true`); `deploy.sh` also auto-selects that path when no
+  local Docker daemon is present. See [CodeBuild opt-in](#codebuild-opt-in).
 - `kubectl` and `helm` for post-apply verification.
 
 ## Usage
@@ -70,6 +73,12 @@ docker buildx build --platform linux/amd64 \
 # Similarly, use terraform output -raw ecr_router_url, ecr_webui_url,
 # ecr_sandbox_*_url for the remaining images. deploy.sh does all of this
 # automatically — the manual commands above are illustrative only.
+#
+# No local Docker? Apply with -var=enable_codebuild=true and let deploy.sh
+# handle the source-zip upload to S3 and the CodeBuild run (it does this
+# automatically when it can't find a local Docker daemon). Building directly
+# against CodeBuild from raw terraform is not wired — use ./deploy.sh --target=eks.
+# See "CodeBuild opt-in" below.
 
 # Verify
 kubectl get nodes -L agenttier.io/runtime
@@ -109,7 +118,13 @@ Never use `latest`. The canonical tag is derived by `hack/lib/version.sh`:
 - Dev / dirty tree → `sha-<7-char-git-sha>[-dirty]`
 
 `deploy.sh` computes the tag once, builds with it, pushes to ECR, and passes the
-same value to Helm via `--set *.image.tag=<tag>`.
+same value to Helm via `--set *.image.tag=<tag>`. The same value is also stamped
+into the controller and router binaries as their reported version (via the
+`VERSION` build-arg / ldflags) across every build path — local `docker build`,
+local buildx, and CodeBuild — so a component's `/version` endpoint matches the
+image tag it was deployed under. `deploy.sh` additionally stamps the short git
+commit (`GIT_COMMIT`); the CodeBuild path leaves it `unknown` because its S3
+source zip excludes `.git`.
 
 ### CodeBuild opt-in
 
