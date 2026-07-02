@@ -17,7 +17,7 @@
 #
 # Pre-requisites by target:
 #   local: docker, kubectl, kind OR minikube, helm, go
-#   eks:   aws cli, terraform >=1.5, docker (with buildx), kubectl, helm
+#   eks:   aws cli, terraform >=1.10, docker (with buildx), kubectl, helm
 #
 # All operations are non-interactive (-auto-approve, --yes, etc.).
 set -euo pipefail
@@ -65,7 +65,7 @@ Targets:
             kind or minikube, helm, go.
   eks       Run terraform apply (VPC+EKS+ECR+IRSA+Cognito), build+push images
             to ECR via docker buildx, install Helm chart with Cognito OIDC auth.
-            Requires: aws cli, terraform >=1.5, docker (buildx), kubectl, helm.
+            Requires: aws cli, terraform >=1.10, docker (buildx), kubectl, helm.
 
 Flags:
   --teardown  For local: delete the kind/minikube cluster.
@@ -126,19 +126,35 @@ GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo u
 # ---------------------------------------------------------------------------
 # Decide the EKS image-build path (D1b): CodeBuild (in-cloud) vs local buildx.
 #
-# USE_CODEBUILD=true when EITHER:
+# USE_CODEBUILD=true when ANY of:
+#   - endpoint_access_mode=private (AGENTTIER_ENDPOINT_MODE, set by
+#     hack/lib/common.sh::at::load_config) — the private endpoint has no
+#     public path, so BOTH image builds and on-cluster deploy steps MUST run
+#     inside the VPC (design.md#4). main.tf also asserts this with a
+#     precondition (private⇒enable_codebuild) as a fail-closed backstop, but
+#     it is checked here first so the error is a clear deploy.sh message
+#     instead of a raw terraform precondition failure at apply time.
 #   - AGENTTIER_USE_CODEBUILD=true is set explicitly, OR
 #   - no local Docker buildx is available (auto-detect Docker-less machines).
 #
 # When true, deploy.sh passes -var=enable_codebuild=true to terraform apply
 # (so the CodeBuild project + S3 source bucket exist) and takes the CodeBuild
-# branch in Step 4. When false, the unchanged local-buildx path is used.
+# branch in Step 4 (image build) and — when endpoint_access_mode=private —
+# Steps 5-7 (on-cluster deploy, delegated to a second CodeBuild run; see
+# below). When false, the unchanged local-buildx + local-helm path is used
+# throughout.
 #
 # Exported so hack/lib/common.sh::check_eks_prereqs can skip the docker/buildx
 # hard-requirement on the CodeBuild path (D1a).
 # ---------------------------------------------------------------------------
 if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
-  if [[ "${AGENTTIER_USE_CODEBUILD:-}" == "true" ]]; then
+  if [[ "${AGENTTIER_ENDPOINT_MODE}" == "private" ]]; then
+    if [[ "${AGENTTIER_USE_CODEBUILD:-}" == "false" ]]; then
+      at::fatal "endpoint_access_mode=private requires CodeBuild-in-VPC — AGENTTIER_USE_CODEBUILD cannot be 'false' in private mode (design.md#4)."
+    fi
+    USE_CODEBUILD=true
+    at::log "CodeBuild path : enabled (forced — endpoint_access_mode=private requires CodeBuild-in-VPC)"
+  elif [[ "${AGENTTIER_USE_CODEBUILD:-}" == "true" ]]; then
     USE_CODEBUILD=true
     at::log "CodeBuild path : enabled (AGENTTIER_USE_CODEBUILD=true)"
   elif ! docker buildx version >/dev/null 2>&1; then
@@ -154,6 +170,20 @@ fi
 # Export so check_eks_prereqs (sourced from common.sh) sees the decision.
 export AGENTTIER_USE_CODEBUILD="${USE_CODEBUILD}"
 
+# ---------------------------------------------------------------------------
+# AWS Load Balancer Controller helm toggle (relocated from terraform —
+# D-U3/D-A1: load_balancer_controller.tf is deleted, terraform apply is now
+# pure-AWS). The two terraform input variables that used to gate this
+# (install toggle + chart-version pin) were dead code and have been removed
+# (D-A11) — they stopped gating anything once terraform stopped installing
+# the LBC. deploy.sh now owns this toggle entirely via its own env vars,
+# defaulted here (install=true, chart version 1.8.1) and documented in
+# config/config.env.example; there is no terraform side to stay in sync
+# with.
+# ---------------------------------------------------------------------------
+AGENTTIER_INSTALL_LBC="${AGENTTIER_INSTALL_LBC:-true}"
+AGENTTIER_LBC_CHART_VERSION="${AGENTTIER_LBC_CHART_VERSION:-1.8.1}"
+
 at::log "Deploy target : ${DEPLOY_TARGET}"
 at::log "Image tag     : ${IMAGE_TAG}"
 at::log "Namespace     : ${AGENTTIER_NAMESPACE}"
@@ -167,6 +197,44 @@ run_smoke_test() {
   export AGENTTIER_NAMESPACE
   export AGENTTIER_SMOKE_TIMEOUT="${AGENTTIER_SMOKE_TIMEOUT:-300}"
   bash "${REPO_ROOT}/hack/smoke-test.sh"
+}
+
+# ---------------------------------------------------------------------------
+# CodeBuild poll helper — bounded wait for a build to finish (fixes audit M6:
+# never loops forever). Shared by the image-build CodeBuild run (Step 4) and,
+# in private mode, the on-cluster deploy-build CodeBuild run (Steps 5-7).
+# ---------------------------------------------------------------------------
+codebuild_wait_for_build() {
+  local build_id="$1"
+  local timeout_minutes="$2"
+  local max_polls poll status
+  max_polls=$(( timeout_minutes * 60 / 15 ))  # check every 15s
+  poll=0
+  while true; do
+    status="$(aws codebuild batch-get-builds \
+      --ids "${build_id}" \
+      --region "${AGENTTIER_AWS_REGION}" \
+      --no-cli-pager \
+      --query 'builds[0].buildStatus' \
+      --output text)"
+    case "${status}" in
+      SUCCEEDED)
+        at::log "CodeBuild succeeded (build ID: ${build_id})."
+        return 0
+        ;;
+      FAILED|FAULT|STOPPED|TIMED_OUT)
+        at::fatal "CodeBuild failed with status: ${status}. Check logs: aws codebuild batch-get-builds --ids ${build_id} --region ${AGENTTIER_AWS_REGION}"
+        ;;
+      IN_PROGRESS|QUEUED|*)
+        poll=$(( poll + 1 ))
+        if [[ ${poll} -ge ${max_polls} ]]; then
+          at::fatal "CodeBuild did not complete within ${timeout_minutes} minutes (build ID: ${build_id}). Increase codebuild_timeout_minutes in Terraform or investigate the build."
+        fi
+        at::log "  CodeBuild status: ${status} (poll ${poll}/${max_polls}; checking again in 15s...)"
+        sleep 15
+        ;;
+    esac
+  done
 }
 
 # ===========================================================================
@@ -219,51 +287,146 @@ if [[ "${DEPLOY_TARGET}" == "eks" && "${TEARDOWN}" == true ]]; then
 
   TF_DIR="${REPO_ROOT}/${AGENTTIER_TERRAFORM_DIR}"
 
-  # Step 1: Uninstall Helm release (fail loudly — orphaned pods/PVCs cause TF destroy issues).
-  at::step "Uninstalling Helm release"
-  if helm status "${AGENTTIER_HELM_RELEASE}" -n "${AGENTTIER_NAMESPACE}" >/dev/null 2>&1; then
-    at::log "Uninstalling ${AGENTTIER_HELM_RELEASE}..."
-    helm uninstall "${AGENTTIER_HELM_RELEASE}" -n "${AGENTTIER_NAMESPACE}" --wait \
-      --timeout 120s
-  else
-    at::log "Helm release not found (already uninstalled)."
-  fi
-
-  # Step 2: Delete PVCs and LoadBalancer services, wait for LB deprovisioning.
-  at::step "Deleting PVCs and LoadBalancer services"
-  if kubectl get namespace "${AGENTTIER_NAMESPACE}" >/dev/null 2>&1; then
-    # Delete sandboxes first to release PVCs.
-    at::log "Deleting all Sandboxes..."
-    kubectl delete sandboxes --all --all-namespaces --timeout=60s 2>/dev/null || true
-
-    # Delete PVCs in the install namespace (where sandboxes + helm release live).
-    # Do NOT target the 'default' namespace — AgentTier never installs there.
-    at::log "Deleting PVCs in namespace ${AGENTTIER_NAMESPACE}..."
-    kubectl delete pvc --all -n "${AGENTTIER_NAMESPACE}" --timeout=60s 2>/dev/null || true
-
-    # Delete LoadBalancer services and wait for AWS LB deprovisioning.
-    at::log "Deleting LoadBalancer services..."
-    kubectl get svc --all-namespaces -o json \
-      | jq -r '.items[] | select(.spec.type=="LoadBalancer") | "\(.metadata.namespace) \(.metadata.name)"' \
-      | while read -r ns svc; do
-          at::log "  Deleting LB service ${ns}/${svc}..."
-          kubectl delete svc "${svc}" -n "${ns}" --timeout=60s || true
-        done
-
-    at::log "Waiting 30s for AWS load balancers to deprovision..."
-    sleep 30
-  fi
-
-  # Step 3: Terraform destroy.
-  # C2 fix: init with the REAL backend (matching apply) so destroy operates on
-  # the actual remote state. -backend=false gives an empty local state and
-  # destroys NOTHING, leaving EKS+NAT+ECR running and billing. No || true —
-  # fail loudly if init or destroy fails.
-  at::step "Destroying Terraform infrastructure"
+  # Step 1: Read Terraform outputs needed for on-cluster cleanup. This init
+  # uses the REAL backend (matching apply — C2 fix) and also satisfies Step 4's
+  # destroy below, so it is not repeated there. Outputs are read best-effort
+  # (2>/dev/null || true) — a prior partial teardown or an empty/missing state
+  # means there is nothing on-cluster left to clean up, and Step 4's destroy
+  # is then a no-op.
+  at::step "Reading Terraform outputs"
   cd "${TF_DIR}"
   terraform init -input=false
+  CLUSTER_NAME="$(terraform output -raw cluster_name 2>/dev/null || true)"
+  # CodeBuild outputs (only meaningful when enable_codebuild=true).
+  CODEBUILD_PROJECT="$(terraform output -raw codebuild_project 2>/dev/null || true)"
+  CODEBUILD_S3_BUCKET="$(terraform output -raw codebuild_s3_bucket 2>/dev/null || true)"
+  CODEBUILD_TIMEOUT="$(terraform output -raw codebuild_timeout_minutes 2>/dev/null || echo "30")"
+  cd "${REPO_ROOT}"
+
+  if [[ -z "${CLUSTER_NAME}" ]]; then
+    at::log "No cluster_name in Terraform state — skipping on-cluster cleanup (nothing to uninstall)."
+  elif [[ "${AGENTTIER_ENDPOINT_MODE}" == "private" ]]; then
+    # private: there is no public path to the API server — kubectl/helm
+    # invoked from this machine cannot reach it (same reason deploy delegates
+    # in Step 5 above). Delegate the on-cluster teardown steps (helm uninstall
+    # + sandbox/PVC cleanup + LoadBalancer Service deletion, so real AWS
+    # ALBs/NLBs deprovision BEFORE the cluster disappears) to a CodeBuild-in-VPC
+    # run using a dedicated buildspec-teardown.yml, reusing
+    # codebuild_wait_for_build(). main.tf's precondition already enforces
+    # private⇒enable_codebuild at apply time, so CODEBUILD_PROJECT should be
+    # populated whenever a private cluster exists — fail loudly rather than
+    # silently skip cleanup (and risk orphaned, billable ALBs/NLBs) if it is not.
+    if [[ -z "${CODEBUILD_PROJECT}" ]]; then
+      at::fatal "endpoint_access_mode=private but no codebuild_project Terraform output — cannot reach the private API server to uninstall Helm releases or release LoadBalancer services. Investigate before running terraform destroy (orphaned ALBs/NLBs may otherwise be left running and billing)."
+    fi
+
+    at::step "Delegating on-cluster teardown to CodeBuild-in-VPC (private mode)"
+    at::log "CodeBuild project : ${CODEBUILD_PROJECT}"
+    at::log "Build timeout     : ${CODEBUILD_TIMEOUT} minutes"
+
+    # Refresh the CodeBuild source.zip before starting the build, mirroring
+    # the deploy path's Step 4 upload (above). Teardown can run as a
+    # standalone invocation — e.g. a fresh checkout, or long after the last
+    # deploy — where the CodeBuild project's S3 source is stale or was never
+    # uploaded. Without this, start-build below would run against missing or
+    # outdated source, and a hard CodeBuild failure here strands the cluster
+    # (and its billable ALBs/NLBs) with terraform destroy never reached.
+    if [[ -z "${CODEBUILD_S3_BUCKET}" ]]; then
+      at::fatal "endpoint_access_mode=private but no codebuild_s3_bucket Terraform output — cannot upload source for the teardown CodeBuild run."
+    fi
+    at::log "Packaging source..."
+    TEARDOWN_SOURCE_ZIP="/tmp/agenttier-source-$$.zip"
+    zip -r "${TEARDOWN_SOURCE_ZIP}" . \
+      -x '.git/*' 'terraform/*' \
+         'node_modules/*' '*/node_modules/*' \
+         'web-ui/dist/*' \
+         '.venv/*' '*/.venv/*' \
+         'bin/*' '_output/*' \
+         '*.DS_Store' '*.log' \
+      >/dev/null
+    at::log "Uploading source to s3://${CODEBUILD_S3_BUCKET}/source.zip..."
+    aws s3 cp "${TEARDOWN_SOURCE_ZIP}" \
+      "s3://${CODEBUILD_S3_BUCKET}/source.zip" \
+      --region "${AGENTTIER_AWS_REGION}" \
+      --no-cli-pager
+    rm -f "${TEARDOWN_SOURCE_ZIP}"
+
+    TEARDOWN_BUILD_ID="$(aws codebuild start-build \
+      --project-name "${CODEBUILD_PROJECT}" \
+      --region "${AGENTTIER_AWS_REGION}" \
+      --buildspec-override "buildspec-teardown.yml" \
+      --environment-variables-override \
+        "name=CLUSTER_NAME,value=${CLUSTER_NAME},type=PLAINTEXT" \
+        "name=AWS_DEFAULT_REGION,value=${AGENTTIER_AWS_REGION},type=PLAINTEXT" \
+        "name=AGENTTIER_HELM_RELEASE,value=${AGENTTIER_HELM_RELEASE},type=PLAINTEXT" \
+        "name=AGENTTIER_NAMESPACE,value=${AGENTTIER_NAMESPACE},type=PLAINTEXT" \
+      --no-cli-pager \
+      --output text \
+      --query 'build.id')"
+    at::log "CodeBuild teardown build ID : ${TEARDOWN_BUILD_ID}"
+    codebuild_wait_for_build "${TEARDOWN_BUILD_ID}" "${CODEBUILD_TIMEOUT}"
+    at::log "On-cluster teardown (helm uninstall + PVC/LoadBalancer cleanup) completed inside CodeBuild-in-VPC."
+  else
+    # public-restricted: kubectl/helm invoked from here reach the public
+    # (CIDR-restricted) endpoint directly. Refresh the kubeconfig explicitly
+    # (rather than relying on a context left over from an earlier deploy in
+    # the same shell) so teardown also works as a standalone invocation.
+    at::step "Configuring kubectl for EKS cluster '${CLUSTER_NAME}'"
+    aws eks update-kubeconfig \
+      --region "${AGENTTIER_AWS_REGION}" \
+      --name "${CLUSTER_NAME}" \
+      --no-cli-pager
+
+    # Step 2: Uninstall Helm release (fail loudly — orphaned pods/PVCs cause TF destroy issues).
+    at::step "Uninstalling Helm release"
+    if helm status "${AGENTTIER_HELM_RELEASE}" -n "${AGENTTIER_NAMESPACE}" >/dev/null 2>&1; then
+      at::log "Uninstalling ${AGENTTIER_HELM_RELEASE}..."
+      helm uninstall "${AGENTTIER_HELM_RELEASE}" -n "${AGENTTIER_NAMESPACE}" --wait \
+        --timeout 120s
+    else
+      at::log "Helm release not found (already uninstalled)."
+    fi
+
+    # Step 3: Delete PVCs and LoadBalancer services, wait for LB deprovisioning.
+    at::step "Deleting PVCs and LoadBalancer services"
+    if kubectl get namespace "${AGENTTIER_NAMESPACE}" >/dev/null 2>&1; then
+      # Delete sandboxes first to release PVCs.
+      at::log "Deleting all Sandboxes..."
+      kubectl delete sandboxes --all --all-namespaces --timeout=60s 2>/dev/null || true
+
+      # Delete PVCs in the install namespace (where sandboxes + helm release live).
+      # Do NOT target the 'default' namespace — AgentTier never installs there.
+      at::log "Deleting PVCs in namespace ${AGENTTIER_NAMESPACE}..."
+      kubectl delete pvc --all -n "${AGENTTIER_NAMESPACE}" --timeout=60s 2>/dev/null || true
+
+      # Delete LoadBalancer services and wait for AWS LB deprovisioning.
+      at::log "Deleting LoadBalancer services..."
+      kubectl get svc --all-namespaces -o json \
+        | jq -r '.items[] | select(.spec.type=="LoadBalancer") | "\(.metadata.namespace) \(.metadata.name)"' \
+        | while read -r ns svc; do
+            at::log "  Deleting LB service ${ns}/${svc}..."
+            kubectl delete svc "${svc}" -n "${ns}" --timeout=60s || true
+          done
+
+      at::log "Waiting 30s for AWS load balancers to deprovision..."
+      sleep 30
+    fi
+  fi
+
+  # Step 4: Terraform destroy.
+  # Reuses the real-backend init from Step 1 above (no need to re-init).
+  # No || true — fail loudly if destroy fails.
+  at::step "Destroying Terraform infrastructure"
+  cd "${TF_DIR}"
+  # Pass the same three vars as the apply path (Step 5 below) for plan-output
+  # cleanliness — terraform reads them from state either way (they're not
+  # destroy-blocking or orphan-causing on their own, confirmed empirically
+  # during T22's live e2e), but mismatched var sets between apply and destroy
+  # otherwise show spurious diffs in -var-file-less `terraform plan` output.
   terraform destroy -auto-approve \
-    -var="region=${AGENTTIER_AWS_REGION}"
+    -var="region=${AGENTTIER_AWS_REGION}" \
+    -var="endpoint_access_mode=${AGENTTIER_ENDPOINT_MODE}" \
+    -var="enable_codebuild=${USE_CODEBUILD}"
   cd "${REPO_ROOT}"
 
   at::log "EKS teardown complete."
@@ -432,23 +595,33 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
   TF_DIR="${REPO_ROOT}/${AGENTTIER_TERRAFORM_DIR}"
 
   # Step 1: Terraform init + apply.
-  # C3 fix: pass install_agenttier=false so Terraform does NOT install the
-  # PUBLISHED chart from agenttier.github.io. deploy.sh installs the SOURCE
-  # chart in Step 6 — double-installing would violate D1 and leave a stale
-  # published release competing with our source-built one.
+  # install_agenttier/agenttier_chart_version/agenttier_oidc_auth/
+  # agenttier_extra_values are gone from the module (D-A2) — the published-
+  # chart-from-terraform path never existed as anything but an inert
+  # count=0 no-op, and deploy.sh installing the SOURCE chart in Step 6/
+  # buildspec-deploy.yml has always been the canonical path (D1/D20).
   at::step "Provisioning infrastructure via Terraform"
   at::log "Terraform directory: ${TF_DIR}"
+  at::log "Endpoint mode      : ${AGENTTIER_ENDPOINT_MODE}"
   at::log "CodeBuild enabled  : ${USE_CODEBUILD}"
   cd "${TF_DIR}"
   terraform init -input=false
   # D1b: pass enable_codebuild so the CodeBuild project + S3 source bucket are
   # created when the CodeBuild path is selected. Without this the
   # codebuild_project output is "" and the CodeBuild branch below is dead.
-  # Any extra terraform vars (e.g. create_test_user, test_user_password) are
-  # supplied via TF_VAR_* environment variables, so they are picked up here too.
+  # endpoint_access_mode=private additionally requires enable_codebuild=true —
+  # main.tf's precondition fails closed if that combination is ever violated
+  # (already guaranteed above by the USE_CODEBUILD derivation).
+  # Any extra terraform vars (e.g. create_test_user, test_user_password,
+  # cluster_endpoint_public_access_cidrs) are supplied via TF_VAR_*
+  # environment variables, so they are picked up here too. In
+  # public-restricted mode (the default), cluster_endpoint_public_access_cidrs
+  # MUST be set via TF_VAR_cluster_endpoint_public_access_cidrs — the module
+  # no longer defaults it to 0.0.0.0/0 (NFR-7) and terraform fails closed
+  # (validation) on an empty list.
   terraform apply -auto-approve \
     -var="region=${AGENTTIER_AWS_REGION}" \
-    -var="install_agenttier=false" \
+    -var="endpoint_access_mode=${AGENTTIER_ENDPOINT_MODE}" \
     -var="enable_codebuild=${USE_CODEBUILD}"
   cd "${REPO_ROOT}"
 
@@ -472,6 +645,11 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
   COGNITO_ISSUER="$(terraform output -raw cognito_issuer_url)"
   COGNITO_CLIENT_ID="$(terraform output -raw cognito_client_id)"
   COGNITO_ADMIN_GROUP="$(terraform output -raw cognito_admin_group)"
+  # LBC_ROLE_ARN/VPC_ID: consumed by the Step 5 `helm upgrade` for the AWS
+  # Load Balancer Controller (relocated from terraform — D-U3/D-A1) and, in
+  # private mode, forwarded to the deploy-build CodeBuild run.
+  LBC_ROLE_ARN="$(terraform output -raw aws_load_balancer_controller_role_arn)"
+  VPC_ID="$(terraform output -raw vpc_id)"
 
   # C5: fail loudly if any MANDATORY output is empty. terraform output -raw
   # returns "" (with 2>/dev/null swallowing the error) when the state is stale,
@@ -483,7 +661,7 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
                  ECR_SANDBOX_LANGGRAPH_URL ECR_SANDBOX_RL_URL \
                  ECR_SANDBOX_STRANDS_BEDROCK_URL \
                  CLUSTER_NAME COGNITO_ISSUER COGNITO_CLIENT_ID \
-                 COGNITO_ADMIN_GROUP; do
+                 COGNITO_ADMIN_GROUP LBC_ROLE_ARN VPC_ID; do
     if [[ -z "${!_tf_var:-}" ]]; then
       at::fatal "Terraform output for ${_tf_var} is empty — is the cluster applied and is ${TF_DIR} the correct state directory? Re-run: (cd ${TF_DIR} && terraform apply)."
     fi
@@ -581,34 +759,10 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
       --query 'build.id')"
     at::log "CodeBuild build ID : ${BUILD_ID}"
 
-    # Poll with bounded timeout (M6 fix — never loops forever).
-    MAX_POLLS=$(( CODEBUILD_TIMEOUT * 60 / 15 ))  # check every 15s
-    POLL=0
-    while true; do
-      STATUS="$(aws codebuild batch-get-builds \
-        --ids "${BUILD_ID}" \
-        --region "${AGENTTIER_AWS_REGION}" \
-        --no-cli-pager \
-        --query 'builds[0].buildStatus' \
-        --output text)"
-      case "${STATUS}" in
-        SUCCEEDED)
-          at::log "CodeBuild succeeded. Images pushed to ECR."
-          break
-          ;;
-        FAILED|FAULT|STOPPED|TIMED_OUT)
-          at::fatal "CodeBuild failed with status: ${STATUS}. Check logs: aws codebuild batch-get-builds --ids ${BUILD_ID} --region ${AGENTTIER_AWS_REGION}"
-          ;;
-        IN_PROGRESS|QUEUED|*)
-          POLL=$(( POLL + 1 ))
-          if [[ ${POLL} -ge ${MAX_POLLS} ]]; then
-            at::fatal "CodeBuild did not complete within ${CODEBUILD_TIMEOUT} minutes (build ID: ${BUILD_ID}). Increase codebuild_timeout_minutes in Terraform or investigate the build."
-          fi
-          at::log "  CodeBuild status: ${STATUS} (poll ${POLL}/${MAX_POLLS}; checking again in 15s...)"
-          sleep 15
-          ;;
-      esac
-    done
+    # Poll with bounded timeout (M6 fix — never loops forever). Shared with
+    # the private-mode on-cluster deploy-build below (codebuild_wait_for_build).
+    codebuild_wait_for_build "${BUILD_ID}" "${CODEBUILD_TIMEOUT}"
+    at::log "Images pushed to ECR."
   else
     # Default path: local docker buildx → ECR.
     at::step "Building images with docker buildx (platform: ${PLATFORM})"
@@ -701,58 +855,144 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
       "${REPO_ROOT}/images/strands-bedrock"
   fi
 
-  # Step 5: Configure kubectl for the new cluster.
-  at::step "Configuring kubectl for EKS cluster '${CLUSTER_NAME}'"
-  aws eks update-kubeconfig \
-    --region "${AGENTTIER_AWS_REGION}" \
-    --name "${CLUSTER_NAME}" \
-    --no-cli-pager
-  at::log "kubectl context updated. Nodes:"
-  kubectl get nodes --no-headers
+  # Step 5: On-cluster deploy — AWS Load Balancer Controller helm install
+  # (relocated from terraform, design.md#2.3/D-U3) + AgentTier Helm release
+  # (wires Cognito OIDC auth — NEVER devAuth, D8) + smoke test.
+  #
+  # public-restricted (default): the public endpoint (narrow CIDR allowlist,
+  # var.cluster_endpoint_public_access_cidrs) is reachable from here, so all
+  # three steps run locally exactly as before T8, plus the new LBC step.
+  #
+  # private: there is no public path to the API server at all — kubectl/helm
+  # invoked from this machine cannot reach it. Delegate the identical steps
+  # to a second CodeBuild run using buildspec-deploy.yml (design.md#4.2 shape
+  # B), reusing the source.zip already uploaded to S3 in Step 4 (Step 4 is
+  # unconditionally the CodeBuild image-build path in private mode — see the
+  # USE_CODEBUILD derivation above — so CODEBUILD_PROJECT/CODEBUILD_S3_BUCKET
+  # are always populated here).
+  if [[ "${AGENTTIER_ENDPOINT_MODE}" == "private" ]]; then
+    at::step "Delegating on-cluster deploy to CodeBuild-in-VPC (private mode)"
+    at::log "CodeBuild project : ${CODEBUILD_PROJECT}"
+    at::log "Build timeout     : ${CODEBUILD_TIMEOUT} minutes"
 
-  # Step 6: Install / upgrade Helm chart.
-  # Wires Cognito OIDC auth — NEVER uses devAuth (D8, design.md#8).
-  at::step "Installing / upgrading Helm chart"
-  at::log "Helm release: ${AGENTTIER_HELM_RELEASE} → namespace: ${AGENTTIER_NAMESPACE}"
-  helm upgrade "${AGENTTIER_HELM_RELEASE}" "${REPO_ROOT}/helm/agenttier/" \
-    --install \
-    --namespace "${AGENTTIER_NAMESPACE}" \
-    --create-namespace \
-    --set "controller.image.repository=${ECR_CONTROLLER_URL}" \
-    --set "controller.image.tag=${IMAGE_TAG}" \
-    --set "router.image.repository=${ECR_ROUTER_URL}" \
-    --set "router.image.tag=${IMAGE_TAG}" \
-    --set "webui.image.repository=${ECR_WEBUI_URL}" \
-    --set "webui.image.tag=${IMAGE_TAG}" \
-    --set "defaults.sandbox.image=${ECR_SANDBOX_URL}:${IMAGE_TAG}" \
-    --set "defaults.claudeCode.image=${ECR_SANDBOX_CLAUDE_CODE_URL}:${IMAGE_TAG}" \
-    --set "defaults.openclaw.image=${ECR_SANDBOX_OPENCLAW_URL}:${IMAGE_TAG}" \
-    --set "defaults.langgraph.image=${ECR_SANDBOX_LANGGRAPH_URL}:${IMAGE_TAG}" \
-    --set "defaults.rl.image=${ECR_SANDBOX_RL_URL}:${IMAGE_TAG}" \
-    --set "defaults.strandsBedrock.image=${ECR_SANDBOX_STRANDS_BEDROCK_URL}:${IMAGE_TAG}" \
-    --set "auth.devAuth=false" \
-    --set "auth.oidc.issuerUrl=${COGNITO_ISSUER}" \
-    --set "auth.oidc.clientId=${COGNITO_CLIENT_ID}" \
-    --set "auth.oidc.adminGroup=${COGNITO_ADMIN_GROUP}" \
-    --set "auth.oidc.groupClaim=cognito:groups" \
-    --set "optional.storageClass.enabled=true" \
-    --set "optional.storageClass.isDefaultClass=true" \
-    --wait \
-    --timeout 300s
+    DEPLOY_BUILD_ID="$(aws codebuild start-build \
+      --project-name "${CODEBUILD_PROJECT}" \
+      --region "${AGENTTIER_AWS_REGION}" \
+      --buildspec-override "buildspec-deploy.yml" \
+      --environment-variables-override \
+        "name=CLUSTER_NAME,value=${CLUSTER_NAME},type=PLAINTEXT" \
+        "name=AWS_DEFAULT_REGION,value=${AGENTTIER_AWS_REGION},type=PLAINTEXT" \
+        "name=ECR_CONTROLLER_URL,value=${ECR_CONTROLLER_URL},type=PLAINTEXT" \
+        "name=ECR_ROUTER_URL,value=${ECR_ROUTER_URL},type=PLAINTEXT" \
+        "name=ECR_WEBUI_URL,value=${ECR_WEBUI_URL},type=PLAINTEXT" \
+        "name=ECR_SANDBOX_URL,value=${ECR_SANDBOX_URL},type=PLAINTEXT" \
+        "name=ECR_SANDBOX_CLAUDE_CODE_URL,value=${ECR_SANDBOX_CLAUDE_CODE_URL},type=PLAINTEXT" \
+        "name=ECR_SANDBOX_OPENCLAW_URL,value=${ECR_SANDBOX_OPENCLAW_URL},type=PLAINTEXT" \
+        "name=ECR_SANDBOX_LANGGRAPH_URL,value=${ECR_SANDBOX_LANGGRAPH_URL},type=PLAINTEXT" \
+        "name=ECR_SANDBOX_RL_URL,value=${ECR_SANDBOX_RL_URL},type=PLAINTEXT" \
+        "name=ECR_SANDBOX_STRANDS_BEDROCK_URL,value=${ECR_SANDBOX_STRANDS_BEDROCK_URL},type=PLAINTEXT" \
+        "name=IMAGE_TAG,value=${IMAGE_TAG},type=PLAINTEXT" \
+        "name=LBC_ROLE_ARN,value=${LBC_ROLE_ARN},type=PLAINTEXT" \
+        "name=VPC_ID,value=${VPC_ID},type=PLAINTEXT" \
+        "name=LBC_CHART_VERSION,value=${AGENTTIER_LBC_CHART_VERSION},type=PLAINTEXT" \
+        "name=COGNITO_ISSUER,value=${COGNITO_ISSUER},type=PLAINTEXT" \
+        "name=COGNITO_CLIENT_ID,value=${COGNITO_CLIENT_ID},type=PLAINTEXT" \
+        "name=COGNITO_ADMIN_GROUP,value=${COGNITO_ADMIN_GROUP},type=PLAINTEXT" \
+        "name=AGENTTIER_HELM_RELEASE,value=${AGENTTIER_HELM_RELEASE},type=PLAINTEXT" \
+        "name=AGENTTIER_NAMESPACE,value=${AGENTTIER_NAMESPACE},type=PLAINTEXT" \
+      --no-cli-pager \
+      --output text \
+      --query 'build.id')"
+    at::log "CodeBuild deploy build ID : ${DEPLOY_BUILD_ID}"
+    codebuild_wait_for_build "${DEPLOY_BUILD_ID}" "${CODEBUILD_TIMEOUT}"
+    at::log "On-cluster deploy (kubeconfig + LBC + AgentTier helm + smoke test) completed inside CodeBuild-in-VPC."
+  else
+    # public-restricted: kubectl/helm invoked from here reach the public
+    # (CIDR-restricted) endpoint directly — unchanged local execution.
+    at::step "Configuring kubectl for EKS cluster '${CLUSTER_NAME}'"
+    aws eks update-kubeconfig \
+      --region "${AGENTTIER_AWS_REGION}" \
+      --name "${CLUSTER_NAME}" \
+      --no-cli-pager
+    at::log "kubectl context updated. Nodes:"
+    kubectl get nodes --no-headers
 
-  # Step 7: Run smoke test.
-  run_smoke_test
+    # AWS Load Balancer Controller — replaces the removed terraform
+    # helm_release (load_balancer_controller.tf, design.md#2.3/D-U3).
+    # Idempotent (upgrade --install); mirrors the deleted resource's set{}
+    # blocks exactly so the controller's config is unchanged for existing
+    # deployments migrating from the terraform-managed release.
+    if [[ "${AGENTTIER_INSTALL_LBC}" == "true" ]]; then
+      at::step "Installing / upgrading AWS Load Balancer Controller"
+      helm repo add eks-charts https://aws.github.io/eks-charts >/dev/null 2>&1 || true
+      helm repo update eks-charts >/dev/null
+      helm upgrade aws-load-balancer-controller eks-charts/aws-load-balancer-controller \
+        --install \
+        --namespace kube-system \
+        --version "${AGENTTIER_LBC_CHART_VERSION}" \
+        --set "clusterName=${CLUSTER_NAME}" \
+        --set "region=${AGENTTIER_AWS_REGION}" \
+        --set "vpcId=${VPC_ID}" \
+        --set "serviceAccount.create=true" \
+        --set "serviceAccount.name=aws-load-balancer-controller" \
+        --set "serviceAccount.annotations.eks\.amazonaws\.com/role-arn=${LBC_ROLE_ARN}" \
+        --wait \
+        --timeout 180s
+    else
+      at::log "AWS Load Balancer Controller install skipped (AGENTTIER_INSTALL_LBC=false)."
+    fi
+
+    # Install / upgrade the AgentTier Helm chart.
+    at::step "Installing / upgrading Helm chart"
+    at::log "Helm release: ${AGENTTIER_HELM_RELEASE} → namespace: ${AGENTTIER_NAMESPACE}"
+    helm upgrade "${AGENTTIER_HELM_RELEASE}" "${REPO_ROOT}/helm/agenttier/" \
+      --install \
+      --namespace "${AGENTTIER_NAMESPACE}" \
+      --create-namespace \
+      --set "controller.image.repository=${ECR_CONTROLLER_URL}" \
+      --set "controller.image.tag=${IMAGE_TAG}" \
+      --set "router.image.repository=${ECR_ROUTER_URL}" \
+      --set "router.image.tag=${IMAGE_TAG}" \
+      --set "webui.image.repository=${ECR_WEBUI_URL}" \
+      --set "webui.image.tag=${IMAGE_TAG}" \
+      --set "defaults.sandbox.image=${ECR_SANDBOX_URL}:${IMAGE_TAG}" \
+      --set "defaults.claudeCode.image=${ECR_SANDBOX_CLAUDE_CODE_URL}:${IMAGE_TAG}" \
+      --set "defaults.openclaw.image=${ECR_SANDBOX_OPENCLAW_URL}:${IMAGE_TAG}" \
+      --set "defaults.langgraph.image=${ECR_SANDBOX_LANGGRAPH_URL}:${IMAGE_TAG}" \
+      --set "defaults.rl.image=${ECR_SANDBOX_RL_URL}:${IMAGE_TAG}" \
+      --set "defaults.strandsBedrock.image=${ECR_SANDBOX_STRANDS_BEDROCK_URL}:${IMAGE_TAG}" \
+      --set "auth.devAuth=false" \
+      --set "auth.oidc.issuerUrl=${COGNITO_ISSUER}" \
+      --set "auth.oidc.clientId=${COGNITO_CLIENT_ID}" \
+      --set "auth.oidc.adminGroup=${COGNITO_ADMIN_GROUP}" \
+      --set "auth.oidc.groupClaim=cognito:groups" \
+      --set "optional.storageClass.enabled=true" \
+      --set "optional.storageClass.isDefaultClass=true" \
+      --wait \
+      --timeout 300s
+
+    # Run smoke test.
+    run_smoke_test
+  fi
 
   at::log ""
   at::log "EKS deploy complete!"
   at::log ""
   at::log "Cluster         : ${CLUSTER_NAME}"
+  at::log "Endpoint mode   : ${AGENTTIER_ENDPOINT_MODE}"
   at::log "Region          : ${AGENTTIER_AWS_REGION}"
   at::log "Cognito issuer  : ${COGNITO_ISSUER}"
   at::log "Cognito client  : ${COGNITO_CLIENT_ID}"
   at::log ""
-  at::log "Access the web UI via the ALB (if ingress enabled) or:"
-  at::log "  kubectl port-forward -n ${AGENTTIER_NAMESPACE} svc/${AGENTTIER_HELM_RELEASE}-webui 8080:80"
+  if [[ "${AGENTTIER_ENDPOINT_MODE}" == "private" ]]; then
+    at::log "The API endpoint is private-only — kubectl/helm from this machine cannot"
+    at::log "reach the cluster directly. Access the web UI and API server via an SSM"
+    at::log "Session Manager port-forward; see docs/docs/port-forwarding.md for the"
+    at::log "full runbook (includes the required tls-server-name kubeconfig setting)."
+  else
+    at::log "Access the web UI via the ALB (if ingress enabled) or:"
+    at::log "  kubectl port-forward -n ${AGENTTIER_NAMESPACE} svc/${AGENTTIER_HELM_RELEASE}-webui 8080:80"
+  fi
   at::log ""
   at::log "Tear down (WARNING: destroys all EKS resources + ECR images):"
   at::log "  ./deploy.sh --target=eks --teardown"
