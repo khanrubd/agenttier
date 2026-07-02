@@ -4,7 +4,8 @@
 # claim to admin access. This provisions a user pool, an SPA app client
 # (PKCE, no client secret), and an admin group whose name matches the
 # `auth.oidc.adminGroup` the AgentTier chart expects. Wiring into the Helm
-# release happens in agenttier.tf.
+# release happens in deploy.sh (D-U3/D-A1: the chart install is not owned by
+# terraform), via the ready-to-use `agenttier_helm_auth_values` output below.
 
 locals {
   cognito_issuer_url = "https://cognito-idp.${var.region}.amazonaws.com/${aws_cognito_user_pool.agenttier.id}"

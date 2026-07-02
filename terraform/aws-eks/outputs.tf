@@ -17,6 +17,16 @@ output "cluster_endpoint" {
   value       = module.eks.cluster_endpoint
 }
 
+output "endpoint_access_mode" {
+  description = "Effective EKS API endpoint exposure ('public-restricted' or 'private'). See var.endpoint_access_mode."
+  value       = var.endpoint_access_mode
+}
+
+output "cluster_endpoint_private_host" {
+  description = "Private DNS host of the EKS API server (cluster_endpoint with the scheme stripped), for the SSM Session Manager port-forward runbook (docs/docs/port-forwarding.md). Resolves in-VPC because the VPC has enable_dns_hostnames/support = true."
+  value       = replace(module.eks.cluster_endpoint, "https://", "")
+}
+
 output "cluster_oidc_issuer_url" {
   description = "The OIDC issuer URL of the cluster, used for IRSA."
   value       = module.eks.cluster_oidc_issuer_url
@@ -84,15 +94,6 @@ output "aws_load_balancer_controller_role_arn" {
 output "ebs_csi_driver_role_arn" {
   description = "IAM role ARN assumed by the EBS CSI driver service account."
   value       = module.ebs_csi_irsa.iam_role_arn
-}
-
-# =============================================================================
-# AgentTier
-# =============================================================================
-
-output "agenttier_installed" {
-  description = "Whether the AgentTier Helm release was installed by this module."
-  value       = var.install_agenttier
 }
 
 # =============================================================================

@@ -1,35 +1,21 @@
 # Provider configuration.
 #
-# The kubernetes and helm providers are wired to the EKS cluster created by
-# this module. They authenticate with a short-lived token fetched via
-# `aws eks get-token` (the AWS CLI must be on PATH wherever Terraform runs).
-# Using exec-based auth avoids baking a token into state and keeps credentials
-# fresh across long applies.
+# Only the aws provider remains. The helm provider is gone: the AWS Load
+# Balancer Controller and AgentTier Helm releases that used to be applied
+# here now run from deploy.sh (locally in public-restricted mode, or inside
+# CodeBuild-in-VPC in private mode) — see terraform/aws-eks/README.md. That
+# removes the `aws eks get-token`-during-apply reachability dependency that
+# used to couple `terraform apply` to a reachable cluster endpoint, so
+# `terraform apply` is now pure-AWS and also works against a fully private
+# cluster from a laptop.
+#
+# The kubernetes provider is also gone (D-A3, verify-don't-assume gate /
+# Group 2 / T7): the eks module (terraform-aws-modules/eks/aws v20.x) uses
+# EKS Access Entries for cluster auth (main.tf) rather than the aws-auth
+# ConfigMap sub-module, and no root-module resource here is a
+# `kubernetes_*` type — `terraform init -backend=false && terraform
+# validate` confirmed nothing in the resolved module graph requires it.
 
 provider "aws" {
   region = var.region
-}
-
-provider "kubernetes" {
-  host                   = module.eks.cluster_endpoint
-  cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-
-  exec {
-    api_version = "client.authentication.k8s.io/v1beta1"
-    command     = "aws"
-    args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.region]
-  }
-}
-
-provider "helm" {
-  kubernetes {
-    host                   = module.eks.cluster_endpoint
-    cluster_ca_certificate = base64decode(module.eks.cluster_certificate_authority_data)
-
-    exec {
-      api_version = "client.authentication.k8s.io/v1beta1"
-      command     = "aws"
-      args        = ["eks", "get-token", "--cluster-name", module.eks.cluster_name, "--region", var.region]
-    }
-  }
 }

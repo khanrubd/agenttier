@@ -1,0 +1,24 @@
+# Example -backend-config file for backend.tf's S3 backend.
+#
+# Copy to backend.hcl (git-ignored — it typically names an account-specific
+# bucket) and fill in your values, then run:
+#
+#   terraform init -backend-config=backend.hcl
+#
+# Create the bucket first with hack/bootstrap-tfstate.sh, which enables
+# versioning, SSE-KMS encryption, Block Public Access, a TLS-only bucket
+# policy, and a data-classification=confidential tag — all the controls this
+# backend depends on for encrypted, lockable, tamper-resistant state.
+#
+# kms_key_id is REQUIRED for terraform.tfstate itself to land under SSE-KMS.
+# The bucket's default encryption (set by bootstrap-tfstate.sh) only applies
+# to PutObject calls that don't specify their own encryption — Terraform's S3
+# backend explicitly requests SSE-S3 (AES256) on every state write unless you
+# tell it otherwise here. Without kms_key_id, state is still encrypted at
+# rest, just under AES256 rather than the CMK the bootstrap script created.
+# bootstrap-tfstate.sh prints the key ARN to use.
+
+bucket     = "REPLACE-ME-agenttier-tfstate-<account-id>"
+key        = "aws-eks/terraform.tfstate"
+region     = "us-east-1"
+kms_key_id = "REPLACE-ME-arn:aws:kms:us-east-1:<account-id>:key/<key-id>"
