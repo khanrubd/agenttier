@@ -117,6 +117,12 @@ if [[ -z "${AGENTTIER_IMAGE_TAG:-}" ]]; then
 fi
 IMAGE_TAG="${AGENTTIER_IMAGE_TAG}"
 
+# Short git commit stamped into controller/router binaries via --build-arg
+# GIT_COMMIT (Dockerfile ldflags -X …version.GitCommit). Falls back to
+# "unknown" (the Dockerfile default) outside a git checkout. VERSION is the
+# derived image tag so the /version endpoint matches the deployed tag.
+GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo unknown)"
+
 # ---------------------------------------------------------------------------
 # Decide the EKS image-build path (D1b): CodeBuild (in-cloud) vs local buildx.
 #
@@ -312,10 +318,14 @@ if [[ "${DEPLOY_TARGET}" == "local" ]]; then
 
   at::log "Building controller image: ${CONTROLLER_IMG}"
   docker build -t "${CONTROLLER_IMG}" -f "${REPO_ROOT}/Dockerfile.controller" \
+    --build-arg "VERSION=${IMAGE_TAG}" \
+    --build-arg "GIT_COMMIT=${GIT_COMMIT}" \
     "${REPO_ROOT}"
 
   at::log "Building router image: ${ROUTER_IMG}"
   docker build -t "${ROUTER_IMG}" -f "${REPO_ROOT}/Dockerfile.router" \
+    --build-arg "VERSION=${IMAGE_TAG}" \
+    --build-arg "GIT_COMMIT=${GIT_COMMIT}" \
     "${REPO_ROOT}"
 
   at::log "Building web-ui image: ${WEBUI_IMG}"
@@ -617,6 +627,8 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
       --platform "${PLATFORM}" \
       --tag "${ECR_CONTROLLER_URL}:${IMAGE_TAG}" \
       --file "${REPO_ROOT}/Dockerfile.controller" \
+      --build-arg "VERSION=${IMAGE_TAG}" \
+      --build-arg "GIT_COMMIT=${GIT_COMMIT}" \
       --push \
       "${REPO_ROOT}"
 
@@ -625,6 +637,8 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
       --platform "${PLATFORM}" \
       --tag "${ECR_ROUTER_URL}:${IMAGE_TAG}" \
       --file "${REPO_ROOT}/Dockerfile.router" \
+      --build-arg "VERSION=${IMAGE_TAG}" \
+      --build-arg "GIT_COMMIT=${GIT_COMMIT}" \
       --push \
       "${REPO_ROOT}"
 
