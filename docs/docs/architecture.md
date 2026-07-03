@@ -154,4 +154,4 @@ A few deliberate trade-offs worth knowing:
 - **Single monorepo** for controller, router, web UI, SDK, CLI, and Helm chart. Easier to keep API versions in sync; one release tag ships everything.
 - **Kubernetes-native state** by default. MongoDB was removed; we use etcd + ConfigMaps + Events for everything so the platform has zero hard external deps. The optional SQL backend is purely for long-term retention, never for hot path.
 - **Stable networking.k8s.io/v1 Ingress** for port forwarding rather than Gateway API. Ingress is universal in K8s 1.27+; Gateway API requires separately-installed CRDs. Operators who prefer Gateway API can switch `ingressClassName` via Helm values.
-- **Flat eslint v9 config** and **golangci-lint v1** to keep the dev loop fast; major jumps are held for coordinated upgrades when the ecosystem stabilizes.
+- **Flat eslint v9 config** to keep the dev loop fast; major jumps are held for coordinated upgrades when the ecosystem stabilizes. Linting is **golangci-lint v2** — a hard floor, not a hold: v1's last release (v1.64.8) is built with Go 1.24 and cannot analyze this repo's Go 1.25 `go.mod`.

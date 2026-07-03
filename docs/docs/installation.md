@@ -103,7 +103,7 @@ Images are pulled anonymously from `ghcr.io/agenttier/*`. Every released image i
 
 ## Production install
 
-A realistic values file for an EKS cluster with Cognito OIDC, warm pool, and ALB ingress:
+A realistic values file for an EKS cluster with Cognito OIDC and ALB ingress:
 
 ```yaml
 # values.prod.yaml
@@ -133,11 +133,6 @@ defaults:
       limits:
         cpu: "2"
         memory: "4Gi"
-
-warmPool:
-  enabled: true
-  desiredCount: 2
-  template: "general-coding"
 
 controller:
   replicas: 2
@@ -172,15 +167,19 @@ optional:
             pathType: Prefix
     tls:
       - hosts: [agenttier.example.com]
-  serviceMonitor:
-    enabled: true   # requires Prometheus Operator
-  podDisruptionBudget:
+  pdb:
     enabled: true
 
 observability:
   otlp:
     endpoint: "otel-collector.observability.svc.cluster.local:4317"
+  prometheus:
+    serviceMonitor: true   # requires Prometheus Operator
 ```
+
+To pre-warm a pool after install, edit the `agenttier-warmpool-config` ConfigMap
+(or use the Web UI Settings page) — see [Warm pool](#warm-pool) above; there is
+no Helm-values switch for it.
 
 Install with this values file:
 
@@ -228,27 +227,39 @@ All values are documented inline in [`helm/agenttier/values.yaml`](https://githu
 | Value | Purpose |
 | --- | --- |
 | `security.gvisor.enabled` | Create a `gvisor` RuntimeClass and mark it available to templates. |
-| `security.podSecurityContext` | Overrides the restrictive default (non-root, RO rootfs, drop ALL caps). |
+| `security.podSecurityStandard` | Pod Security Standard level applied to the sandbox namespace (`restricted`, `baseline`, or `privileged`). Default `restricted`. This is a PSS label, not a raw securityContext override — the actual non-root/RO-rootfs/drop-ALL-caps pod defaults are hardcoded by the controller and cannot be loosened via Helm values. |
 
 ### Warm pool
 
-| Value | Purpose |
-| --- | --- |
-| `warmPool.enabled` | Leader-elected reconciler that pre-creates idle Pods. |
-| `warmPool.desiredCount` | Number of hot spares to keep. |
-| `warmPool.template` | Template the warm Pods use. |
-| `defaults.sandboxNamespace` | Namespace where Sandboxes (and therefore warm pool Pods + PVCs) are created. Defaults to `default`. Must match where the Router creates Sandboxes — a claimed pool Pod is reused in place and can't move namespaces. |
+The warm pool has **no Helm-values on/off switch** — it's configured entirely
+through the `agenttier-warmpool-config` ConfigMap in the install namespace,
+which a leader-elected controller reconciler watches for live changes (no
+redeploy needed). The Settings page in the Web UI edits this ConfigMap
+directly; you can also `kubectl edit cm agenttier-warmpool-config` by hand.
+The config shape is a list of per-template entries:
 
-The Settings page in the Web UI mutates the same values via the `agenttier-warmpool-config` ConfigMap, so admins can retune without redeploying the chart. The pool's configuration lives in the install namespace, but the idle Pods themselves are provisioned in `defaults.sandboxNamespace` so a claimed Pod can be handed directly to a new Sandbox.
+```json
+{"pools": [{"template": "general-coding", "desiredCount": 3}]}
+```
+
+| Field | Purpose |
+| --- | --- |
+| `pools[].template` | `ClusterSandboxTemplate` this entry keeps warm. |
+| `pools[].desiredCount` | Number of idle Pods to keep ready for that template. Zero (or omitting the entry) disables warming for it. |
+| `defaults.sandboxNamespace` (Helm value) | Namespace where Sandboxes (and therefore warm pool Pods + PVCs) are created. Defaults to `default`. Must match where the Router creates Sandboxes — a claimed pool Pod is reused in place and can't move namespaces. |
+
+The pool's ConfigMap lives in the install namespace, but the idle Pods
+themselves are provisioned in `defaults.sandboxNamespace` so a claimed Pod
+can be handed directly to a new Sandbox.
 
 ### Optional add-ons
 
 | Value | Purpose |
 | --- | --- |
 | `optional.imagePrepull.enabled` | DaemonSet that pre-caches sandbox images on every node. |
-| `optional.serviceMonitor.enabled` | Prometheus Operator ServiceMonitor (requires the Operator). |
-| `optional.podDisruptionBudget.enabled` | PDB for controller + router. |
-| `optional.otelCollector.enabled` | Sidecar OTel Collector. |
+| `observability.prometheus.serviceMonitor` | Prometheus Operator ServiceMonitor (requires the Operator). |
+| `optional.pdb.enabled` | PDB for controller + router. |
+| `observability.otelCollector.enabled` | In-cluster OTel Collector. |
 
 ### Observability
 

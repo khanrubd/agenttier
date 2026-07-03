@@ -3,8 +3,8 @@
 Every container image published to `ghcr.io/agenttier/*` on a `v*` release tag
 is keyless-signed with [cosign](https://docs.sigstore.dev/cosign/) using GitHub
 Actions' OIDC identity, and ships with SPDX + CycloneDX SBOMs attached as OCI
-artifacts. Signatures and attestations are present from v0.2.0 onwards; earlier
-releases shipped without them.
+artifacts. Signatures and attestations are present from v0.1.1 onwards; only
+v0.1.0 shipped without them.
 
 ## Verify a signature
 

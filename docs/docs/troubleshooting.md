@@ -25,10 +25,11 @@ harness:
 
 The runtime listens on port 9000 inside the pod; the Router dials it directly
 TCP-to-TCP, so the apiserver isn't in the request path and there's nothing to
-recycle. All four reference images (`general-coding`, `claude-code`,
-`minimal`, `langgraph`) ship with the runtime baked in. Custom images that
-don't have the runtime fall back to SPDY transparently — same behavior as
-before. To verify which transport a session used, look in Router logs for:
+recycle. All sandbox reference images (`general-coding`, `claude-code`,
+`openclaw`, `strands-bedrock`, `minimal`, `langgraph`, `rl`) ship with the
+runtime baked in. Custom images that don't have the runtime fall back to
+SPDY transparently — same behavior as before. To verify which transport a
+session used, look in Router logs for:
 
 - `terminal session via HTTP-PTY` — success on the new path.
 - `HTTP-PTY fallback to SPDY` with a structured `reason` field — fallback

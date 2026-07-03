@@ -141,12 +141,13 @@ with AgentTierClient(api_url="http://localhost:8081") as client:
 
     # streaming
     for event in sbx.agent.invoke_stream({"prompt": "stream please"}):
-        if event.stream == "stdout":
-            print(event.data, end="")
-        elif event.stream == "stderr":
-            print(f"[STDERR] {event.data}", end="")
-        elif event.stream == "exit":
-            print(f"\nexit={event.data['exit_code']}")
+        if event.event == "log":
+            if event.data["stream"] == "stdout":
+                print(event.data["data"], end="")
+            else:
+                print(f"[STDERR] {event.data['data']}", end="")
+        elif event.event == "exit":
+            print(f"\nexit={event.data['exitCode']}")
 ```
 
 For long-running invokes, `invoke_stream` lets you render output incrementally — exactly what the Web UI does.
@@ -159,7 +160,7 @@ Open the Web UI, expand **Advanced** on the agent-tutorial card, click the **Age
 - **Invoke** — paste a prompt or JSON body, click **Invoke**, watch stdout/stderr stream live. The **Cancel** button SIGTERMs the entrypoint mid-flight.
 - **Recent invokes** — last few invokes from this session with status, duration, and (if OTel is wired) a trace link.
 
-Try canceling: invoke a long-running script and click **Cancel** before it finishes. The exit event reports `exit_code: -1` (SIGTERM) and the recent-invokes list shows it as `cancelled`.
+Try canceling: invoke a long-running script and click **Cancel** before it finishes. The exit event reports `exitCode: -1` (SIGTERM) and the recent-invokes list shows it as `canceled`.
 
 ## 7. Cancel an in-flight invoke programmatically
 
@@ -173,8 +174,8 @@ invoke_id_holder = {}
 
 def consume():
     for event in sbx.agent.invoke_stream({"prompt": "..."}):
-        if event.stream == "start":
-            invoke_id_holder["id"] = event.data["invoke_id"]
+        if event.event == "start":
+            invoke_id_holder["id"] = event.data["invokeId"]
         # ...
 
 t = threading.Thread(target=consume)
@@ -189,23 +190,23 @@ For most cases, prefer simply closing the SSE stream — the Router treats clien
 
 ## 8. Concurrency caps
 
-Set `maxConcurrentInvokes` to throttle. From the SDK's perspective, over-cap requests get `HTTP 429` with `Retry-After: 5` and a structured body. Patch the spec:
+Set `maxConcurrentInvokes` to throttle. From the SDK's perspective, over-cap requests get `HTTP 429` with `Retry-After: 5` and a structured body. `harness.agent.maxConcurrentInvokes` lives on the *template*, not the sandbox — patch the `langgraph-agent` template (new sandboxes created from it pick up the change; existing sandboxes are unaffected):
 
 ```bash
-kubectl patch sandbox agent-tutorial --type=merge -p \
+kubectl patch clustersandboxtemplate langgraph-agent --type=merge -p \
   '{"spec":{"harness":{"agent":{"maxConcurrentInvokes":2}}}}'
 ```
 
-Now any third concurrent invoke is rejected:
+Now any third concurrent invoke against a sandbox created from the patched template is rejected:
 
 ```python
-from agenttier.exceptions import HTTPError
+from agenttier.exceptions import APIError
 
 try:
     sbx.agent.invoke({"prompt": "..."})
-except HTTPError as e:
+except APIError as e:
     if e.status_code == 429:
-        print(f"throttled — try again in {e.retry_after}s")
+        print("throttled — retry shortly")
 ```
 
 Cluster-wide ceilings are enforced by governance — see [Governance](../governance.md).
@@ -220,7 +221,7 @@ helm upgrade --install agenttier agenttier/agenttier \
   --set optional.agentMemorySidecar.enabled=true
 ```
 
-Once enabled, AgentTier injects a `mem0` container into every `mode: agent` Pod, listens on `127.0.0.1:11434`, and sets `MEM0_BASE_URL` automatically. Your agent code can:
+Once enabled, AgentTier injects a `mem0` container into every `mode: agent` Pod, listens on `127.0.0.1:8000`, and sets `MEM0_BASE_URL` automatically. Your agent code can:
 
 ```python
 from mem0 import Memory
@@ -240,13 +241,13 @@ For production, you typically prefer an external service (AgentCore Memory, Pine
 
 Every invoke emits:
 
-- An OTel span `agenttier.invoke` with sandbox / template / actor / invoke_id / duration / exit_code attributes.
+- An OTel span `agenttier.invoke` with sandbox / template / actor_hash / invoke_id / outcome / bytes_stdout / bytes_stderr attributes (exit code and duration are reported via the audit log line and the Prometheus histogram below, not as span attributes).
 - A line in the audit log via `GET /api/v1/audit/events`.
 - Prometheus metrics: `agenttier_invoke_requests_total`, `agenttier_invoke_duration_seconds`, `agenttier_invoke_throttled_total`.
 
 `/configure` emits parallel `agenttier.configure` spans and metrics.
 
-By default argv and stdin are **not** recorded — they may contain secrets. Operators can flip `audit.includeInvokePayloads=true` for development clusters.
+By default argv and stdin are **not** recorded — they may contain secrets. A Helm-flagged `audit.includeInvokePayloads=true` toggle to opt development clusters into payload recording is planned for a future release; there is no such key in the chart today.
 
 ## 11. Bring your own framework
 

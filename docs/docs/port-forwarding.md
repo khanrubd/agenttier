@@ -8,7 +8,8 @@ domain is configured, an Ingress resource pointing at it.
 
 ```bash
 # Web UI: click "Forward" on the running sandbox card
-# CLI: (coming soon)
+# CLI:
+agenttier sandbox ports forward my-sbx --port 8080 --protocol http
 # REST:
 curl -X POST https://agenttier.company.com/api/v1/sandboxes/my-sbx/ports \
   -H "Authorization: Bearer $TOKEN" \

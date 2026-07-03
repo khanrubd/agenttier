@@ -10,7 +10,7 @@ Get from zero to a running sandbox in under ten minutes.
 - **Docker with buildx** — `docker buildx version` (local path and default EKS path; **not needed** for the EKS CodeBuild path, which builds in AWS — auto-selected when Docker is absent or forced with `AGENTTIER_USE_CODEBUILD=true`)
 - **Helm 3.x** — `helm version`
 - **kubectl** configured for your target cluster
-- **kind** (local path) or **Terraform >= 1.5** + **AWS CLI v2** + **jq** + **zip** (EKS path)
+- **kind** (local path) or **Terraform >= 1.10** + **AWS CLI v2** + **jq** + **zip** (EKS path)
 
 **Cluster requirements:**
 
@@ -109,10 +109,10 @@ kubectl port-forward -n agenttier svc/agenttier-webui 8080:80
 
 Click **Open Terminal** on the sandbox card. You get a full PTY with resize, ANSI colors, and 30-second reconnection on network blips.
 
-If you prefer the CLI:
+There is no CLI equivalent to an interactive terminal — the CLI (Python distribution) runs one-shot commands instead:
 
 ```bash
-agenttier sandbox terminal my-first-sandbox
+agenttier sandbox exec my-first-sandbox -- bash -lc 'echo hello'
 ```
 
 See the [CLI guide](cli.md) for install instructions.
@@ -125,10 +125,16 @@ Install the Python SDK:
 pip install agenttier
 ```
 
+The SDK talks to the Router, not the Web UI, so port-forward that service instead:
+
+```bash
+kubectl port-forward -n agenttier svc/agenttier-router 8081:8080
+```
+
 ```python
 from agenttier import AgentTierClient
 
-with AgentTierClient(api_url="http://localhost:8080") as client:
+with AgentTierClient(api_url="http://localhost:8081") as client:
     sandbox = client.get_sandbox("my-first-sandbox")
     result = sandbox.exec("python -c 'print(2+2)'")
     print(result.stdout)  # "4\n"

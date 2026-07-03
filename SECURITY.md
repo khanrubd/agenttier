@@ -73,5 +73,5 @@ cosign verify-attestation \
   ghcr.io/agenttier/controller:v0.8.1
 ```
 
-Signatures and attestations are present from **v0.2.0** onwards. Earlier
-releases (v0.1.0 and below) shipped without them.
+Signatures and attestations are present from **v0.1.1** onwards. Only
+**v0.1.0** shipped without them.

@@ -79,19 +79,20 @@ The common subclasses you'll want to handle individually:
 | `SandboxErrorState` | sandbox entered the `Error` phase while waiting |
 | `APIError` | anything else; carries `.status_code` and `.body` |
 
-## Supported API surface (v0.1.1)
-
-Only endpoints that the Router server implements in v0.1.0 are exposed:
+## Supported API surface
 
 - **Sandboxes** — `create_sandbox`, `list_sandboxes`, `get_sandbox`, `stop`,
-  `resume`, `terminate`, `exec`, `wait_until_running`, `status`.
+  `resume`, `terminate` (alias `delete`), `clone`, `exec`, `wait_until_running`, `status`.
+- **File transfer** — `sandbox.files`: `list`, `read`, `download`, `write`,
+  `upload`, `archive`.
 - **Port forwarding** — `forward_port`, `list_ports`, `remove_port`.
 - **Templates** — `list_templates`, `get_template`.
 - **Identity** — `current_user`.
+- **Agent mode** — `sandbox.agent`: `configure`, `invoke`, `invoke_stream`,
+  `invoke_cancel`.
 
-Endpoints that are not yet implemented on the server (file transfer, sharing,
-cloning, WebSocket terminal from Python) are **not exposed** by the SDK and
-will be added in a future release once the server ships them.
+Sharing and the WebSocket terminal are not exposed from Python — those flows
+are Web-UI/Router-only today.
 
 ## Supported Python versions
 

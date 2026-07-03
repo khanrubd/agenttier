@@ -37,13 +37,18 @@ kubectl wait --for=jsonpath='{.status.phase}'=Running sandbox/dev-tutorial --tim
 
 `mode` defaults to `code`, so you do not need to set it. The Pod, PVC, NetworkPolicy, and ServiceAccount are all created automatically.
 
-## 3. Open a terminal from the CLI
+## 3. Open a terminal
+
+The interactive PTY (resize, ANSI colors, reconnect-on-drop) is a Web UI feature — click **Open Terminal** on the sandbox card. Neither CLI distribution has a `terminal` subcommand today.
+
+For a quick shell from your own terminal instead, go straight through Kubernetes:
 
 ```bash
-agenttier sandbox terminal dev-tutorial
+POD=$(kubectl get sandbox dev-tutorial -o jsonpath='{.status.podName}')
+kubectl exec -it -n default "$POD" -- bash
 ```
 
-You get the same PTY the Web UI gives you, attached to your terminal emulator. `Ctrl+D` exits. Reconnect anytime with the same command.
+`Ctrl+D` exits. This bypasses the Router's PTY bridge (no reconnect window), but it's the same container.
 
 ## 4. Use it like a dev VM
 
@@ -75,7 +80,8 @@ Resume:
 
 ```bash
 agenttier sandbox resume dev-tutorial
-agenttier sandbox terminal dev-tutorial
+POD=$(kubectl get sandbox dev-tutorial -o jsonpath='{.status.podName}')
+kubectl exec -it -n default "$POD" -- bash
 ls /workspace/repo  # still there
 ```
 
@@ -152,7 +158,8 @@ spec:
 EOF
 
 kubectl wait --for=jsonpath='{.status.phase}'=Running sandbox/claude-tutorial --timeout=180s
-agenttier sandbox terminal claude-tutorial
+POD=$(kubectl get sandbox claude-tutorial -o jsonpath='{.status.podName}')
+kubectl exec -it -n default "$POD" -- bash
 ```
 
 Inside the sandbox:
@@ -175,18 +182,21 @@ Override defaults at create time:
 ```yaml
 spec:
   resources:
-    cpu: "2"
-    memory: "8Gi"
-    ephemeralStorage: "20Gi"
+    requests:
+      cpu: "1"
+      memory: "4Gi"
+    limits:
+      cpu: "2"
+      memory: "8Gi"
   storage:
     size: "50Gi"
   idleTimeout: "8h"
-  maxRuntime: "24h"
+  timeout: "24h"
 ```
 
 Governance policies (cluster + namespace) clamp these. If `maxCpu: "4"` is set on the namespace, a sandbox requesting `cpu: "8"` is rejected with a `policy_violation` error.
 
-`idleTimeout` triggers an auto-stop after the user disconnects from the terminal for that long. `maxRuntime` is a hard cap; the sandbox auto-stops at the deadline regardless of activity. Both can be overridden per sandbox up to the governance ceiling.
+`idleTimeout` triggers an auto-stop after the user disconnects from the terminal for that long. `timeout` is a hard max-runtime cap; the sandbox auto-stops at the deadline regardless of activity. Both can be overridden per sandbox up to the governance ceiling.
 
 ## 10. Inspect Pod-level details
 
@@ -194,14 +204,14 @@ The CRD status surfaces the most useful fields:
 
 ```bash
 kubectl get sandbox dev-tutorial -o yaml | yq '.status'
-# phase, pod, podIP, lastActivityTimestamp, startupDurationMs,
+# phase, podName, pvcName, lastActivityTimestamp,
 # resolvedTemplate (the merged spec), forwardedPorts, conditions
 ```
 
 For a deep dive, jump to the Pod:
 
 ```bash
-POD=$(kubectl get sandbox dev-tutorial -o jsonpath='{.status.pod}')
+POD=$(kubectl get sandbox dev-tutorial -o jsonpath='{.status.podName}')
 kubectl describe pod -n default $POD
 kubectl logs -n default $POD --previous   # crashed Pod logs
 ```

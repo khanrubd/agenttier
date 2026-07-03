@@ -141,7 +141,7 @@ Agent-mode sandboxes use the same `credentials` block; nothing special is requir
 
 - **Web UI** → Templates tab: inline YAML editor with syntax highlighting,
   create / save / delete.
-- **CLI**: `agenttier template list | get | apply | delete`.
+- **CLI**: `agenttier template list | get` (Python CLI; read-only — no `apply` or `delete` subcommand in either CLI).
 - **REST**: `GET/POST/PUT/DELETE /api/v1/templates[/name]`.
 - **kubectl**: `kubectl get clustersandboxtemplates`; apply YAML directly.
 

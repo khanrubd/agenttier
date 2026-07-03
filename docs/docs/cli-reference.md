@@ -1,11 +1,16 @@
 # CLI reference
 
-Full command reference for the `agenttier` CLI. The CLI is distributed two ways:
+Full command reference for the **Python `agenttier` CLI** (`pip install agenttier`,
+installed alongside the SDK; works on any platform with Python 3.10+). This is the
+full-surface distribution — sandbox/template CRUD, files, ports, plus `configure`/`invoke`.
 
-- **`pip install agenttier`** — pure-Python CLI installed alongside the SDK. Works on any platform with Python 3.10+.
-- **GitHub Releases** — native Go binaries (`linux/darwin/windows × amd64/arm64`) for users who do not want a Python runtime.
-
-Both share the same command surface and flag names. This reference matches the current release.
+A second distribution — native Go binaries from GitHub Releases
+(`linux/darwin/windows × amd64/arm64`, no Python runtime required) — ships a
+**much smaller surface**: only `configure`, `invoke`, `version`, and `help`.
+Everything in this reference EXCEPT the `agenttier configure` and `agenttier invoke`
+sections (and their documented flags) is Python-CLI-only. See [CLI](cli.md) for
+the two-distribution overview and [`cmd/cli/`](https://github.com/agenttier/agenttier/tree/main/cmd/cli)
+for the Go binary's source.
 
 For tutorials, see [Web UI walkthrough](tutorials/web-ui.md), [Python SDK walkthrough](tutorials/python-sdk.md), and [Agent mode in depth](tutorials/agent-mode-tutorial.md).
 
@@ -17,7 +22,10 @@ agenttier <command> [<subcommand>] [flags] [arguments]
 
 ## Global flags
 
-Available on every command:
+Available on every command in this reference (the Python CLI). The Go binary
+(GitHub Releases) only recognizes `--api-url`/`--api-key` on its two commands
+(`configure`, `invoke`) — no `--token`, `--output`, or `login`/`whoami`/`sandbox`/
+`template` subcommands exist there; see [CLI](cli.md) for the split.
 
 | Flag | Env var | Description |
 | --- | --- | --- |
