@@ -15,26 +15,26 @@ from regressing silently.
 
 ## Bundle-size gate (enforced in CI)
 
-The CI `build` job runs `hack/check-bundle-size.sh` after `npm run build` and
+The CI `build` job runs `scripts/check-bundle-size.sh` after `npm run build` and
 **fails the build** if the emitted Vite JS exceeds 750 KB. Run it locally the
 same way:
 
 ```bash
-(cd web-ui && npm ci && npm run build) && hack/check-bundle-size.sh
+(cd web-ui && npm ci && npm run build) && scripts/check-bundle-size.sh
 ```
 
 Override the limit deliberately with `BUNDLE_LIMIT_KB=…` (and write down why).
 If you blow the budget, split the heavy feature behind a dynamic `import()`
 rather than raising the ceiling.
 
-## Cold vs. warm start (`hack/perf-smoke.sh`)
+## Cold vs. warm start (`scripts/perf-smoke.sh`)
 
 Measures p50/p99 time-to-`Running` against a live cluster (kind or the e2e
 cluster). Run it twice to compare:
 
 ```bash
 # Cold: ensure the template's warm pool is at 0, then:
-COUNT=10 NS=agenttier TEMPLATE=general-coding hack/perf-smoke.sh
+COUNT=10 NS=agenttier TEMPLATE=general-coding scripts/perf-smoke.sh
 
 # Warm: pre-warm the pool (Web UI Settings → warm pools, or the warmpool API),
 # wait for the pool to report Ready, then run the same command.
@@ -45,14 +45,14 @@ should land sub-second when a pool pod is claimed; the cold number is dominated
 by image pull + pod scheduling and should stay within the 10 s budget on a
 warm-image node.
 
-## Load / saturation (`hack/load-test.sh`)
+## Load / saturation (`scripts/load-test.sh`)
 
 Drives the Router API with [`hey`](https://github.com/rakyll/hey) to exercise
 the opt-in rate limiter and find where a single Router replica saturates:
 
 ```bash
 kubectl -n agenttier port-forward svc/agenttier-router 8080:8080 &
-BASE=http://localhost:8080 TOKEN=<api-key> N=1000 C=50 hack/load-test.sh
+BASE=http://localhost:8080 TOKEN=<api-key> N=1000 C=50 scripts/load-test.sh
 ```
 
 A burst of `429`s confirms the rate limiter engaging (when enabled); p99 latency

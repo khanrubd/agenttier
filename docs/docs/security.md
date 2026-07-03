@@ -196,8 +196,8 @@ Every image published to `ghcr.io/agenttier/*` on a `v*` tag is:
 
 - Keyless-signed with cosign using GitHub Actions' OIDC identity.
 - Shipped with SPDX + CycloneDX SBOMs attached as OCI artifacts.
-- Built from a pinned, digest-locked base image (see `Dockerfile.controller`,
-  `Dockerfile.router`, `images/*/Dockerfile`).
+- Built from a pinned, digest-locked base image (see `docker/Dockerfile.controller`,
+  `docker/Dockerfile.router`, `images/*/Dockerfile`).
 
 See [Verifying images](verifying-images.md) for `cosign verify` and
 `cosign verify-attestation` commands.

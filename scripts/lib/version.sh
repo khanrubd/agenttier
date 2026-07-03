@@ -2,12 +2,12 @@
 # Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 #
-# hack/lib/version.sh — canonical image-tag derivation.
+# scripts/lib/version.sh — canonical image-tag derivation.
 #
-# Usage (sourcing): source hack/lib/version.sh
+# Usage (sourcing): source scripts/lib/version.sh
 #   Sets and exports AGENTTIER_IMAGE_TAG when not already set.
 #
-# Usage (direct): bash hack/lib/version.sh
+# Usage (direct): bash scripts/lib/version.sh
 #   Prints the derived tag and exits 0.
 #
 # Rules (in priority order):

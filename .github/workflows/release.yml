@@ -35,10 +35,10 @@ jobs:
         include:
           - name: controller
             context: .
-            dockerfile: Dockerfile.controller
+            dockerfile: docker/Dockerfile.controller
           - name: router
             context: .
-            dockerfile: Dockerfile.router
+            dockerfile: docker/Dockerfile.router
           - name: web-ui
             context: web-ui
             dockerfile: web-ui/Dockerfile
@@ -527,7 +527,7 @@ jobs:
   # tarball published, PyPI wheel uploaded). Only then do we touch
   # older releases.
   #
-  # Behavior is documented in hack/release-retention.sh and in
+  # Behavior is documented in scripts/release-retention.sh and in
   # .kiro/steering/project.md "Post-release retention". Tightly scoped
   # permissions: contents:write for the gh-pages charts/index.yaml
   # commit, packages:write for ghcr.io version deletes.
@@ -561,4 +561,4 @@ jobs:
         run: |
           # github.ref is "refs/tags/vX.Y.Z" → strip the prefix.
           TAG="${GITHUB_REF#refs/tags/}"
-          ./hack/release-retention.sh "${TAG}"
+          ./scripts/release-retention.sh "${TAG}"

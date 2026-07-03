@@ -5,7 +5,7 @@
 #
 #   terraform init -backend-config=backend.hcl
 #
-# Create the bucket first with hack/bootstrap-tfstate.sh, which enables
+# Create the bucket first with scripts/bootstrap-tfstate.sh, which enables
 # versioning, SSE-KMS encryption, Block Public Access, a TLS-only bucket
 # policy, and a data-classification=confidential tag — all the controls this
 # backend depends on for encrypted, lockable, tamper-resistant state.

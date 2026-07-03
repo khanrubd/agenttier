@@ -2,7 +2,7 @@
 # Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 #
-# hack/bootstrap-tfstate.sh — create (or verify) the hardened S3 bucket that
+# scripts/bootstrap-tfstate.sh — create (or verify) the hardened S3 bucket that
 # backs terraform/aws-eks/backend.tf's S3 state backend (D-U6,
 # agenttier-hardening design.md#2/§10).
 #
@@ -25,8 +25,8 @@
 #      manages — treat as confidential)
 #
 # Usage:
-#   hack/bootstrap-tfstate.sh <bucket-name> [region]
-#   AWS_PROFILE=harniva-genai hack/bootstrap-tfstate.sh agenttier-tfstate-961341538768 us-east-1
+#   scripts/bootstrap-tfstate.sh <bucket-name> [region]
+#   AWS_PROFILE=harniva-genai scripts/bootstrap-tfstate.sh agenttier-tfstate-961341538768 us-east-1
 #
 # If <bucket-name> is omitted, defaults to agenttier-tfstate-<account-id> in
 # the region below (matching backend.hcl.example's suggested name).

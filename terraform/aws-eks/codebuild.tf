@@ -6,7 +6,7 @@
 # daemon (e.g. fully cloud-hosted CI pipelines).
 #
 # When enabled, CodeBuild reads source from the S3 bucket below, runs
-# buildspec.yml, and pushes images to the ECR repos in ecr.tf.
+# ci/buildspec.yml, and pushes images to the ECR repos in ecr.tf.
 # The timeout (var.codebuild_timeout_minutes) bounds the polling loop in
 # deploy.sh so a hung build never loops forever (fixes audit M6).
 #
@@ -166,7 +166,7 @@ data "aws_iam_policy_document" "codebuild_permissions" {
       "ecr:GetDownloadUrlForLayer",
       "ecr:BatchGetImage",
     ]
-    # All nine ECR repos that buildspec.yml pushes to — scoped to exact ARNs
+    # All nine ECR repos that ci/buildspec.yml pushes to — scoped to exact ARNs
     # (least privilege; no wildcard). Adding all sandbox repos here so every
     # ClusterSandboxTemplate image can be pushed via the CodeBuild opt-in path.
     resources = [
@@ -389,7 +389,7 @@ resource "aws_codebuild_project" "agenttier" {
   source {
     type      = "S3"
     location  = "${aws_s3_bucket.codebuild_source[0].bucket}/source.zip"
-    buildspec = "buildspec.yml"
+    buildspec = "ci/buildspec.yml"
   }
 
   artifacts {
@@ -415,7 +415,7 @@ resource "aws_codebuild_project" "agenttier" {
     image_pull_credentials_type = "CODEBUILD"
     privileged_mode             = true # required for docker-in-docker builds
 
-    # ECR_REPO_PREFIX is the name buildspec.yml actually reads (D1d). It must be
+    # ECR_REPO_PREFIX is the name ci/buildspec.yml actually reads (D1d). It must be
     # the registry host + repo namespace: "<account>.dkr.ecr.<region>.amazonaws.com/<prefix>".
     # buildspec builds "${ECR_REPO_PREFIX}/controller" and the ECR repos are named
     # "<prefix>/controller", so the bare registry host (local.ecr_registry) would

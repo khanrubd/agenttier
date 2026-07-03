@@ -2,10 +2,10 @@
 # Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 #
-# hack/lib/common.sh — shared logging, prereq checks, and env helpers.
+# scripts/lib/common.sh — shared logging, prereq checks, and env helpers.
 #
 # Source this file; do not execute directly.
-#   source hack/lib/common.sh
+#   source scripts/lib/common.sh
 set -euo pipefail
 
 # --- Logging helpers ---
@@ -69,7 +69,7 @@ at::load_config() {
   # Mirrors terraform's var.endpoint_access_mode (terraform/aws-eks/variables.tf):
   # "public-restricted" (default, laptop-friendly) or "private" (no public API
   # path — on-cluster deploy steps delegate to CodeBuild-in-VPC; see design.md#4
-  # and hack/lib/common.sh#at::check_eks_prereqs below for the SSM ops note).
+  # and scripts/lib/common.sh#at::check_eks_prereqs below for the SSM ops note).
   AGENTTIER_ENDPOINT_MODE="${AGENTTIER_ENDPOINT_MODE:-public-restricted}"
 
   export AGENTTIER_REGISTRY AGENTTIER_IMAGE_TAG AGENTTIER_CHART_REPO_URL
@@ -171,7 +171,7 @@ at::check_eks_prereqs() {
 
   # endpoint_access_mode=private (AGENTTIER_ENDPOINT_MODE) means the cluster's
   # Kubernetes API has no public path at all: on-cluster deploy steps delegate
-  # to CodeBuild-in-VPC (deploy.sh, buildspec-deploy.yml) and human kubectl/UI
+  # to CodeBuild-in-VPC (deploy.sh, ci/buildspec-deploy.yml) and human kubectl/UI
   # access goes through an SSM Session Manager port-forward instead of a
   # directly reachable endpoint — see docs/docs/port-forwarding.md for the
   # runbook (tls-server-name caveat included). Note it here rather than fail;

@@ -116,7 +116,7 @@ tidy: ## Run go mod tidy
 
 .PHONY: generate
 generate: ## Generate deepcopy functions
-	controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
+	controller-gen object:headerFile="scripts/boilerplate.go.txt" paths="./api/..."
 
 .PHONY: manifests
 manifests: ## Generate CRD manifests
@@ -140,11 +140,11 @@ docker-build: docker-build-controller docker-build-router docker-build-webui ## 
 
 .PHONY: docker-build-controller
 docker-build-controller: ## Build controller image
-	docker build -t $(CONTROLLER_IMG) -f Dockerfile.controller .
+	docker build -t $(CONTROLLER_IMG) -f docker/Dockerfile.controller .
 
 .PHONY: docker-build-router
 docker-build-router: ## Build router image
-	docker build -t $(ROUTER_IMG) -f Dockerfile.router .
+	docker build -t $(ROUTER_IMG) -f docker/Dockerfile.router .
 
 .PHONY: docker-build-webui
 docker-build-webui: ## Build web-ui image
@@ -158,8 +158,8 @@ docker-push: ## Push all container images
 
 .PHONY: docker-buildx
 docker-buildx: ## Build and push multi-arch images
-	docker buildx build --platform linux/amd64,linux/arm64 -t $(CONTROLLER_IMG) -f Dockerfile.controller --push .
-	docker buildx build --platform linux/amd64,linux/arm64 -t $(ROUTER_IMG) -f Dockerfile.router --push .
+	docker buildx build --platform linux/amd64,linux/arm64 -t $(CONTROLLER_IMG) -f docker/Dockerfile.controller --push .
+	docker buildx build --platform linux/amd64,linux/arm64 -t $(ROUTER_IMG) -f docker/Dockerfile.router --push .
 	docker buildx build --platform linux/amd64,linux/arm64 -t $(WEBUI_IMG) -f web-ui/Dockerfile --push web-ui/
 
 ##@ Local Cluster
@@ -178,7 +178,7 @@ minikube-load: docker-build ## Load all images into the minikube cluster (PROFIL
 
 .PHONY: smoke
 smoke: ## Run the smoke test against the currently configured cluster
-	bash hack/smoke-test.sh
+	bash scripts/smoke-test.sh
 
 ##@ Helm
 

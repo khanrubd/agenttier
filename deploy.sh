@@ -42,12 +42,12 @@ export REPO_ROOT="${SCRIPT_DIR}"
 # ---------------------------------------------------------------------------
 # Source shared library (logging, prereq checks, config loading).
 # ---------------------------------------------------------------------------
-# shellcheck source=hack/lib/common.sh
+# shellcheck source=scripts/lib/common.sh
 # shellcheck disable=SC1091
-source "${REPO_ROOT}/hack/lib/common.sh"
-# shellcheck source=hack/lib/version.sh
+source "${REPO_ROOT}/scripts/lib/common.sh"
+# shellcheck source=scripts/lib/version.sh
 # shellcheck disable=SC1091
-source "${REPO_ROOT}/hack/lib/version.sh"
+source "${REPO_ROOT}/scripts/lib/version.sh"
 
 # ---------------------------------------------------------------------------
 # Parse arguments.
@@ -111,9 +111,9 @@ at::load_config
 # AGENTTIER_IMAGE_TAG is already set by version.sh (sourced above); at::load_config
 # may have overridden it from config/config.env — re-derive if still empty.
 if [[ -z "${AGENTTIER_IMAGE_TAG:-}" ]]; then
-  # shellcheck source=hack/lib/version.sh
+  # shellcheck source=scripts/lib/version.sh
   # shellcheck disable=SC1091
-  source "${REPO_ROOT}/hack/lib/version.sh"
+  source "${REPO_ROOT}/scripts/lib/version.sh"
 fi
 IMAGE_TAG="${AGENTTIER_IMAGE_TAG}"
 
@@ -128,7 +128,7 @@ GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo u
 #
 # USE_CODEBUILD=true when ANY of:
 #   - endpoint_access_mode=private (AGENTTIER_ENDPOINT_MODE, set by
-#     hack/lib/common.sh::at::load_config) — the private endpoint has no
+#     scripts/lib/common.sh::at::load_config) — the private endpoint has no
 #     public path, so BOTH image builds and on-cluster deploy steps MUST run
 #     inside the VPC (design.md#4). main.tf also asserts this with a
 #     precondition (private⇒enable_codebuild) as a fail-closed backstop, but
@@ -144,7 +144,7 @@ GIT_COMMIT="$(git -C "${REPO_ROOT}" rev-parse --short HEAD 2>/dev/null || echo u
 # below). When false, the unchanged local-buildx + local-helm path is used
 # throughout.
 #
-# Exported so hack/lib/common.sh::check_eks_prereqs can skip the docker/buildx
+# Exported so scripts/lib/common.sh::check_eks_prereqs can skip the docker/buildx
 # hard-requirement on the CodeBuild path (D1a).
 # ---------------------------------------------------------------------------
 if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
@@ -196,7 +196,7 @@ run_smoke_test() {
   at::step "Running smoke test"
   export AGENTTIER_NAMESPACE
   export AGENTTIER_SMOKE_TIMEOUT="${AGENTTIER_SMOKE_TIMEOUT:-300}"
-  bash "${REPO_ROOT}/hack/smoke-test.sh"
+  bash "${REPO_ROOT}/scripts/smoke-test.sh"
 }
 
 # ---------------------------------------------------------------------------
@@ -311,7 +311,7 @@ if [[ "${DEPLOY_TARGET}" == "eks" && "${TEARDOWN}" == true ]]; then
     # in Step 5 above). Delegate the on-cluster teardown steps (helm uninstall
     # + sandbox/PVC cleanup + LoadBalancer Service deletion, so real AWS
     # ALBs/NLBs deprovision BEFORE the cluster disappears) to a CodeBuild-in-VPC
-    # run using a dedicated buildspec-teardown.yml, reusing
+    # run using a dedicated ci/buildspec-teardown.yml, reusing
     # codebuild_wait_for_build(). main.tf's precondition already enforces
     # private⇒enable_codebuild at apply time, so CODEBUILD_PROJECT should be
     # populated whenever a private cluster exists — fail loudly rather than
@@ -354,7 +354,7 @@ if [[ "${DEPLOY_TARGET}" == "eks" && "${TEARDOWN}" == true ]]; then
     TEARDOWN_BUILD_ID="$(aws codebuild start-build \
       --project-name "${CODEBUILD_PROJECT}" \
       --region "${AGENTTIER_AWS_REGION}" \
-      --buildspec-override "buildspec-teardown.yml" \
+      --buildspec-override "ci/buildspec-teardown.yml" \
       --environment-variables-override \
         "name=CLUSTER_NAME,value=${CLUSTER_NAME},type=PLAINTEXT" \
         "name=AWS_DEFAULT_REGION,value=${AGENTTIER_AWS_REGION},type=PLAINTEXT" \
@@ -480,14 +480,14 @@ if [[ "${DEPLOY_TARGET}" == "local" ]]; then
   WEBUI_IMG="${REGISTRY}/web-ui:${IMAGE_TAG}"
 
   at::log "Building controller image: ${CONTROLLER_IMG}"
-  docker build -t "${CONTROLLER_IMG}" -f "${REPO_ROOT}/Dockerfile.controller" \
+  docker build -t "${CONTROLLER_IMG}" -f "${REPO_ROOT}/docker/Dockerfile.controller" \
     --build-arg "VERSION=${IMAGE_TAG}" \
     --build-arg "GIT_COMMIT=${GIT_COMMIT}" \
     --build-arg "GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}" \
     "${REPO_ROOT}"
 
   at::log "Building router image: ${ROUTER_IMG}"
-  docker build -t "${ROUTER_IMG}" -f "${REPO_ROOT}/Dockerfile.router" \
+  docker build -t "${ROUTER_IMG}" -f "${REPO_ROOT}/docker/Dockerfile.router" \
     --build-arg "VERSION=${IMAGE_TAG}" \
     --build-arg "GIT_COMMIT=${GIT_COMMIT}" \
     --build-arg "GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}" \
@@ -602,7 +602,7 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
   # agenttier_extra_values are gone from the module (D-A2) — the published-
   # chart-from-terraform path never existed as anything but an inert
   # count=0 no-op, and deploy.sh installing the SOURCE chart in Step 6/
-  # buildspec-deploy.yml has always been the canonical path (D1/D20).
+  # ci/buildspec-deploy.yml has always been the canonical path (D1/D20).
   at::step "Provisioning infrastructure via Terraform"
   at::log "Terraform directory: ${TF_DIR}"
   at::log "Endpoint mode      : ${AGENTTIER_ENDPOINT_MODE}"
@@ -738,13 +738,13 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
     # Start build.
     #
     # D1c: pass IMAGE_TAG, ECR_REPO_PREFIX, and BUILD_PLATFORM as environment
-    # overrides. Without these, buildspec.yml falls back to IMAGE_TAG=sha-unknown
+    # overrides. Without these, ci/buildspec.yml falls back to IMAGE_TAG=sha-unknown
     # (→ CodeBuild pushes :sha-unknown while Helm Step 6 references the real
     # version.sh tag → guaranteed ImagePullBackOff) and an empty ECR_REPO_PREFIX.
     #
     # ECR_REPO_PREFIX must be the registry host + repo namespace, e.g.
     # <acct>.dkr.ecr.<region>.amazonaws.com/agenttier — NOT the bare registry host
-    # (the ecr_registry output). buildspec.yml builds "${ECR_REPO_PREFIX}/controller"
+    # (the ecr_registry output). ci/buildspec.yml builds "${ECR_REPO_PREFIX}/controller"
     # and the ECR repos are named "<prefix>/controller", so the host alone would
     # push to a non-existent "<host>/controller" repo. Derive it by stripping the
     # image name from a full repo URL (ecr_controller_url = "<host>/<prefix>/controller").
@@ -783,7 +783,7 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
     docker buildx build \
       --platform "${PLATFORM}" \
       --tag "${ECR_CONTROLLER_URL}:${IMAGE_TAG}" \
-      --file "${REPO_ROOT}/Dockerfile.controller" \
+      --file "${REPO_ROOT}/docker/Dockerfile.controller" \
       --build-arg "VERSION=${IMAGE_TAG}" \
       --build-arg "GIT_COMMIT=${GIT_COMMIT}" \
       --build-arg "GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}" \
@@ -794,7 +794,7 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
     docker buildx build \
       --platform "${PLATFORM}" \
       --tag "${ECR_ROUTER_URL}:${IMAGE_TAG}" \
-      --file "${REPO_ROOT}/Dockerfile.router" \
+      --file "${REPO_ROOT}/docker/Dockerfile.router" \
       --build-arg "VERSION=${IMAGE_TAG}" \
       --build-arg "GIT_COMMIT=${GIT_COMMIT}" \
       --build-arg "GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}" \
@@ -876,7 +876,7 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
   #
   # private: there is no public path to the API server at all — kubectl/helm
   # invoked from this machine cannot reach it. Delegate the identical steps
-  # to a second CodeBuild run using buildspec-deploy.yml (design.md#4.2 shape
+  # to a second CodeBuild run using ci/buildspec-deploy.yml (design.md#4.2 shape
   # B), reusing the source.zip already uploaded to S3 in Step 4 (Step 4 is
   # unconditionally the CodeBuild image-build path in private mode — see the
   # USE_CODEBUILD derivation above — so CODEBUILD_PROJECT/CODEBUILD_S3_BUCKET
@@ -889,7 +889,7 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
     DEPLOY_BUILD_ID="$(aws codebuild start-build \
       --project-name "${CODEBUILD_PROJECT}" \
       --region "${AGENTTIER_AWS_REGION}" \
-      --buildspec-override "buildspec-deploy.yml" \
+      --buildspec-override "ci/buildspec-deploy.yml" \
       --environment-variables-override \
         "name=CLUSTER_NAME,value=${CLUSTER_NAME},type=PLAINTEXT" \
         "name=AWS_DEFAULT_REGION,value=${AGENTTIER_AWS_REGION},type=PLAINTEXT" \

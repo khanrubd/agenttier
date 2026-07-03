@@ -44,9 +44,11 @@ api/v1alpha1/  - CRD type definitions
 config/        - Generated manifests (CRDs, RBAC, samples)
 web-ui/        - React frontend
 helm/          - Helm chart
-images/        - Reference Dockerfiles
+docker/        - Dockerfiles for the controller + router images
+images/        - Reference Dockerfiles for sandbox images
+ci/            - CodeBuild buildspecs (build / deploy / teardown)
 docs/          - Documentation (MkDocs)
-hack/          - Scripts (code generation, load testing)
+scripts/       - Scripts (code generation, load testing)
 test/          - Integration, e2e, and property-based tests (planned; not present yet)
 terraform/     - Infrastructure as Code modules
 ```
@@ -60,7 +62,7 @@ terraform/     - Infrastructure as Code modules
 - All exported types and functions must have doc comments
 - Error messages should be lowercase and not end with punctuation
 - Use structured logging (slog) — no fmt.Printf in production code
-- Every source file must include the Apache 2.0 header (see `hack/boilerplate.go.txt`)
+- Every source file must include the Apache 2.0 header (see `scripts/boilerplate.go.txt`)
 
 ### TypeScript (Web UI)
 

@@ -21,7 +21,7 @@
 # the standard AgentTier release-discipline shape.
 #
 # Build context: repository root (so the Dockerfile can pull in
-# cmd/sandbox-runtime). release.yml + ci.yml + buildspec.yml all set
+# cmd/sandbox-runtime). release.yml + ci.yml + ci/buildspec.yml all set
 # context: . and dockerfile: images/strands-bedrock/Dockerfile.
 
 # ---- Stage 1: in-pod runtime binary ----------------------------------------

@@ -41,7 +41,7 @@ if [[ ${#MISSING[@]} -gt 0 ]]; then
   echo "The following files are missing an Apache 2.0 license header:"
   printf '  %s\n' "${MISSING[@]}"
   echo ""
-  echo "Add the standard header from hack/boilerplate.go.txt to each file above."
+  echo "Add the standard header from scripts/boilerplate.go.txt to each file above."
   echo "(For .py files use '# Copyright ...' comments; for .ts/.tsx use '// Copyright ...')"
   exit 1
 fi

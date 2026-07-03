@@ -42,7 +42,7 @@ workloads off these nodes.
 
 - Terraform **>= 1.10** (bumped from >= 1.5 — the S3 backend's native lockfile,
   `use_lockfile = true`, requires it; see [State backend](#state-backend)).
-  `hack/lib/common.sh`'s `at::check_eks_prereqs` enforces this and fails
+  `scripts/lib/common.sh`'s `at::check_eks_prereqs` enforces this and fails
   loudly with an install hint if your `terraform` is older.
 - AWS CLI v2, configured with credentials that can create VPC/EKS/IAM/ECR
   resources (`aws configure`). Terraform's own provider is AWS-only now (see
@@ -209,7 +209,7 @@ aws ecr get-login-password --region us-east-1 \
   | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 docker buildx build --platform linux/amd64 \
   -t "${ECR_CONTROLLER_URL}:${IMAGE_TAG}" \
-  -f Dockerfile.controller --push .
+  -f docker/Dockerfile.controller --push .
 # Similarly, use terraform output -raw ecr_router_url, ecr_webui_url,
 # ecr_sandbox_*_url for the remaining images. deploy.sh does all of this
 # automatically — the manual commands above are illustrative only.
@@ -253,7 +253,7 @@ recent tagged images.
 
 ### Image tag derivation
 
-Never use `latest`. The canonical tag is derived by `hack/lib/version.sh`:
+Never use `latest`. The canonical tag is derived by `scripts/lib/version.sh`:
 - Clean tree at a release tag → value from the `VERSION` file (e.g. `0.8.1`)
 - Dev / dirty tree → `sha-<7-char-git-sha>[-dirty]`
 
@@ -294,10 +294,10 @@ This module always provisions a Cognito user pool + SPA app client;
 `deploy.sh` wires the AgentTier Helm release to it by default (`--set
 auth.devAuth=false` plus the `auth.oidc.*` values from the
 `agenttier_helm_auth_values` output — see `deploy.sh` Step 6 /
-`buildspec-deploy.yml`, D8). Create a user in the pool, add them to the
+`ci/buildspec-deploy.yml`, D8). Create a user in the pool, add them to the
 `agenttier-admins` group, and log in through the web UI. There is no longer a
 terraform-side toggle for this — the Helm values live entirely in
-`deploy.sh`/`buildspec-deploy.yml` now (see
+`deploy.sh`/`ci/buildspec-deploy.yml` now (see
 [Breaking changes](#breaking-changes-in-this-hardening-pass)).
 
 For a quick evaluation without OIDC, run `terraform apply` + `aws eks
@@ -382,7 +382,7 @@ need to read/write the *same* state (i.e. whenever `endpoint_access_mode =
 ```bash
 # 1. Create a hardened bucket (versioned, SSE-KMS, Block Public Access, TLS-only
 #    policy, tagged data-classification=confidential):
-../../hack/bootstrap-tfstate.sh agenttier-tfstate-<account-id> us-east-1
+../../scripts/bootstrap-tfstate.sh agenttier-tfstate-<account-id> us-east-1
 
 # 2. Point terraform at it (the script above prints the kms_key_id to use):
 cp backend.hcl.example backend.hcl   # git-ignored — fill in your bucket name + kms_key_id
@@ -448,7 +448,7 @@ If you're upgrading from a pre-hardening version of this module:
   relied on blanket creator-admin for some other principal, add it as an
   access entry yourself.
 - The module ships a `backend.tf` (S3 + native lockfile) — it is no longer a
-  no-backend drop-in. Run `hack/bootstrap-tfstate.sh` (or `terraform init
+  no-backend drop-in. Run `scripts/bootstrap-tfstate.sh` (or `terraform init
   -backend=false` for local-only state) — see [State backend](#state-backend).
 - `install_agenttier`, `agenttier_chart_version`, `agenttier_oidc_auth`,
   `agenttier_extra_values`, and the `agenttier_installed` output are **removed**.

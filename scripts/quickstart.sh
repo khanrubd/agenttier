@@ -2,14 +2,14 @@
 # Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 #
-# hack/quickstart.sh — compatibility shim for deploy.sh.
+# scripts/quickstart.sh — compatibility shim for deploy.sh.
 #
 # This script used to be the main deploy entrypoint. It is now a thin shim
 # that delegates to ./deploy.sh, the canonical single-entrypoint (D10).
 #
 # Usage:
-#   ./hack/quickstart.sh            → equivalent to ./deploy.sh --target=eks
-#   ./hack/quickstart.sh destroy    → equivalent to ./deploy.sh --target=eks --teardown
+#   ./scripts/quickstart.sh            → equivalent to ./deploy.sh --target=eks
+#   ./scripts/quickstart.sh destroy    → equivalent to ./deploy.sh --target=eks --teardown
 #
 # Use ./deploy.sh directly for the full API (--target=local, --help, etc.).
 set -euo pipefail

@@ -26,7 +26,7 @@ before you push the tag.
 - [ ] `make verify-codegen` — generated deepcopy + CRD YAML is current
 - [ ] `make test` — unit tests pass locally (skip on macOS if the LC_UUID issue bites; CI covers it)
 - [ ] `make lint` — golangci-lint clean
-- [ ] `./hack/check-license-headers.sh` — every Go file has the Apache header
+- [ ] `./scripts/check-license-headers.sh` — every Go file has the Apache header
 - [ ] `cd web-ui && npm ci && npm run lint && npm run build` — web UI builds and types check
 - [ ] `cd python-sdk && pip install -e ".[dev]" && pytest && mypy src/agenttier/` — SDK smoke tests and type check pass
 
@@ -98,7 +98,7 @@ If any of these 404 or fail, investigate the workflow run before announcing.
 
 ## Post-release cleanup sweep
 
-The `release-retention` workflow job (and `hack/release-retention.sh <tag>`) runs after
+The `release-retention` workflow job (and `scripts/release-retention.sh <tag>`) runs after
 `github-release` and keeps the repo tidy. It keeps the **latest 10** releases and **tags** and
 prunes the rest:
 

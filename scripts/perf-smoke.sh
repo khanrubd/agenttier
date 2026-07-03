@@ -8,7 +8,7 @@
 # Run it twice to compare cold vs. warm: once with the template's warm pool
 # at 0, once with it pre-warmed.
 #
-#   COUNT=10 NS=agenttier TEMPLATE=general-coding hack/perf-smoke.sh
+#   COUNT=10 NS=agenttier TEMPLATE=general-coding scripts/perf-smoke.sh
 #
 # Backs the steering-doc performance budget (cold ≤10s, warm ≤1s) with
 # reproducible numbers instead of folklore. Requires kubectl + a reachable

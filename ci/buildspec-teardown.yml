@@ -1,7 +1,7 @@
 version: 0.2
 
 # CodeBuild buildspec for the private-mode on-cluster teardown phase
-# (agenttier-hardening T8b — sibling of buildspec-deploy.yml).
+# (agenttier-hardening T8b — sibling of ci/buildspec-deploy.yml).
 #
 # Used ONLY when endpoint_access_mode = "private": with the EKS API endpoint
 # private-only, `kubectl`/`helm` cannot reach the cluster from a laptop, so
@@ -12,7 +12,7 @@ version: 0.2
 # public-restricted mode deploy.sh still runs these steps locally — this
 # buildspec is not invoked.
 #
-# Source: the same S3 source.zip used by buildspec.yml / buildspec-deploy.yml
+# Source: the same S3 source.zip used by ci/buildspec.yml / ci/buildspec-deploy.yml
 # — the CodeBuild project's source is shared; only the buildspec +
 # environment-variable overrides differ per run.
 #
@@ -56,7 +56,7 @@ phases:
   pre_build:
     commands:
       # Fail loudly on any missing mandatory override rather than tearing
-      # down against an empty/guessed value (mirrors buildspec-deploy.yml's
+      # down against an empty/guessed value (mirrors ci/buildspec-deploy.yml's
       # guard and deploy.sh's terraform-output empty-guard, C5).
       - |
         for var in CLUSTER_NAME AGENTTIER_HELM_RELEASE AGENTTIER_NAMESPACE; do

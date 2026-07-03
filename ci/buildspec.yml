@@ -11,7 +11,7 @@ version: 0.2
 #      make a manually-triggered build deterministic and push to the right repos.
 #   3. The `env.variables` defaults below — last-resort YAML-validity fallbacks.
 #
-# IMAGE_TAG: supplied by deploy.sh --target=eks from hack/lib/version.sh
+# IMAGE_TAG: supplied by deploy.sh --target=eks from scripts/lib/version.sh
 #   (v<VERSION> for releases, sha-<hash> for dev). Never use "sha-unknown" for a
 #   real deploy — deploy.sh always overrides it so both CodeBuild and Helm agree.
 # ECR_REPO_PREFIX: registry host + repo namespace, without a trailing slash, e.g.
@@ -63,9 +63,9 @@ phases:
       # non-zero exit, which is exactly the hard-required behaviour we want here.
       - echo "=== Building CORE images (hard-required) ==="
       - echo "Building controller..."
-      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/controller:${IMAGE_TAG}" -f Dockerfile.controller --build-arg VERSION="${IMAGE_TAG}" --push .
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/controller:${IMAGE_TAG}" -f docker/Dockerfile.controller --build-arg VERSION="${IMAGE_TAG}" --push .
       - echo "Building router..."
-      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/router:${IMAGE_TAG}" -f Dockerfile.router --build-arg VERSION="${IMAGE_TAG}" --push .
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/router:${IMAGE_TAG}" -f docker/Dockerfile.router --build-arg VERSION="${IMAGE_TAG}" --push .
       - echo "Building web-ui..."
       - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/web-ui:${IMAGE_TAG}" -f web-ui/Dockerfile --push web-ui/
       - echo "Building sandbox-general (with in-pod runtime)..."

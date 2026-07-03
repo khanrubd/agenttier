@@ -78,7 +78,7 @@ laptop and the CodeBuild deploy actor can share the same state. Bootstrap the
 bucket once:
 
 ```bash
-./hack/bootstrap-tfstate.sh                       # versioned, SSE-KMS, Block Public Access, TLS-only policy
+./scripts/bootstrap-tfstate.sh                       # versioned, SSE-KMS, Block Public Access, TLS-only policy
 cp terraform/aws-eks/backend.hcl.example terraform/aws-eks/backend.hcl
 # edit backend.hcl with your bucket name, then:
 cd terraform/aws-eks && terraform init -backend-config=backend.hcl

@@ -86,7 +86,7 @@ What this does:
 2. Builds all nine container images from source for your local architecture: 3 core images (controller, router, web-ui) and 6 sandbox images (sandbox-general, sandbox-claude-code, sandbox-openclaw, sandbox-langgraph, sandbox-rl, sandbox-strands-bedrock).
 3. Side-loads images into the cluster — no registry or push required.
 4. Installs the Helm chart from the local `helm/agenttier/` tree with `auth.devAuth=true` (local development only; never set in production).
-5. Runs `hack/smoke-test.sh` — creates a test sandbox, waits for `Phase=Running`, runs an exec, then cleans up.
+5. Runs `scripts/smoke-test.sh` — creates a test sandbox, waits for `Phase=Running`, runs an exec, then cleans up.
 
 **Expected output** (abbreviated):
 
@@ -145,7 +145,7 @@ terraform apply -var="endpoint_access_mode=private" -var="enable_codebuild=true"
 Earlier versions of this module shipped with **no backend block** (state stayed local, so the module was drop-in). That changed: `terraform/aws-eks/backend.tf` now configures an **S3 backend with the native S3 lockfile** (`use_lockfile = true`, no DynamoDB table) — required because private-mode's CodeBuild-in-VPC deploy actor and a human's laptop both need to read/write the *same* state, which local state can't do. Bootstrap the bucket once (versioned, SSE-KMS encrypted, Block Public Access, TLS-only policy, `data-classification=confidential` tagged):
 
 ```bash
-./hack/bootstrap-tfstate.sh                      # defaults to agenttier-tfstate-<account-id>
+./scripts/bootstrap-tfstate.sh                      # defaults to agenttier-tfstate-<account-id>
 cp terraform/aws-eks/backend.hcl.example terraform/aws-eks/backend.hcl
 # edit backend.hcl with the bucket name AND kms_key_id printed above, then:
 cd terraform/aws-eks && terraform init -backend-config=backend.hcl
@@ -176,9 +176,9 @@ What this does:
 4. Builds and pushes all nine images to ECR — 3 core images (controller, router, web-ui) and 6 sandbox images (sandbox-general, sandbox-claude-code, sandbox-openclaw, sandbox-langgraph, sandbox-rl, sandbox-strands-bedrock) — via one of two paths:
    - **Local buildx (default):** authenticates Docker to ECR and builds+pushes with `docker buildx` at `$AGENTTIER_EKS_PLATFORM` (default `linux/amd64`).
    - **AWS CodeBuild (no local Docker, or always in `private` endpoint mode):** zips the source, uploads it to the CodeBuild S3 bucket, and runs the in-cloud build — see [CodeBuild path](#codebuild-in-cloud-image-builds-eks-only). The core images are hard-required; the four extra agent-sandbox images (openclaw, langgraph, rl, strands-bedrock) build best-effort so one upstream failure does not block the deploy.
-5. Installs the AWS Load Balancer Controller and the AgentTier Helm chart, then runs `hack/smoke-test.sh`:
+5. Installs the AWS Load Balancer Controller and the AgentTier Helm chart, then runs `scripts/smoke-test.sh`:
    - **`public-restricted` (default):** runs locally — `aws eks update-kubeconfig`, `helm upgrade --install` for both releases, then the smoke test, exactly as `kubectl`/`helm` would from your machine.
-   - **`private`:** delegates the same three steps to a second CodeBuild run inside the VPC (`buildspec-deploy.yml`), passing cluster/ECR/Cognito values as environment overrides and polling to completion with the same bounded-timeout loop used for image builds.
+   - **`private`:** delegates the same three steps to a second CodeBuild run inside the VPC (`ci/buildspec-deploy.yml`), passing cluster/ECR/Cognito values as environment overrides and polling to completion with the same bounded-timeout loop used for image builds.
    The AgentTier chart's `crds/` directory installs the CRDs first (so the bundled default `ClusterSandboxTemplate`s apply cleanly on a fresh install), then wires Cognito OIDC auth and deploys a default gp3 EBS StorageClass so sandbox PVCs bind immediately. Dev-auth is never set on the EKS path.
 
 **Expected output** (abbreviated):
@@ -291,10 +291,10 @@ create a sandbox from that specific template.
 **Deploy-build path (`endpoint_access_mode = private` only).** This CodeBuild project also runs a
 *second*, separate build for the on-cluster deploy steps when the API endpoint is private (see
 [Path 2: AWS EKS](#path-2-aws-eks) step 5) — same project and source zip, different buildspec
-(`buildspec-deploy.yml` instead of `buildspec.yml`). `deploy.sh` starts it with the cluster/ECR/
+(`ci/buildspec-deploy.yml` instead of `ci/buildspec.yml`). `deploy.sh` starts it with the cluster/ECR/
 Cognito values as `--environment-variables-override` after the image build succeeds, and polls it
 to completion the same way. It installs the AWS Load Balancer Controller + the AgentTier Helm chart
-and runs `hack/smoke-test.sh` from inside the VPC, since a private endpoint has no other path to
+and runs `scripts/smoke-test.sh` from inside the VPC, since a private endpoint has no other path to
 reach the cluster during a build. In `public-restricted` mode this second build never runs — those
 steps execute locally instead.
 
@@ -550,10 +550,12 @@ agenttier/
 +-- web-ui/             # React frontend (TypeScript + Vite)
 +-- helm/agenttier/     # Helm chart
 +-- terraform/aws-eks/  # AWS infrastructure (EKS + Cognito + ECR)
++-- docker/             # Dockerfiles for the controller + router images
 +-- images/             # Reference Dockerfiles for sandbox images
 +-- python-sdk/         # Python SDK (pip install agenttier)
 +-- docs/               # Documentation (MkDocs)
-+-- hack/               # Scripts (deploy helpers, codegen, smoke test)
++-- ci/                 # CodeBuild buildspecs (build / deploy / teardown)
++-- scripts/            # Scripts (deploy helpers, codegen, smoke test)
 +-- deploy.sh           # Single deploy entrypoint (--target=local|eks)
 +-- config/             # Configuration surface (config.env.example)
 ```

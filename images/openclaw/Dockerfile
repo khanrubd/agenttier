@@ -33,7 +33,7 @@
 # Builds for linux/amd64 and linux/arm64 via buildx TARGETARCH.
 #
 # Build context: repository root (so the Dockerfile can pull in
-# cmd/sandbox-runtime). release.yml + ci.yml + buildspec.yml all set
+# cmd/sandbox-runtime). release.yml + ci.yml + ci/buildspec.yml all set
 # context: . and dockerfile: images/openclaw/Dockerfile for this reason.
 
 # ---- Stage 1: in-pod runtime binary ----------------------------------------

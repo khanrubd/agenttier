@@ -2,7 +2,7 @@ version: 0.2
 
 # CodeBuild buildspec for the private-mode on-cluster deploy phase
 # (agenttier-hardening, design.md#4.2 shape B — a dedicated deploy buildspec,
-# separate from buildspec.yml's image-build phase).
+# separate from ci/buildspec.yml's image-build phase).
 #
 # Used ONLY when endpoint_access_mode = "private": with the EKS API endpoint
 # private-only, `kubectl`/`helm` cannot reach the cluster from a laptop, so
@@ -12,7 +12,7 @@ version: 0.2
 # deploy.sh still runs these steps locally — this buildspec is not invoked.
 #
 # Source: the same S3 source.zip deploy.sh already uploads for the
-# image-build CodeBuild run (buildspec.yml) — the CodeBuild project's source
+# image-build CodeBuild run (ci/buildspec.yml) — the CodeBuild project's source
 # is shared; only the buildspec + environment-variable overrides differ per
 # run.
 #
@@ -80,7 +80,7 @@ phases:
   pre_build:
     commands:
       # Fail loudly on any missing mandatory override rather than deploying
-      # against an empty/guessed value (mirrors buildspec.yml's ECR_REPO_PREFIX
+      # against an empty/guessed value (mirrors ci/buildspec.yml's ECR_REPO_PREFIX
       # guard and deploy.sh's terraform-output empty-guard, C5).
       - |
         for var in CLUSTER_NAME ECR_CONTROLLER_URL ECR_ROUTER_URL ECR_WEBUI_URL \
@@ -156,7 +156,7 @@ phases:
       # needed here; that's the human-ops path documented in
       # docs/docs/port-forwarding.md).
       - echo "=== Running smoke test ==="
-      - AGENTTIER_NAMESPACE="${AGENTTIER_NAMESPACE}" AGENTTIER_HELM_RELEASE="${AGENTTIER_HELM_RELEASE}" bash hack/smoke-test.sh
+      - AGENTTIER_NAMESPACE="${AGENTTIER_NAMESPACE}" AGENTTIER_HELM_RELEASE="${AGENTTIER_HELM_RELEASE}" bash scripts/smoke-test.sh
 
   post_build:
     commands:

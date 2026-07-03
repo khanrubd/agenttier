@@ -17,7 +17,7 @@
 # opportunistic Dependabot PR.
 #
 # Build context: repo root (the runtime binary stage pulls cmd/sandbox-runtime
-# and pkg/sandboxruntime). buildspec.yml + release.yml set context: . and
+# and pkg/sandboxruntime). ci/buildspec.yml + release.yml set context: . and
 # dockerfile: images/rl/Dockerfile.
 
 # ---- Stage 1: in-pod runtime binary ----------------------------------------

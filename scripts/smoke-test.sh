@@ -2,7 +2,7 @@
 # Copyright 2024 AgentTier Authors.
 # SPDX-License-Identifier: Apache-2.0
 #
-# hack/smoke-test.sh — reusable end-to-end smoke test for AgentTier.
+# scripts/smoke-test.sh — reusable end-to-end smoke test for AgentTier.
 #
 # Asserts a complete, working AgentTier deployment:
 #   1. Controller, router, and (if deployed) web-ui Deployments are Available.
@@ -26,10 +26,10 @@
 #                               cannot complete).
 #
 # Usage (standalone):
-#   bash hack/smoke-test.sh
+#   bash scripts/smoke-test.sh
 #
 # Usage (from deploy.sh):
-#   AGENTTIER_NAMESPACE=agenttier AGENTTIER_SMOKE_TIMEOUT=300 bash hack/smoke-test.sh
+#   AGENTTIER_NAMESPACE=agenttier AGENTTIER_SMOKE_TIMEOUT=300 bash scripts/smoke-test.sh
 set -euo pipefail
 
 # ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ ROUTER_DEPLOY="${RELEASE}-router"
 WEBUI_DEPLOY="${RELEASE}-webui"
 
 # ---------------------------------------------------------------------------
-# Logging helpers (minimal — no dep on hack/lib to keep this self-contained).
+# Logging helpers (minimal — no dep on scripts/lib to keep this self-contained).
 # ---------------------------------------------------------------------------
 _ts() { date -u '+%H:%M:%S'; }
 smoke::log()  { echo "[smoke $(_ts)] $*" >&2; }

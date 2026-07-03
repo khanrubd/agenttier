@@ -101,7 +101,7 @@ GOPROXY=direct ./deploy.sh --target=local
 
 or add `GOPROXY=direct` to `config/config.env`. `deploy.sh` passes this
 through as `--build-arg GOPROXY=...` to every Go-based image build
-(`Dockerfile.controller`, `Dockerfile.router`, and all 6 sandbox
+(`docker/Dockerfile.controller`, `docker/Dockerfile.router`, and all 6 sandbox
 Dockerfiles) on both the `--target=local` path and the `--target=eks`
 local-buildx path. The `--target=eks` CodeBuild path does not pass this
 build-arg (it runs in AWS where `proxy.golang.org` is reachable) and always

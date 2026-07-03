@@ -16,7 +16,7 @@
 # Copy backend.hcl.example to backend.hcl (git-ignored — it names a specific,
 # often account-specific bucket) and fill in the values, or pass
 # -backend-config="bucket=..." flags individually. Use
-# hack/bootstrap-tfstate.sh to create a correctly hardened bucket first
+# scripts/bootstrap-tfstate.sh to create a correctly hardened bucket first
 # (versioned, SSE-KMS, Block Public Access, TLS-only policy, tagged
 # data-classification=confidential) — it prints the kms_key_id to use below.
 #
