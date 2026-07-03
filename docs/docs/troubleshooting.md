@@ -87,6 +87,28 @@ endpoints. Check:
    (`sandbox.commands.run("ss -tlnp")` from the SDK or via the terminal)
 3. Is there a NetworkPolicy blocking traffic from the Router namespace?
 
+## `./deploy.sh --target=local` hangs or fails on `go mod download`
+
+If a controller, router, or sandbox image build times out or fails with
+`lookup proxy.golang.org: ... i/o timeout` (or similar DNS/connect failures),
+`proxy.golang.org` is unreachable from your network — common on corporate
+VPNs and some captive networks. Set `GOPROXY=direct` before running
+`deploy.sh` to fetch Go modules straight from their VCS origins instead:
+
+```bash
+GOPROXY=direct ./deploy.sh --target=local
+```
+
+or add `GOPROXY=direct` to `config/config.env`. `deploy.sh` passes this
+through as `--build-arg GOPROXY=...` to every Go-based image build
+(`Dockerfile.controller`, `Dockerfile.router`, and all 6 sandbox
+Dockerfiles) on both the `--target=local` path and the `--target=eks`
+local-buildx path. The `--target=eks` CodeBuild path does not pass this
+build-arg (it runs in AWS where `proxy.golang.org` is reachable) and always
+uses each Dockerfile's default. The default (`https://proxy.golang.org,direct`)
+is unchanged if you don't set it, so this is opt-in and doesn't affect normal
+networks.
+
 ## Docker Hub rate limits on EKS nodes
 
 All first-party Dockerfiles use `public.ecr.aws/docker/library/*` base images

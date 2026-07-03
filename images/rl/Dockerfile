@@ -23,7 +23,13 @@
 # ---- Stage 1: in-pod runtime binary ----------------------------------------
 # Digest-pinned for supply-chain security (M5).
 FROM public.ecr.aws/docker/library/golang:1.25.11-alpine@sha256:523c3effe300580ed375e43f43b1c9b091b68e935a7c3a92bfcc4e7ed55b18c2 AS runtime-build
+RUN apk add --no-cache git ca-certificates
 ARG TARGETARCH
+# GOPROXY=direct bypasses proxy.golang.org on networks where it's blocked
+# (corporate VPN / captive networks). Override at build time with
+# --build-arg GOPROXY=https://proxy.golang.org,direct on a normal network.
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
 # GOTOOLCHAIN=local: never auto-download a toolchain; build with the image's
 # Go (matches go.mod toolchain go1.25.11) so builds stay hermetic/offline (M5).
 ENV GOTOOLCHAIN=local

@@ -483,12 +483,14 @@ if [[ "${DEPLOY_TARGET}" == "local" ]]; then
   docker build -t "${CONTROLLER_IMG}" -f "${REPO_ROOT}/Dockerfile.controller" \
     --build-arg "VERSION=${IMAGE_TAG}" \
     --build-arg "GIT_COMMIT=${GIT_COMMIT}" \
+    --build-arg "GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}" \
     "${REPO_ROOT}"
 
   at::log "Building router image: ${ROUTER_IMG}"
   docker build -t "${ROUTER_IMG}" -f "${REPO_ROOT}/Dockerfile.router" \
     --build-arg "VERSION=${IMAGE_TAG}" \
     --build-arg "GIT_COMMIT=${GIT_COMMIT}" \
+    --build-arg "GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}" \
     "${REPO_ROOT}"
 
   at::log "Building web-ui image: ${WEBUI_IMG}"
@@ -524,7 +526,8 @@ if [[ "${DEPLOY_TARGET}" == "local" ]]; then
     at::log "Building ${sbx_name}: ${sbx_img}"
     docker build -t "${sbx_img}" \
       -f "${REPO_ROOT}/images/${sbx_dir}/Dockerfile" \
-      "${REPO_ROOT}/images/${sbx_dir}"
+      --build-arg "GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}" \
+      "${REPO_ROOT}"
   done
 
   # Step 3: Side-load images into local cluster.
@@ -783,6 +786,7 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
       --file "${REPO_ROOT}/Dockerfile.controller" \
       --build-arg "VERSION=${IMAGE_TAG}" \
       --build-arg "GIT_COMMIT=${GIT_COMMIT}" \
+      --build-arg "GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}" \
       --push \
       "${REPO_ROOT}"
 
@@ -793,6 +797,7 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
       --file "${REPO_ROOT}/Dockerfile.router" \
       --build-arg "VERSION=${IMAGE_TAG}" \
       --build-arg "GIT_COMMIT=${GIT_COMMIT}" \
+      --build-arg "GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}" \
       --push \
       "${REPO_ROOT}"
 
@@ -811,48 +816,54 @@ if [[ "${DEPLOY_TARGET}" == "eks" ]]; then
       --platform "${PLATFORM}" \
       --tag "${ECR_SANDBOX_URL}:${IMAGE_TAG}" \
       --file "${REPO_ROOT}/images/general-coding/Dockerfile" \
+      --build-arg "GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}" \
       --push \
-      "${REPO_ROOT}/images/general-coding"
+      "${REPO_ROOT}"
 
     at::log "Building + pushing sandbox-claude-code: ${ECR_SANDBOX_CLAUDE_CODE_URL}:${IMAGE_TAG}"
     docker buildx build \
       --platform "${PLATFORM}" \
       --tag "${ECR_SANDBOX_CLAUDE_CODE_URL}:${IMAGE_TAG}" \
       --file "${REPO_ROOT}/images/claude-code/Dockerfile" \
+      --build-arg "GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}" \
       --push \
-      "${REPO_ROOT}/images/claude-code"
+      "${REPO_ROOT}"
 
     at::log "Building + pushing sandbox-openclaw: ${ECR_SANDBOX_OPENCLAW_URL}:${IMAGE_TAG}"
     docker buildx build \
       --platform "${PLATFORM}" \
       --tag "${ECR_SANDBOX_OPENCLAW_URL}:${IMAGE_TAG}" \
       --file "${REPO_ROOT}/images/openclaw/Dockerfile" \
+      --build-arg "GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}" \
       --push \
-      "${REPO_ROOT}/images/openclaw"
+      "${REPO_ROOT}"
 
     at::log "Building + pushing sandbox-langgraph: ${ECR_SANDBOX_LANGGRAPH_URL}:${IMAGE_TAG}"
     docker buildx build \
       --platform "${PLATFORM}" \
       --tag "${ECR_SANDBOX_LANGGRAPH_URL}:${IMAGE_TAG}" \
       --file "${REPO_ROOT}/images/langgraph/Dockerfile" \
+      --build-arg "GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}" \
       --push \
-      "${REPO_ROOT}/images/langgraph"
+      "${REPO_ROOT}"
 
     at::log "Building + pushing sandbox-rl: ${ECR_SANDBOX_RL_URL}:${IMAGE_TAG}"
     docker buildx build \
       --platform "${PLATFORM}" \
       --tag "${ECR_SANDBOX_RL_URL}:${IMAGE_TAG}" \
       --file "${REPO_ROOT}/images/rl/Dockerfile" \
+      --build-arg "GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}" \
       --push \
-      "${REPO_ROOT}/images/rl"
+      "${REPO_ROOT}"
 
     at::log "Building + pushing sandbox-strands-bedrock: ${ECR_SANDBOX_STRANDS_BEDROCK_URL}:${IMAGE_TAG}"
     docker buildx build \
       --platform "${PLATFORM}" \
       --tag "${ECR_SANDBOX_STRANDS_BEDROCK_URL}:${IMAGE_TAG}" \
       --file "${REPO_ROOT}/images/strands-bedrock/Dockerfile" \
+      --build-arg "GOPROXY=${GOPROXY:-https://proxy.golang.org,direct}" \
       --push \
-      "${REPO_ROOT}/images/strands-bedrock"
+      "${REPO_ROOT}"
   fi
 
   # Step 5: On-cluster deploy — AWS Load Balancer Controller helm install
