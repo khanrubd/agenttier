@@ -50,7 +50,7 @@ credential chain**. AgentTier wires that up two ways:
    spec. Useful for clusters without OIDC or for cross-account access.
 
 The image already enables `plugins.entries.amazon-bedrock.config.discovery.enabled`
-in its baked config (`/etc/openclaw/config.json`). Without that flag
+in its baked config (`/etc/openclaw/openclaw.json`). Without that flag
 OpenClaw only auto-detects Bedrock when it sees `AWS_PROFILE`,
 `AWS_ACCESS_KEY_ID`, or `AWS_BEARER_TOKEN_BEDROCK` — IRSA sets neither,
 so the explicit opt-in is required. The runtime auth path still uses
@@ -76,15 +76,14 @@ fine-grained restrictions; consult Bedrock docs for the exact shape).
 | Package                | Version    | Why                                          |
 | ---------------------- | ---------- | -------------------------------------------- |
 | Node.js                | 22.x       | OpenClaw requires Node ≥ 22.16               |
-| `openclaw`             | 2026.5.19  | Pinned, auto-update disabled                 |
+| `openclaw`             | 2026.6.5   | Pinned, auto-update disabled                 |
 | AWS CLI v2             | latest     | `aws sts get-caller-identity` etc.           |
 | `git`, `python3`, `tmux`, `jq` | (stable) | Standard coding-sandbox toolkit              |
 
 ## Configuring a different default model
 
 The baked config sets the primary model to
-`amazon-bedrock/us.anthropic.claude-3-5-sonnet-20241022-v2:0` (the
-us-region inference profile for Claude 3.5 Sonnet v2). To switch:
+`amazon-bedrock/us.anthropic.claude-opus-4-7`. To switch:
 
 ```bash
 # inside the sandbox
@@ -92,10 +91,10 @@ openclaw models list                                       # see what's availabl
 openclaw models set amazon-bedrock/anthropic.claude-3-7-sonnet-20250219-v1:0
 ```
 
-Or override in the SandboxTemplate `env:` block by pointing
-`OPENCLAW_PRIMARY_MODEL` at the desired ref (the entrypoint reads it
-once on first launch). Persistent across stop/resume because the
-config seed lives on `/workspace/.openclaw/config.json`.
+The change persists across stop/resume because the config seed lives
+on the writable PVC at `/workspace/.openclaw/openclaw.json` (seeded
+from the image's baked `/etc/openclaw/openclaw.json` on first launch,
+never overwritten after that).
 
 ## Building locally
 

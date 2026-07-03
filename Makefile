@@ -120,16 +120,23 @@ generate: ## Generate deepcopy functions
 
 .PHONY: manifests
 manifests: ## Generate CRD manifests
-	controller-gen crd:generateEmbeddedObjectMeta=true rbac:roleName=agenttier-controller webhook paths="./api/..." output:crd:artifacts:config=config/crd output:rbac:artifacts:config=config/rbac
+	@# No rbac:/webhook: markers exist under api/ (RBAC is defined statically in
+	@# helm/agenttier/templates/rbac.yaml) — only crd: output is real; asking
+	@# controller-gen for rbac/webhook here would write to config/rbac/config/webhook,
+	@# directories that don't exist in this repo and never should.
+	controller-gen crd:generateEmbeddedObjectMeta=true paths="./api/..." output:crd:artifacts:config=config/crd
 	@# Keep the controller's embedded copy (pkg/crds, applied on startup) in
 	@# lockstep with the generated source of truth in config/crd.
 	cp config/crd/*.yaml pkg/crds/
 
 .PHONY: verify-codegen
 verify-codegen: generate manifests ## Verify generated code is up to date
-	@if [ -n "$$(git status --porcelain api/ config/crd/ config/rbac/ pkg/crds/)" ]; then \
+	@# Scope to the actual generated files, not whole directories — a stray
+	@# untracked file elsewhere under api/ (e.g. a new _test.go from unrelated
+	@# work) must not be misreported as stale codegen.
+	@if [ -n "$$(git status --porcelain api/v1alpha1/zz_generated.deepcopy.go config/crd/ pkg/crds/*.yaml)" ]; then \
 		echo "Generated files are out of date. Run 'make generate manifests' and commit."; \
-		git diff api/ config/crd/ config/rbac/ pkg/crds/; \
+		git diff api/v1alpha1/zz_generated.deepcopy.go config/crd/ pkg/crds/*.yaml; \
 		exit 1; \
 	fi
 

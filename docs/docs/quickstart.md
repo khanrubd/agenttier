@@ -27,9 +27,16 @@ Get from zero to a running sandbox in under ten minutes.
 git clone https://github.com/agenttier/agenttier.git
 cd agenttier
 ./deploy.sh --target=local
+# Or force minikube instead of kind (autodetection prefers kind when both are installed):
+./deploy.sh --target=local --cluster-tool=minikube
 ```
 
-This creates a kind cluster (if none exists), builds the controller/router/web-ui/sandbox images from source, loads them, and installs the Helm chart with dev-auth enabled. Smoke test runs at the end.
+This creates a kind (or minikube) cluster (if none exists), builds the controller/router/web-ui/sandbox images from source, loads them, and installs the Helm chart with dev-auth enabled. Smoke test runs at the end. Use `--cluster-tool=kind` or `--cluster-tool=minikube` (or the `AGENTTIER_CLUSTER_TOOL` env var) to force a choice; unset autodetects.
+
+> **Image build fails with a `proxy.golang.org` DNS timeout?** Some networks (corporate VPNs,
+> certain home/coffee-shop Wi-Fi) can't reach `proxy.golang.org` from inside Docker's build
+> network even though the host can. Re-run with `GOPROXY=direct ./deploy.sh --target=local` to
+> fetch Go modules straight from their VCS origins instead of through the proxy.
 
 ### Option B — AWS EKS (Terraform + ECR)
 

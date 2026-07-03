@@ -189,6 +189,21 @@ aws s3api put-bucket-tagging \
   --region "${REGION}" \
   --no-cli-pager
 
+# ---------------------------------------------------------------------------
+# 7. Access logging (Phase 2 — required for review PASS on a
+#    confidential-tagged bucket per AWS-security-guidelines). Self-targeting
+#    is the same accepted pattern used by terraform/aws-eks/codebuild.tf's
+#    S3 bucket; a dedicated log-target bucket is a future-tightening option,
+#    not required for this bucket's low request volume (a handful of state
+#    reads/writes per deploy).
+# ---------------------------------------------------------------------------
+echo "[bootstrap-tfstate] Enabling access logging..."
+aws s3api put-bucket-logging \
+  --bucket "${BUCKET}" \
+  --bucket-logging-status "{\"LoggingEnabled\":{\"TargetBucket\":\"${BUCKET}\",\"TargetPrefix\":\"access-logs/\"}}" \
+  --region "${REGION}" \
+  --no-cli-pager
+
 echo ""
 echo "[bootstrap-tfstate] Done. Bucket ready for terraform's S3 backend:"
 echo ""

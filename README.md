@@ -69,6 +69,7 @@ Key variables (see `config/config.env.example` for the full list):
 | `AGENTTIER_AWS_REGION` | `us-east-1` | AWS region for Terraform + ECR |
 | `AGENTTIER_EKS_PLATFORM` | `linux/amd64` | Target build platform for EKS nodes |
 | `AGENTTIER_NAMESPACE` | `agenttier` | Kubernetes namespace for the Helm release |
+| `AGENTTIER_CLUSTER_TOOL` | _(autodetect)_ | Force `kind` or `minikube` for `--target=local` (also settable via `--cluster-tool=<kind\|minikube>`); unset autodetects, preferring kind when both are installed |
 
 ### Path 1: Local cluster (kind or minikube)
 
@@ -78,11 +79,13 @@ Key variables (see `config/config.env.example` for the full list):
 git clone https://github.com/agenttier/agenttier.git
 cd agenttier
 ./deploy.sh --target=local
+# Or force a specific tool when both kind and minikube are installed:
+./deploy.sh --target=local --cluster-tool=minikube
 ```
 
 What this does:
 
-1. Creates a `kind` (or `minikube`) cluster named `agenttier-local` if one does not exist.
+1. Creates a `kind` (or `minikube`) cluster named `agenttier-local` if one does not exist. Autodetects between the two (preferring kind) unless `--cluster-tool=<kind|minikube>` (or `AGENTTIER_CLUSTER_TOOL`) forces the choice.
 2. Builds all nine container images from source for your local architecture: 3 core images (controller, router, web-ui) and 6 sandbox images (sandbox-general, sandbox-claude-code, sandbox-openclaw, sandbox-langgraph, sandbox-rl, sandbox-strands-bedrock).
 3. Side-loads images into the cluster — no registry or push required.
 4. Installs the Helm chart from the local `helm/agenttier/` tree with `auth.devAuth=true` (local development only; never set in production).
@@ -121,7 +124,7 @@ What this does:
 ./deploy.sh --target=local --teardown
 ```
 
-Uninstalls the Helm release and deletes the kind/minikube cluster.
+Uninstalls the Helm release and deletes the kind/minikube cluster. If both tools are installed, pass the same `--cluster-tool=<kind|minikube>` (or `AGENTTIER_CLUSTER_TOOL`) used at deploy time so teardown targets the right cluster.
 
 ---
 

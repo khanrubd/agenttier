@@ -32,6 +32,9 @@ jobs:
         run: |
           npm ci
           npm run lint
+      - name: Test Web UI
+        working-directory: web-ui
+        run: npm test
       - name: Helm lint
         run: helm lint helm/agenttier/
 

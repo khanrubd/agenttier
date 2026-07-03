@@ -116,6 +116,19 @@ resource "aws_s3_bucket_logging" "codebuild_source" {
   target_prefix = "access-logs/"
 }
 
+# Versioning (AWS-security-guidelines Phase 3 — required for
+# data-classification=internal). Protects the source zip from accidental
+# overwrite/delete; cheap given the bucket only ever holds a handful of
+# small CodeBuild source archives.
+resource "aws_s3_bucket_versioning" "codebuild_source" {
+  count  = var.enable_codebuild ? 1 : 0
+  bucket = aws_s3_bucket.codebuild_source[0].id
+
+  versioning_configuration {
+    status = "Enabled"
+  }
+}
+
 # ---------------------------------------------------------------------------
 # IAM role for CodeBuild
 # ---------------------------------------------------------------------------

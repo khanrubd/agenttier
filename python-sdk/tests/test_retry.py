@@ -304,3 +304,83 @@ async def test_async_post_not_retried_on_503_by_default() -> None:
         r = await c.post("/sandboxes", json={"name": "x"})
     assert r.status_code == 503
     assert counter["calls"] == 1  # NOT retried
+
+
+# --- _extract_retry_after edge cases ----------------------------------------
+
+
+def test_extract_retry_after_missing_header_returns_none() -> None:
+    resp = httpx.Response(429)
+    assert _RetryTransport._extract_retry_after(resp) is None
+
+
+def test_extract_retry_after_negative_value_clamped_to_zero() -> None:
+    resp = httpx.Response(429, headers={"Retry-After": "-5"})
+    assert _RetryTransport._extract_retry_after(resp) == 0.0
+
+
+def test_extract_retry_after_numeric_seconds_parsed() -> None:
+    resp = httpx.Response(429, headers={"Retry-After": "3"})
+    assert _RetryTransport._extract_retry_after(resp) == 3.0
+
+
+# --- async Retry-After honored (sync variant tested above; async has its
+# own _AsyncRetryTransport._extract_retry_after call path via the shared
+# staticmethod, but exercising it end-to-end catches wiring regressions) ----
+
+
+@pytest.mark.asyncio
+async def test_async_retry_after_header_honored() -> None:
+    counter = Counter()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
+        if counter["calls"] < 2:
+            return httpx.Response(429, headers={"Retry-After": "0"})
+        return httpx.Response(200, json={"ok": True})
+
+    transport = wrap_async_transport(
+        httpx.MockTransport(handler),
+        RetryConfig(max_retries=2, backoff_factor=0.0),
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        r = await c.get("/foo")
+    assert r.status_code == 200
+    assert counter["calls"] == 2
+
+
+@pytest.mark.asyncio
+async def test_async_connection_error_exhausts_retries_and_raises() -> None:
+    counter = Counter()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
+        raise httpx.ConnectError("still down", request=request)
+
+    transport = wrap_async_transport(
+        httpx.MockTransport(handler),
+        RetryConfig(max_retries=2, backoff_factor=0.0),
+    )
+    async with httpx.AsyncClient(transport=transport, base_url="http://test") as c:
+        with pytest.raises(httpx.ConnectError):
+            await c.get("/foo")
+    assert counter["calls"] == 3  # 1 initial + 2 retries
+
+
+def test_no_retry_status_5xx_not_in_default_set_passes_through() -> None:
+    # 501 is deliberately excluded from _DEFAULT_RETRY_STATUS (never resolves
+    # on retry) — confirm it's returned as-is rather than retried.
+    counter = Counter()
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        counter["calls"] += 1
+        return httpx.Response(501)
+
+    transport = wrap_transport(
+        _make_transport(handler),
+        RetryConfig(max_retries=3, backoff_factor=0.0),
+    )
+    with httpx.Client(transport=transport, base_url="http://test") as c:
+        r = c.get("/foo")
+    assert r.status_code == 501
+    assert counter["calls"] == 1

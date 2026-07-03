@@ -48,8 +48,35 @@ at::load_config() {
 
   if [[ -f "${root}/config/config.env" ]]; then
     at::log "Loading config from config/config.env"
+    # config.env assigns every AGENTTIER_* var unconditionally (no ${VAR:-...}
+    # guards), so a plain `source` would silently clobber any value the
+    # caller already exported before invoking deploy.sh (e.g.
+    # AGENTTIER_AWS_REGION=us-west-2 ./deploy.sh --target=eks) — an operator
+    # working in a non-default region could end up silently deployed to
+    # config.env's region instead of the one they explicitly asked for.
+    # Preserve pre-existing exports and restore them after sourcing so
+    # already-set environment variables always win over the file.
+    local var preset_vars=() preset_vals=()
+    for var in AGENTTIER_REGISTRY AGENTTIER_IMAGE_TAG AGENTTIER_CHART_REPO_URL \
+      AGENTTIER_DOCS_BASE_URL AGENTTIER_TARGET AGENTTIER_EKS_PLATFORM \
+      AGENTTIER_AWS_REGION AGENTTIER_TERRAFORM_DIR AGENTTIER_KIND_CLUSTER \
+      AGENTTIER_CLUSTER_TOOL AGENTTIER_HELM_RELEASE AGENTTIER_NAMESPACE \
+      AGENTTIER_ENDPOINT_MODE AGENTTIER_USE_CODEBUILD AGENTTIER_INSTALL_LBC \
+      AGENTTIER_LBC_CHART_VERSION; do
+      if [[ -n "${!var:-}" ]]; then
+        preset_vars+=("${var}")
+        preset_vals+=("${!var}")
+      fi
+    done
     # shellcheck source=/dev/null
     source "${root}/config/config.env"
+    local i
+    if [[ ${#preset_vars[@]} -gt 0 ]]; then
+      for ((i = 0; i < ${#preset_vars[@]}; i++)); do
+        at::log "Environment override wins over config.env for ${preset_vars[$i]}"
+        export "${preset_vars[$i]}=${preset_vals[$i]}"
+      done
+    fi
   fi
 
   # Apply defaults for any variable not yet set.
@@ -62,6 +89,10 @@ at::load_config() {
   AGENTTIER_AWS_REGION="${AGENTTIER_AWS_REGION:-us-east-1}"
   AGENTTIER_TERRAFORM_DIR="${AGENTTIER_TERRAFORM_DIR:-terraform/aws-eks}"
   AGENTTIER_KIND_CLUSTER="${AGENTTIER_KIND_CLUSTER:-agenttier-local}"
+  # Empty by default → at::detect_cluster_tool autodetects (kind preferred
+  # over minikube when both are installed). Set to "kind" or "minikube" (via
+  # --cluster-tool=<tool> or this env var) to force the choice.
+  AGENTTIER_CLUSTER_TOOL="${AGENTTIER_CLUSTER_TOOL:-}"
   AGENTTIER_HELM_RELEASE="${AGENTTIER_HELM_RELEASE:-agenttier}"
   # "agenttier" matches the Terraform helm_release namespace (agenttier.tf:35)
   # and the Helm chart default. Use this value consistently end-to-end.
@@ -76,7 +107,7 @@ at::load_config() {
   export AGENTTIER_DOCS_BASE_URL AGENTTIER_TARGET AGENTTIER_EKS_PLATFORM
   export AGENTTIER_AWS_REGION AGENTTIER_TERRAFORM_DIR
   export AGENTTIER_KIND_CLUSTER AGENTTIER_HELM_RELEASE AGENTTIER_NAMESPACE
-  export AGENTTIER_ENDPOINT_MODE
+  export AGENTTIER_ENDPOINT_MODE AGENTTIER_CLUSTER_TOOL
 }
 
 # --- Prereq checks ---
@@ -110,6 +141,40 @@ at::check_local_prereqs() {
   fi
 
   at::log "Local prerequisites OK."
+}
+
+# at::detect_cluster_tool  — echoes "kind" or "minikube" for the local target.
+#
+# Honors AGENTTIER_CLUSTER_TOOL (set via --cluster-tool=kind|minikube or the
+# env var directly) as an explicit override; fails loudly if the requested
+# tool isn't installed. Falls back to autodetection (kind preferred over
+# minikube when both are present) when unset, preserving prior behavior.
+at::detect_cluster_tool() {
+  case "${AGENTTIER_CLUSTER_TOOL:-}" in
+    kind)
+      at::require_cmd kind "Install kind: https://kind.sigs.k8s.io/docs/user/quick-start/#installation"
+      echo kind
+      return
+      ;;
+    minikube)
+      at::require_cmd minikube "Install minikube: https://minikube.sigs.k8s.io/docs/start/"
+      echo minikube
+      return
+      ;;
+    "")
+      ;;
+    *)
+      at::fatal "Invalid AGENTTIER_CLUSTER_TOOL '${AGENTTIER_CLUSTER_TOOL}'. Must be 'kind' or 'minikube'."
+      ;;
+  esac
+
+  if command -v kind >/dev/null 2>&1; then
+    echo kind
+  elif command -v minikube >/dev/null 2>&1; then
+    echo minikube
+  else
+    at::fatal "Neither 'kind' nor 'minikube' found — cannot determine cluster tool."
+  fi
 }
 
 # at::check_terraform_version  — fatal if terraform is below the required

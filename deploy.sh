@@ -6,6 +6,7 @@
 #
 # Usage:
 #   ./deploy.sh --target=local              Build + deploy to a local kind/minikube cluster
+#   ./deploy.sh --target=local --cluster-tool=minikube  Force minikube over kind
 #   ./deploy.sh --target=eks                Build + deploy to AWS EKS via Terraform
 #   ./deploy.sh --target=local --teardown   Delete the local cluster
 #   ./deploy.sh --target=eks   --teardown   Uninstall Helm + destroy Terraform infra
@@ -57,7 +58,7 @@ TEARDOWN=false
 
 usage() {
   cat >&2 <<'EOF'
-Usage: ./deploy.sh --target=<local|eks> [--teardown] [--help]
+Usage: ./deploy.sh --target=<local|eks> [--cluster-tool=<kind|minikube>] [--teardown] [--help]
 
 Targets:
   local     Build images, side-load into kind/minikube, install Helm chart with
@@ -68,6 +69,10 @@ Targets:
             Requires: aws cli, terraform >=1.10, docker (buildx), kubectl, helm.
 
 Flags:
+  --cluster-tool=<kind|minikube>  For --target=local: force this cluster tool
+              instead of autodetecting (kind is preferred over minikube when
+              both are installed). Also settable via AGENTTIER_CLUSTER_TOOL.
+              Honored by both the create/deploy path and --teardown.
   --teardown  For local: delete the kind/minikube cluster.
               For eks: helm uninstall + delete PVCs/LB services + terraform destroy.
   --help      Show this help message.
@@ -80,7 +85,8 @@ EOF
 
 for arg in "$@"; do
   case "${arg}" in
-    --target=*) DEPLOY_TARGET="${arg#--target=}" ;;
+    --target=*)       DEPLOY_TARGET="${arg#--target=}" ;;
+    --cluster-tool=*) export AGENTTIER_CLUSTER_TOOL="${arg#--cluster-tool=}" ;;
     --teardown)  TEARDOWN=true ;;
     --help|-h)   usage; exit 0 ;;
     *)
@@ -90,6 +96,12 @@ for arg in "$@"; do
       ;;
   esac
 done
+
+if [[ -n "${AGENTTIER_CLUSTER_TOOL:-}" && "${AGENTTIER_CLUSTER_TOOL}" != "kind" && "${AGENTTIER_CLUSTER_TOOL}" != "minikube" ]]; then
+  at::err "Invalid --cluster-tool='${AGENTTIER_CLUSTER_TOOL}'. Must be 'kind' or 'minikube'."
+  usage
+  exit 1
+fi
 
 if [[ -z "${DEPLOY_TARGET}" ]]; then
   at::err "--target is required."
@@ -243,14 +255,8 @@ codebuild_wait_for_build() {
 if [[ "${DEPLOY_TARGET}" == "local" && "${TEARDOWN}" == true ]]; then
   at::step "Teardown: local cluster"
 
-  # Detect cluster tool.
-  if command -v kind >/dev/null 2>&1; then
-    CLUSTER_TOOL=kind
-  elif command -v minikube >/dev/null 2>&1; then
-    CLUSTER_TOOL=minikube
-  else
-    at::fatal "Neither 'kind' nor 'minikube' found — cannot tear down."
-  fi
+  # Detect cluster tool (respects AGENTTIER_CLUSTER_TOOL / --cluster-tool override).
+  CLUSTER_TOOL="$(at::detect_cluster_tool)"
 
   # Uninstall Helm release (fail loudly).
   if helm status "${AGENTTIER_HELM_RELEASE}" -n "${AGENTTIER_NAMESPACE}" >/dev/null 2>&1; then
@@ -439,12 +445,8 @@ fi
 if [[ "${DEPLOY_TARGET}" == "local" ]]; then
   at::check_local_prereqs
 
-  # Detect cluster tool (prefer kind).
-  if command -v kind >/dev/null 2>&1; then
-    CLUSTER_TOOL=kind
-  else
-    CLUSTER_TOOL=minikube
-  fi
+  # Detect cluster tool (respects AGENTTIER_CLUSTER_TOOL / --cluster-tool override).
+  CLUSTER_TOOL="$(at::detect_cluster_tool)"
 
   # Step 1: Create cluster if absent.
   at::step "Ensuring local cluster exists"
@@ -464,6 +466,13 @@ if [[ "${DEPLOY_TARGET}" == "local" ]]; then
     else
       at::log "Minikube already running."
     fi
+    # Ensure kubectl context points at this cluster. `minikube start` sets
+    # this as a side effect, but the "already running" branch above does
+    # not — and a concurrent kind session on the same shared kubeconfig can
+    # flip the active context in between, silently redirecting the deploy
+    # (helm install + smoke test) at the wrong cluster. Explicit, matching
+    # the kind branch's own `kubectl config use-context` call above.
+    kubectl config use-context minikube
   fi
 
   # Step 2: Build images (local arch, no push).

@@ -32,9 +32,14 @@ The recommended install path builds from source:
 # Local — kind/minikube, dev-auth on, no AWS required:
 ./deploy.sh --target=local
 
+# Local — force minikube instead of autodetecting (kind is preferred when both are installed):
+./deploy.sh --target=local --cluster-tool=minikube
+
 # EKS — Terraform + ECR + Cognito OIDC:
 ./deploy.sh --target=eks
 ```
+
+`--cluster-tool=<kind|minikube>` (or the `AGENTTIER_CLUSTER_TOOL` env var) forces the local cluster tool for both the deploy and `--teardown` paths; leave it unset to autodetect.
 
 See the [Quickstart](quickstart.md) for a full walkthrough.
 

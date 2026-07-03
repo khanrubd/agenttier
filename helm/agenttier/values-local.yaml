@@ -3,7 +3,7 @@
 # Usage:
 #   helm install agenttier helm/agenttier/ \
 #     -f helm/agenttier/values-local.yaml \
-#     --namespace agenttier-system --create-namespace
+#     --namespace agenttier --create-namespace
 #
 # Or with deploy.sh:
 #   ./deploy.sh --target=local
@@ -37,9 +37,9 @@ webui:
 
 # --- Ingress: disabled for local (use kubectl port-forward) ---
 # To reach the web UI locally:
-#   kubectl port-forward -n agenttier-system svc/agenttier-webui 8080:80
+#   kubectl port-forward -n agenttier svc/agenttier-webui 8080:80
 # To reach the router API:
-#   kubectl port-forward -n agenttier-system svc/agenttier-router 8081:8080
+#   kubectl port-forward -n agenttier svc/agenttier-router 8081:8080
 optional:
   ingress:
     enabled: false
