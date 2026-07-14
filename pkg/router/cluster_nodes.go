@@ -23,7 +23,7 @@ package router
 // It returns per-node allocatable CPU/memory, the sum of scheduled Pod
 // requests on each node, a requests-based saturation percentage, and — when
 // the cloud provider labels them — the instance type and node group so an
-// operator can see e.g. two t3.large nodes in the `agentloft-e2e` group.
+// operator can see e.g. two t3.large nodes in the `agenttier-e2e` group.
 //
 // Admin-only: node fleet detail is operator information, gated behind
 // requireAdmin like the audit/analytics/headroom endpoints.

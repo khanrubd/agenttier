@@ -1,10 +1,26 @@
 # AgentTier Helm Chart Values
 # Full configuration reference: https://docs.agenttier.io/installation
 
+# --- Global ---
+# Registry prefix for all AgentTier images (controller, router, web-ui, and
+# sandbox defaults). Override this to use a private registry or ECR without
+# touching every individual image field.
+#
+# Example (EKS with ECR):
+#   global.registry: 123456789012.dkr.ecr.us-east-1.amazonaws.com/agenttier
+#
+# Individual component image fields (e.g. controller.image.repository) still
+# accept a full registry/repo path and take precedence when set.
+global:
+  registry: "ghcr.io/agenttier"
+
 # --- Controller ---
 controller:
   image:
-    repository: ghcr.io/agenttier/controller
+    # Short name (e.g. "controller") — resolved against global.registry.
+    # Set a full registry/repo path (e.g. "myregistry.example.com/myrepo/controller")
+    # to override the registry for this component only.
+    repository: controller
     tag: ""  # Defaults to chart appVersion
     pullPolicy: IfNotPresent
   replicas: 1
@@ -28,7 +44,9 @@ controller:
 # --- Router ---
 router:
   image:
-    repository: ghcr.io/agenttier/router
+    # Short name resolved against global.registry; override with a full path for
+    # per-component registry control.
+    repository: router
     tag: ""
     pullPolicy: IfNotPresent
   replicas: 2
@@ -59,7 +77,9 @@ router:
 # --- Web UI ---
 webui:
   image:
-    repository: ghcr.io/agenttier/web-ui
+    # Short name resolved against global.registry; override with a full path for
+    # per-component registry control.
+    repository: web-ui
     tag: ""
     pullPolicy: IfNotPresent
   replicas: 1
@@ -83,6 +103,24 @@ webui:
 #   enabled: false
 #   type: postgres
 #   connectionString: ""
+
+# --- CORS ---
+cors:
+  # allowedOrigins is the list of origins permitted to make cross-origin
+  # requests to the Router API. The incoming Origin header is echoed as
+  # Access-Control-Allow-Origin only when it exactly matches one of these
+  # values. An empty list (the default) disables CORS entirely — no
+  # Access-Control-Allow-Origin header is emitted, and browsers block
+  # cross-origin responses.
+  #
+  # Set this to the URL(s) of your deployed web-UI. Never use "*" — the API
+  # accepts Authorization and X-API-Key headers, and a wildcard CORS policy
+  # would let a malicious page read your users' API responses.
+  #
+  # Example:
+  #   allowedOrigins:
+  #     - https://dashboard.my-company.com
+  allowedOrigins: []
 
 # --- Authentication ---
 auth:
@@ -119,9 +157,9 @@ defaults:
   sandboxNamespace: "default"
 
   sandbox:
-    # Defaults to the chart's appVersion when the tag is omitted at render
-    # time. Users can override to pin a specific image.
-    image: ghcr.io/agenttier/sandbox-general:v0.8.1
+    # Short image name resolved against global.registry + chart appVersion.
+    # Override with a full registry/repo:tag string to pin a specific image.
+    image: sandbox-general
     resources:
       requests:
         cpu: 500m
@@ -136,7 +174,8 @@ defaults:
     timeout: 8h
     idleTimeout: 1h
   claudeCode:
-    image: ghcr.io/agenttier/sandbox-claude-code:v0.8.1
+    # Short image name resolved against global.registry + chart appVersion.
+    image: sandbox-claude-code
     # IRSA role ARN for Bedrock access (annotated on sandbox ServiceAccount)
     irsaRoleArn: ""
   openclaw:
@@ -146,7 +185,8 @@ defaults:
     # provider + discovery, and the entrypoint seeds it to the writable
     # PVC on first launch so user customizations persist across
     # stop/resume.
-    image: ghcr.io/agenttier/sandbox-openclaw:v0.8.1
+    # Short image name resolved against global.registry + chart appVersion.
+    image: sandbox-openclaw
     # IRSA role ARN for Bedrock access (annotated on sandbox ServiceAccount).
     # Required IAM permissions: bedrock:InvokeModel,
     # bedrock:InvokeModelWithResponseStream, bedrock:ListFoundationModels,
@@ -157,21 +197,24 @@ defaults:
     # LangGraph + LangChain + httpx + the mem0 client. Pair with the
     # `langgraph-agent` default template (helm/agenttier/templates/
     # default-templates.yaml) to spin up an agent in one apply.
-    image: ghcr.io/agenttier/sandbox-langgraph:v0.8.1
+    # Short image name resolved against global.registry + chart appVersion.
+    image: sandbox-langgraph
   strandsBedrock:
     # AWS Strands Agents SDK preinstalled, points at Bedrock by default.
     # IRSA-driven auth via the AWS SDK default credential chain — annotate
     # the namespace's default ServiceAccount with eks.amazonaws.com/role-arn
     # to give it Bedrock access. Pair with the `strands-bedrock` default
     # template.
-    image: ghcr.io/agenttier/sandbox-strands-bedrock:v0.8.1
+    # Short image name resolved against global.registry + chart appVersion.
+    image: sandbox-strands-bedrock
     irsaRoleArn: ""
   rl:
     # Reinforcement-learning reference image. PyTorch (CPU) + Ray RLlib +
     # Gymnasium + Stable-Baselines3 preinstalled. Pair with the
     # `rl-rollout` default template. CPU-only for now; GPU rollouts plug
     # in once a future phase lands GPU resource overrides on the CRD.
-    image: ghcr.io/agenttier/sandbox-rl:v0.8.1
+    # Short image name resolved against global.registry + chart appVersion.
+    image: sandbox-rl
 
 # --- Networking ---
 networking:
@@ -373,6 +416,15 @@ optional:
     provisioner: ebs.csi.aws.com
     allowVolumeExpansion: true
     reclaimPolicy: Delete
+    # isDefaultClass marks this StorageClass as the cluster default by adding
+    # the `storageclass.kubernetes.io/is-default-class: "true"` annotation.
+    # Set to true on EKS clusters that have no pre-existing default StorageClass
+    # (EKS 1.23+ no longer ships a default gp2 class when using the EBS CSI
+    # driver add-on). Without a default class, sandbox PVCs (storageClassName:"")
+    # stay Pending and sandboxes never reach Running.
+    # Leave false (default) on local kind/minikube clusters, which ship their
+    # own default StorageClass, or on any cluster that already has one.
+    isDefaultClass: false
     parameters:
       type: gp3
       # Encrypted: "true"

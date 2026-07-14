@@ -7,7 +7,7 @@ metadata:
 spec:
   description: "General-purpose coding environment with Node.js, Python, and Git"
   image:
-    repository: {{ .Values.defaults.sandbox.image | default "ghcr.io/agenttier/sandbox-general:latest" }}
+    repository: {{ include "agenttier.resolveSandboxImage" (dict "image" .Values.defaults.sandbox.image "global" .Values.global "appVersion" .Chart.AppVersion) }}
   resources:
     requests:
       cpu: 500m
@@ -48,7 +48,7 @@ metadata:
 spec:
   description: "AI coding agent with Claude Code CLI powered by AWS Bedrock"
   image:
-    repository: {{ .Values.defaults.claudeCode.image | default "ghcr.io/agenttier/sandbox-claude-code:latest" }}
+    repository: {{ include "agenttier.resolveSandboxImage" (dict "image" .Values.defaults.claudeCode.image "global" .Values.global "appVersion" .Chart.AppVersion) }}
   resources:
     requests:
       cpu: "1"
@@ -88,6 +88,7 @@ spec:
       value: "us-east-1"
   timeout: 24h
   idleTimeout: 2h
+---
 {{- if .Values.defaults.openclaw }}
 apiVersion: agenttier.io/v1alpha1
 kind: ClusterSandboxTemplate
@@ -98,7 +99,7 @@ metadata:
 spec:
   description: "AI coding agent with the OpenClaw CLI powered by AWS Bedrock"
   image:
-    repository: {{ .Values.defaults.openclaw.image | default "ghcr.io/agenttier/sandbox-openclaw:latest" }}
+    repository: {{ include "agenttier.resolveSandboxImage" (dict "image" .Values.defaults.openclaw.image "global" .Values.global "appVersion" .Chart.AppVersion) }}
   resources:
     requests:
       cpu: "1"
@@ -148,7 +149,7 @@ metadata:
 spec:
   description: "AWS Strands Agents SDK preinstalled, talking to Amazon Bedrock"
   image:
-    repository: {{ .Values.defaults.strandsBedrock.image | default "ghcr.io/agenttier/sandbox-strands-bedrock:latest" }}
+    repository: {{ include "agenttier.resolveSandboxImage" (dict "image" .Values.defaults.strandsBedrock.image "global" .Values.global "appVersion" .Chart.AppVersion) }}
   resources:
     requests:
       cpu: 500m
@@ -194,7 +195,7 @@ spec:
   description: "Agent-mode sandbox preloaded with LangGraph, LangChain, httpx, and the mem0 client"
   mode: agent
   image:
-    repository: {{ .Values.defaults.langgraph.image | default "ghcr.io/agenttier/sandbox-langgraph:latest" }}
+    repository: {{ include "agenttier.resolveSandboxImage" (dict "image" .Values.defaults.langgraph.image "global" .Values.global "appVersion" .Chart.AppVersion) }}
   resources:
     requests:
       cpu: 500m
@@ -247,7 +248,7 @@ spec:
   description: "RL rollout worker preloaded with PyTorch (CPU), Ray RLlib, Gymnasium, and Stable-Baselines3"
   mode: agent
   image:
-    repository: {{ .Values.defaults.rl.image | default "ghcr.io/agenttier/sandbox-rl:latest" }}
+    repository: {{ include "agenttier.resolveSandboxImage" (dict "image" .Values.defaults.rl.image "global" .Values.global "appVersion" .Chart.AppVersion) }}
   resources:
     # Sized for a typical PPO worker. Bump per-sandbox if your env is
     # heavier; clamped per-namespace by governance.

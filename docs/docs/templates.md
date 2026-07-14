@@ -11,11 +11,11 @@ which shell, which tools, and which lifecycle hooks should run.
 apiVersion: agenttier.io/v1alpha1
 kind: ClusterSandboxTemplate
 metadata:
-  name: minimal-shell
+  name: my-custom-template
 spec:
-  description: "Plain Alpine shell"
+  description: "Plain shell environment"
   image:
-    repository: ghcr.io/agenttier/sandbox-minimal:latest
+    repository: ghcr.io/agenttier/sandbox-general
   resources:
     requests:
       cpu: "200m"
@@ -82,7 +82,7 @@ metadata:
 spec:
   mode: agent
   image:
-    repository: ghcr.io/agenttier/sandbox-langgraph:v0.5.0
+    repository: ghcr.io/agenttier/sandbox-langgraph:v0.8.1
   harness:
     workingDir: /workspace
     agent:
@@ -141,7 +141,7 @@ Agent-mode sandboxes use the same `credentials` block; nothing special is requir
 
 - **Web UI** → Templates tab: inline YAML editor with syntax highlighting,
   create / save / delete.
-- **CLI**: `agenttier template list | get | apply | delete`.
+- **CLI**: `agenttier template list | get` (Python CLI; read-only — no `apply` or `delete` subcommand in either CLI).
 - **REST**: `GET/POST/PUT/DELETE /api/v1/templates[/name]`.
 - **kubectl**: `kubectl get clustersandboxtemplates`; apply YAML directly.
 
@@ -151,9 +151,9 @@ Deletion is rejected if any Running sandbox still references the template.
 
 Bundled in the default install and ready to use:
 
-- `general-coding` — general-purpose Debian + common dev tools.
-- `claude-code-bedrock` — Claude Code CLI pinned to a known-good version, wired
-  to AWS Bedrock via IRSA.
-- `minimal-shell` — bare Alpine, fast to pull, for troubleshooting.
-- `security-scanner` — pre-installed CVE scanners.
-- `data-analysis` — Python + pandas + notebooks.
+- `general-coding` — general-purpose environment with Node.js, Python, and Git.
+- `claude-code-bedrock` — Claude Code CLI wired to AWS Bedrock via IRSA.
+- `openclaw-bedrock` — OpenClaw CLI wired to AWS Bedrock via IRSA.
+- `strands-bedrock` — AWS Strands Agents Python SDK wired to AWS Bedrock via IRSA.
+- `langgraph-agent` — LangGraph + LangChain agent-mode reference.
+- `rl-rollout` — RL rollout worker with PyTorch, Ray RLlib, Gymnasium, and Stable-Baselines3.

@@ -13,7 +13,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 echo "Generating deepcopy functions..."
-controller-gen object:headerFile="${ROOT_DIR}/hack/boilerplate.go.txt" paths="${ROOT_DIR}/api/..."
+controller-gen object:headerFile="${ROOT_DIR}/scripts/boilerplate.go.txt" paths="${ROOT_DIR}/api/..."
 
 echo "Generating CRD manifests..."
 controller-gen crd:generateEmbeddedObjectMeta=true \

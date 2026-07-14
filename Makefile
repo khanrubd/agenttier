@@ -58,20 +58,35 @@ run-router: ## Run the router locally
 test: ## Run unit tests
 	go test -race -coverprofile=coverage.out ./pkg/... ./api/...
 
+# test-integration / test-e2e / test-property are planned test tiers. The
+# test/ tree does not exist yet, so each target no-ops with a notice instead of
+# failing on a missing package path. CI today runs only `make test` (unit).
 .PHONY: test-integration
-test-integration: ## Run integration tests (requires MongoDB, K8s)
-	go test -race -tags=integration ./test/integration/...
+test-integration: ## Run integration tests (requires a K8s cluster); skips if test/integration/ is absent
+	@if [ -d ./test/integration ]; then \
+		go test -race -tags=integration ./test/integration/...; \
+	else \
+		echo "test-integration: no test/integration/ yet — skipping (planned tier)"; \
+	fi
 
 .PHONY: test-e2e
-test-e2e: ## Run end-to-end tests (requires Kind cluster)
-	go test -race -tags=e2e -timeout=30m ./test/e2e/...
+test-e2e: ## Run end-to-end tests (requires Kind cluster); skips if test/e2e/ is absent
+	@if [ -d ./test/e2e ]; then \
+		go test -race -tags=e2e -timeout=30m ./test/e2e/...; \
+	else \
+		echo "test-e2e: no test/e2e/ yet — skipping (planned tier)"; \
+	fi
 
 .PHONY: test-property
-test-property: ## Run property-based tests
-	go test -race -tags=property -count=1 ./test/property/...
+test-property: ## Run property-based tests; skips if test/property/ is absent
+	@if [ -d ./test/property ]; then \
+		go test -race -tags=property -count=1 ./test/property/...; \
+	else \
+		echo "test-property: no test/property/ yet — skipping (planned tier)"; \
+	fi
 
 .PHONY: test-all
-test-all: test test-integration test-property ## Run all tests except e2e
+test-all: test test-integration test-property ## Run unit tests plus any present integration/property tiers
 
 .PHONY: coverage
 coverage: test ## Generate coverage report
@@ -101,20 +116,27 @@ tidy: ## Run go mod tidy
 
 .PHONY: generate
 generate: ## Generate deepcopy functions
-	controller-gen object:headerFile="hack/boilerplate.go.txt" paths="./api/..."
+	controller-gen object:headerFile="scripts/boilerplate.go.txt" paths="./api/..."
 
 .PHONY: manifests
 manifests: ## Generate CRD manifests
-	controller-gen crd:generateEmbeddedObjectMeta=true rbac:roleName=agenttier-controller webhook paths="./api/..." output:crd:artifacts:config=config/crd output:rbac:artifacts:config=config/rbac
+	@# No rbac:/webhook: markers exist under api/ (RBAC is defined statically in
+	@# helm/agenttier/templates/rbac.yaml) — only crd: output is real; asking
+	@# controller-gen for rbac/webhook here would write to config/rbac/config/webhook,
+	@# directories that don't exist in this repo and never should.
+	controller-gen crd:generateEmbeddedObjectMeta=true paths="./api/..." output:crd:artifacts:config=config/crd
 	@# Keep the controller's embedded copy (pkg/crds, applied on startup) in
 	@# lockstep with the generated source of truth in config/crd.
 	cp config/crd/*.yaml pkg/crds/
 
 .PHONY: verify-codegen
 verify-codegen: generate manifests ## Verify generated code is up to date
-	@if [ -n "$$(git status --porcelain api/ config/ pkg/crds/)" ]; then \
+	@# Scope to the actual generated files, not whole directories — a stray
+	@# untracked file elsewhere under api/ (e.g. a new _test.go from unrelated
+	@# work) must not be misreported as stale codegen.
+	@if [ -n "$$(git status --porcelain api/v1alpha1/zz_generated.deepcopy.go config/crd/ pkg/crds/*.yaml)" ]; then \
 		echo "Generated files are out of date. Run 'make generate manifests' and commit."; \
-		git diff api/ config/ pkg/crds/; \
+		git diff api/v1alpha1/zz_generated.deepcopy.go config/crd/ pkg/crds/*.yaml; \
 		exit 1; \
 	fi
 
@@ -125,11 +147,11 @@ docker-build: docker-build-controller docker-build-router docker-build-webui ## 
 
 .PHONY: docker-build-controller
 docker-build-controller: ## Build controller image
-	docker build -t $(CONTROLLER_IMG) -f Dockerfile.controller .
+	docker build -t $(CONTROLLER_IMG) -f docker/Dockerfile.controller .
 
 .PHONY: docker-build-router
 docker-build-router: ## Build router image
-	docker build -t $(ROUTER_IMG) -f Dockerfile.router .
+	docker build -t $(ROUTER_IMG) -f docker/Dockerfile.router .
 
 .PHONY: docker-build-webui
 docker-build-webui: ## Build web-ui image
@@ -143,9 +165,27 @@ docker-push: ## Push all container images
 
 .PHONY: docker-buildx
 docker-buildx: ## Build and push multi-arch images
-	docker buildx build --platform linux/amd64,linux/arm64 -t $(CONTROLLER_IMG) -f Dockerfile.controller --push .
-	docker buildx build --platform linux/amd64,linux/arm64 -t $(ROUTER_IMG) -f Dockerfile.router --push .
+	docker buildx build --platform linux/amd64,linux/arm64 -t $(CONTROLLER_IMG) -f docker/Dockerfile.controller --push .
+	docker buildx build --platform linux/amd64,linux/arm64 -t $(ROUTER_IMG) -f docker/Dockerfile.router --push .
 	docker buildx build --platform linux/amd64,linux/arm64 -t $(WEBUI_IMG) -f web-ui/Dockerfile --push web-ui/
+
+##@ Local Cluster
+
+.PHONY: kind-load
+kind-load: docker-build ## Load all images into the kind cluster (CLUSTER=<name> to override)
+	kind load docker-image $(CONTROLLER_IMG) --name $${CLUSTER:-agenttier-local}
+	kind load docker-image $(ROUTER_IMG) --name $${CLUSTER:-agenttier-local}
+	kind load docker-image $(WEBUI_IMG) --name $${CLUSTER:-agenttier-local}
+
+.PHONY: minikube-load
+minikube-load: docker-build ## Load all images into the minikube cluster (PROFILE=<name> to override)
+	minikube image load $(CONTROLLER_IMG) $${PROFILE:+--profile=$$PROFILE}
+	minikube image load $(ROUTER_IMG) $${PROFILE:+--profile=$$PROFILE}
+	minikube image load $(WEBUI_IMG) $${PROFILE:+--profile=$$PROFILE}
+
+.PHONY: smoke
+smoke: ## Run the smoke test against the currently configured cluster
+	bash scripts/smoke-test.sh
 
 ##@ Helm
 

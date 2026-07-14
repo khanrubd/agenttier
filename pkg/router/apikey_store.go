@@ -18,6 +18,7 @@ package router
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -78,8 +79,9 @@ func (s *secretAPIKeyStore) GetAPIKeyByHash(ctx context.Context, keyHash string)
 	}
 	// Defense in depth: confirm the stored hash matches exactly, in case a
 	// name collision (or a hand-edited Secret) ever points the derived name
-	// at the wrong record.
-	if string(secret.Data["keyHash"]) != keyHash {
+	// at the wrong record. Use constant-time comparison to prevent timing
+	// side-channel attacks (M4).
+	if subtle.ConstantTimeCompare(secret.Data["keyHash"], []byte(keyHash)) != 1 {
 		return nil, fmt.Errorf("api key not found")
 	}
 	rec := &auth.APIKeyRecord{}

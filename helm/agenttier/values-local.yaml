@@ -1,0 +1,74 @@
+# AgentTier Helm values overlay for kind / minikube local development.
+#
+# Usage:
+#   helm install agenttier helm/agenttier/ \
+#     -f helm/agenttier/values-local.yaml \
+#     --namespace agenttier --create-namespace
+#
+# Or with deploy.sh:
+#   ./deploy.sh --target=local
+#
+# This overlay is NOT suitable for any cluster reachable by untrusted users.
+# It enables devAuth (all requests treated as admin) and disables ingress.
+# Web UI and router are accessible via kubectl port-forward only.
+
+# --- Authentication ---
+# devAuth bypasses ALL authentication. Local-only — NEVER set in production.
+auth:
+  devAuth: true
+  # No OIDC issuer for local dev — devAuth handles identity.
+  oidc:
+    issuerUrl: ""
+    clientId: ""
+    clientSecretRef: ""
+
+# --- Images: side-loaded, so IfNotPresent avoids spurious pull attempts ---
+controller:
+  image:
+    pullPolicy: IfNotPresent
+
+router:
+  image:
+    pullPolicy: IfNotPresent
+
+webui:
+  image:
+    pullPolicy: IfNotPresent
+
+# --- Ingress: disabled for local (use kubectl port-forward) ---
+# To reach the web UI locally:
+#   kubectl port-forward -n agenttier svc/agenttier-webui 8080:80
+# To reach the router API:
+#   kubectl port-forward -n agenttier svc/agenttier-router 8081:8080
+optional:
+  ingress:
+    enabled: false
+
+  # Admission webhook requires cert-manager; keep off for local.
+  admissionWebhook:
+    enabled: false
+
+# --- IRSA / cloud provider annotations ---
+# No IRSA on local clusters; sandbox service accounts carry no IAM annotations.
+defaults:
+  claudeCode:
+    irsaRoleArn: ""
+  openclaw:
+    irsaRoleArn: ""
+  strandsBedrock:
+    irsaRoleArn: ""
+
+# --- Observability: minimal for local ---
+observability:
+  prometheus:
+    enabled: false
+    serviceMonitor: false
+  otelCollector:
+    enabled: false
+
+# --- gVisor: optional on local; skip installer ---
+security:
+  gvisor:
+    enabled: false
+    installer:
+      enabled: false

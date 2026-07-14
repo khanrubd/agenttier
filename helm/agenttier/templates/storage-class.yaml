@@ -27,6 +27,10 @@ metadata:
   name: {{ .Values.optional.storageClass.name }}
   labels:
     {{- include "agenttier.labels" . | nindent 4 }}
+  {{- if .Values.optional.storageClass.isDefaultClass }}
+  annotations:
+    storageclass.kubernetes.io/is-default-class: "true"
+  {{- end }}
 provisioner: {{ .Values.optional.storageClass.provisioner }}
 volumeBindingMode: Immediate
 {{- if .Values.optional.storageClass.allowVolumeExpansion }}

@@ -1,0 +1,13 @@
+# Docker build context ignore for the web-ui image.
+#
+# The image is built with `web-ui/` as the context (docker build ... web-ui/),
+# so Docker reads THIS file, not the repo-root .dockerignore. Without it, a
+# host-built node_modules (wrong platform / stale) would be copied by `COPY . .`
+# and shadow the fresh `npm ci` layer, breaking `npm run build`
+# (e.g. "Cannot find module '../lib/tsc.js'").
+node_modules
+dist
+.env
+*.log
+.DS_Store
+npm-debug.log*

@@ -1,0 +1,163 @@
+version: 0.2
+
+# CodeBuild buildspec for the private-mode on-cluster deploy phase
+# (agenttier-hardening, design.md#4.2 shape B — a dedicated deploy buildspec,
+# separate from ci/buildspec.yml's image-build phase).
+#
+# Used ONLY when endpoint_access_mode = "private": with the EKS API endpoint
+# private-only, `kubectl`/`helm` cannot reach the cluster from a laptop, so
+# deploy.sh delegates the on-cluster steps (kubeconfig + AWS Load Balancer
+# Controller + AgentTier Helm releases + smoke test) to a CodeBuild run
+# inside the VPC instead of running them locally. In public-restricted mode
+# deploy.sh still runs these steps locally — this buildspec is not invoked.
+#
+# Source: the same S3 source.zip deploy.sh already uploads for the
+# image-build CodeBuild run (ci/buildspec.yml) — the CodeBuild project's source
+# is shared; only the buildspec + environment-variable overrides differ per
+# run.
+#
+# Variable precedence (highest first):
+#   1. deploy.sh `aws codebuild start-build --environment-variables-override`
+#      (all variables below) — authoritative at deploy time. deploy.sh reads
+#      these from `terraform output` right after `terraform apply` so the
+#      values always match the just-applied infrastructure.
+#   2. The `env.variables` defaults below — last-resort YAML-validity
+#      fallbacks so a manually-triggered build fails loudly instead of
+#      silently deploying against the wrong cluster.
+#
+# Required overrides (all mandatory — see the empty-guard in pre_build):
+#   CLUSTER_NAME                       EKS cluster name (aws eks update-kubeconfig)
+#   AWS_DEFAULT_REGION                 Region the cluster lives in
+#   ECR_CONTROLLER_URL / ECR_ROUTER_URL / ECR_WEBUI_URL
+#   ECR_SANDBOX_URL / ECR_SANDBOX_CLAUDE_CODE_URL / ECR_SANDBOX_OPENCLAW_URL /
+#   ECR_SANDBOX_LANGGRAPH_URL / ECR_SANDBOX_RL_URL / ECR_SANDBOX_STRANDS_BEDROCK_URL
+#                                       Full ECR repo URLs (terraform outputs)
+#   IMAGE_TAG                          Tag pushed by the image-build CodeBuild run
+#   LBC_ROLE_ARN                       aws_load_balancer_controller_role_arn output
+#   VPC_ID                             vpc_id output
+#   LBC_CHART_VERSION                  from deploy.sh's AGENTTIER_LBC_CHART_VERSION env var (D-A11 — the old terraform var was removed)
+#   COGNITO_ISSUER / COGNITO_CLIENT_ID / COGNITO_ADMIN_GROUP
+#                                       Cognito OIDC outputs — NEVER devAuth (D8)
+#   AGENTTIER_HELM_RELEASE / AGENTTIER_NAMESPACE
+#                                       Helm release name + target namespace
+env:
+  variables:
+    AWS_DEFAULT_REGION: "us-east-1"
+    # Fallbacks only — deploy.sh sets all of these as start-build overrides.
+    # Literal values here in a build log mean the override was NOT applied
+    # (a bug in deploy.sh, not something to silently work around).
+    CLUSTER_NAME: ""
+    ECR_CONTROLLER_URL: ""
+    ECR_ROUTER_URL: ""
+    ECR_WEBUI_URL: ""
+    ECR_SANDBOX_URL: ""
+    ECR_SANDBOX_CLAUDE_CODE_URL: ""
+    ECR_SANDBOX_OPENCLAW_URL: ""
+    ECR_SANDBOX_LANGGRAPH_URL: ""
+    ECR_SANDBOX_RL_URL: ""
+    ECR_SANDBOX_STRANDS_BEDROCK_URL: ""
+    IMAGE_TAG: "sha-unknown"
+    LBC_ROLE_ARN: ""
+    VPC_ID: ""
+    LBC_CHART_VERSION: "1.8.1"
+    COGNITO_ISSUER: ""
+    COGNITO_CLIENT_ID: ""
+    COGNITO_ADMIN_GROUP: ""
+    AGENTTIER_HELM_RELEASE: "agenttier"
+    AGENTTIER_NAMESPACE: "agenttier"
+
+phases:
+  install:
+    commands:
+      # helm ships an install script; kubectl + aws-cli-v2 are already present
+      # on the aws/codebuild/standard:7.0 image used by codebuild.tf.
+      - echo "Installing helm..."
+      - curl -fsSL -o /tmp/get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+      - chmod +x /tmp/get_helm.sh
+      - /tmp/get_helm.sh
+      - helm version
+
+  pre_build:
+    commands:
+      # Fail loudly on any missing mandatory override rather than deploying
+      # against an empty/guessed value (mirrors ci/buildspec.yml's ECR_REPO_PREFIX
+      # guard and deploy.sh's terraform-output empty-guard, C5).
+      - |
+        for var in CLUSTER_NAME ECR_CONTROLLER_URL ECR_ROUTER_URL ECR_WEBUI_URL \
+                   ECR_SANDBOX_URL ECR_SANDBOX_CLAUDE_CODE_URL ECR_SANDBOX_OPENCLAW_URL \
+                   ECR_SANDBOX_LANGGRAPH_URL ECR_SANDBOX_RL_URL ECR_SANDBOX_STRANDS_BEDROCK_URL \
+                   LBC_ROLE_ARN VPC_ID COGNITO_ISSUER COGNITO_CLIENT_ID COGNITO_ADMIN_GROUP; do
+          eval "val=\"\${$var}\""
+          if [ -z "$val" ]; then
+            echo "ERROR: ${var} is empty — deploy.sh must pass it via --environment-variables-override. Refusing to deploy against a guessed/empty value." >&2
+            exit 1
+          fi
+        done
+      - echo "Configuring kubectl for cluster ${CLUSTER_NAME} in ${AWS_DEFAULT_REGION}..."
+      - aws eks update-kubeconfig --region "${AWS_DEFAULT_REGION}" --name "${CLUSTER_NAME}" --no-cli-pager
+      - kubectl get nodes --no-headers
+      - helm repo add eks-charts https://aws.github.io/eks-charts
+      - helm repo update
+
+  build:
+    commands:
+      # Step 1: AWS Load Balancer Controller — replaces the removed
+      # terraform helm_release (design.md#2.3/D-U3). Idempotent
+      # (upgrade --install), mirrors the old helm_release set{} blocks.
+      - echo "=== Installing / upgrading AWS Load Balancer Controller ==="
+      - |
+        helm upgrade aws-load-balancer-controller eks-charts/aws-load-balancer-controller \
+          --install \
+          --namespace kube-system \
+          --version "${LBC_CHART_VERSION}" \
+          --set "clusterName=${CLUSTER_NAME}" \
+          --set "region=${AWS_DEFAULT_REGION}" \
+          --set "vpcId=${VPC_ID}" \
+          --set "serviceAccount.create=true" \
+          --set "serviceAccount.name=aws-load-balancer-controller" \
+          --set "serviceAccount.annotations.eks\.amazonaws\.com/role-arn=${LBC_ROLE_ARN}" \
+          --wait \
+          --timeout 180s
+
+      # Step 2: AgentTier Helm release — wires Cognito OIDC auth, NEVER
+      # devAuth (D8, design.md#8). Mirrors deploy.sh's local Step 6/7 --set
+      # flags exactly so public-restricted and private deploys converge on
+      # the same chart configuration.
+      - echo "=== Installing / upgrading AgentTier Helm chart ==="
+      - |
+        helm upgrade "${AGENTTIER_HELM_RELEASE}" ./helm/agenttier/ \
+          --install \
+          --namespace "${AGENTTIER_NAMESPACE}" \
+          --create-namespace \
+          --set "controller.image.repository=${ECR_CONTROLLER_URL}" \
+          --set "controller.image.tag=${IMAGE_TAG}" \
+          --set "router.image.repository=${ECR_ROUTER_URL}" \
+          --set "router.image.tag=${IMAGE_TAG}" \
+          --set "webui.image.repository=${ECR_WEBUI_URL}" \
+          --set "webui.image.tag=${IMAGE_TAG}" \
+          --set "defaults.sandbox.image=${ECR_SANDBOX_URL}:${IMAGE_TAG}" \
+          --set "defaults.claudeCode.image=${ECR_SANDBOX_CLAUDE_CODE_URL}:${IMAGE_TAG}" \
+          --set "defaults.openclaw.image=${ECR_SANDBOX_OPENCLAW_URL}:${IMAGE_TAG}" \
+          --set "defaults.langgraph.image=${ECR_SANDBOX_LANGGRAPH_URL}:${IMAGE_TAG}" \
+          --set "defaults.rl.image=${ECR_SANDBOX_RL_URL}:${IMAGE_TAG}" \
+          --set "defaults.strandsBedrock.image=${ECR_SANDBOX_STRANDS_BEDROCK_URL}:${IMAGE_TAG}" \
+          --set "auth.devAuth=false" \
+          --set "auth.oidc.issuerUrl=${COGNITO_ISSUER}" \
+          --set "auth.oidc.clientId=${COGNITO_CLIENT_ID}" \
+          --set "auth.oidc.adminGroup=${COGNITO_ADMIN_GROUP}" \
+          --set "auth.oidc.groupClaim=cognito:groups" \
+          --set "optional.storageClass.enabled=true" \
+          --set "optional.storageClass.isDefaultClass=true" \
+          --wait \
+          --timeout 300s
+
+      # Step 3: Smoke test — runs from inside the VPC, so it reaches the
+      # private API and the in-cluster router directly (no SSM tunnel
+      # needed here; that's the human-ops path documented in
+      # docs/docs/port-forwarding.md).
+      - echo "=== Running smoke test ==="
+      - AGENTTIER_NAMESPACE="${AGENTTIER_NAMESPACE}" AGENTTIER_HELM_RELEASE="${AGENTTIER_HELM_RELEASE}" bash scripts/smoke-test.sh
+
+  post_build:
+    commands:
+      - echo "Private-mode on-cluster deploy finished for cluster ${CLUSTER_NAME} (release ${AGENTTIER_HELM_RELEASE}/${AGENTTIER_NAMESPACE})."

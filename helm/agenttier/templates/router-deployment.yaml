@@ -35,6 +35,9 @@ spec:
             {{- if .Values.auth.devAuth }}
             - --dev-auth
             {{- end }}
+            {{- with .Values.cors.allowedOrigins }}
+            - --cors-allowed-origins={{ join "," . }}
+            {{- end }}
             - --preview-domain={{ .Values.networking.previewDomain }}
             - --ingress-class-name={{ .Values.networking.portForwardIngressClass }}
             {{- with .Values.router.rateLimit }}

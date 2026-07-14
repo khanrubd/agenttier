@@ -11,7 +11,7 @@ Drive AgentTier from Python: lifecycle, exec, file transfer, port forwarding, an
 pip install agenttier
 ```
 
-The wheel ships a `py.typed` marker so mypy and pyright pick up types automatically. Python 3.9+ is required.
+The wheel ships a `py.typed` marker so mypy and pyright pick up types automatically. Python 3.10+ is required.
 
 ## 2. Connect
 
@@ -27,17 +27,19 @@ Then in Python:
 from agenttier import AgentTierClient
 
 client = AgentTierClient(api_url="http://localhost:8081")
-print(client.health())  # {"status": "ok", "version": "0.5.0"}
+print(client.current_user())  # CurrentUser(sub=..., email=..., is_admin=...)
 ```
 
-The client auto-detects credentials in this order: explicit `api_key=` / `bearer_token=` / `kubeconfig=` arguments → `AGENTTIER_API_KEY` env var → `AGENTTIER_BEARER_TOKEN` env var → in-cluster service account → kubeconfig. For a port-forwarded dev cluster with the auth bypass on, no credentials are needed.
+The client auto-detects credentials in this order: `AGENTTIER_API_KEY` env var → `AGENTTIER_TOKEN` env var (bearer / OIDC JWT) → in-cluster ServiceAccount token → unauthenticated (accepted only when the Router runs in dev mode). For a port-forwarded dev cluster with the auth bypass on, no credentials are needed.
 
-For production, prefer:
+For production, pass an explicit provider instead of relying on env vars:
 
 ```python
+from agenttier import AgentTierClient, APIKeyAuth
+
 client = AgentTierClient(
     api_url="https://agenttier.example.com",
-    api_key="ak_xxx",
+    auth=APIKeyAuth("ak_xxx"),
     timeout=30,
 )
 ```
@@ -52,17 +54,13 @@ with AgentTierClient(api_url="http://localhost:8081") as client:
 ## 3. Create a sandbox
 
 ```python
-sandbox = client.create_sandbox(
-    name="sdk-tutorial",
-    template="general-coding",
-    namespace="default",
-)
-print(sandbox.status)  # "Creating"
+sandbox = client.create_sandbox(template="general-coding", name="sdk-tutorial", namespace="default")
+print(sandbox.phase)  # SandboxPhase.CREATING
 sandbox.wait_until_running(timeout=120)
-print(sandbox.status)  # "Running"
+print(sandbox.phase)  # SandboxPhase.RUNNING
 ```
 
-`create_sandbox` accepts an optional `overrides` dict matching `Sandbox.spec` for ad-hoc customization. For long-term differences, edit the template instead.
+`create_sandbox` also takes optional `timeout=`/`idle_timeout=` (Go duration strings, e.g. `"8h"`/`"30m"`) and `storage_size=` (e.g. `"10Gi"`). For anything beyond those, edit the template instead — there is no free-form spec-override kwarg.
 
 ## 4. Run commands
 
@@ -72,21 +70,19 @@ print(result.stdout)     # "4\n"
 print(result.exit_code)  # 0
 ```
 
-Exec returns a typed `ExecResult` with `stdout`, `stderr`, `exit_code`, and `duration_ms`. It is single-shot (request → response). For interactive PTY use, open the WebSocket terminal from the Web UI or the CLI.
-
-Pass a list to skip the shell:
+`exec` returns a typed `CommandResult` with `stdout`, `stderr`, `exit_code`. It takes a single shell command string (run via `sh -c`), not an argv list, and is single-shot (request → response). For interactive PTY use, open the terminal from the Web UI.
 
 ```python
-result = sandbox.exec(["bash", "-lc", "echo $USER"])
+result = sandbox.exec("bash -lc 'echo $USER'")
 ```
 
-Set `timeout=` to bound long-running commands; AgentTier sends SIGTERM on timeout, then SIGKILL after a grace period.
+Set `timeout=` (seconds, default 30) to bound long-running commands.
 
 ## 5. File transfer
 
 ```python
-# upload from local path
-sandbox.files.upload("./script.py", "/workspace/script.py")
+# upload from local path (path is the remote destination, source is local)
+sandbox.files.upload("/workspace/script.py", "./script.py")
 
 # write content directly
 sandbox.files.write("/workspace/data.txt", b"hello from python")
@@ -103,18 +99,18 @@ for entry in sandbox.files.list("/workspace"):
 sandbox.files.download("/workspace/data.txt", "./data-from-sandbox.txt")
 ```
 
-Each transfer goes through the Router and obeys the 32 MiB per-call cap. For larger payloads, split into chunks or `tar` first.
+Each transfer goes through the Router and obeys the 32 MiB per-call cap (`FilesAPI.MAX_BYTES`). For larger payloads, use `sandbox.files.archive(...)` to pull a whole directory as a `.zip`, or `tar` first and upload the archive.
 
 ## 6. Lifecycle
 
 ```python
 sandbox.stop()         # Pod gone, PVC kept
 sandbox.resume()       # back to Running on the same PVC
-sandbox.refresh()      # pull latest status from API
-sandbox.delete()       # permanent
+sandbox.status()       # fetch the latest SandboxSummary from the API
+sandbox.terminate()    # permanent; `.delete()` is an alias for the same call
 ```
 
-Each call returns when the API call completes; status changes are eventually consistent, so use `wait_until_running()` / `wait_until_stopped()` if you need a deterministic state.
+Each call returns when the API call completes; status changes are eventually consistent, so use `wait_until_running(timeout=...)` if you need a deterministic state (there is no `wait_until_stopped()`).
 
 ## 7. Port forwarding
 
@@ -122,38 +118,38 @@ Open a port from the sandbox to your local laptop or to other tooling that can r
 
 ```python
 # inside the sandbox, start a server first
-sandbox.exec(["bash", "-c", "nohup python3 -m http.server 8000 > /tmp/srv.log 2>&1 &"])
+sandbox.exec("nohup python3 -m http.server 8000 > /tmp/srv.log 2>&1 &")
 
 # now forward it
-forward = sandbox.port_forwards.create(name="web", port=8000)
-print(forward.preview_url)
+forward = sandbox.forward_port(8000)
+print(forward.preview_url or forward.internal_url)
 # http://router.example.com/api/v1/sandboxes/sdk-tutorial/preview/8000/
 ```
 
-The preview URL is auth-gated by the same Router middleware as the rest of the API. List and delete forwards:
+The preview URL is auth-gated by the same Router middleware as the rest of the API. List and remove forwards (by port number — `ForwardedPort` has no name field):
 
 ```python
-for fwd in sandbox.port_forwards.list():
-    print(fwd.name, fwd.port, fwd.preview_url)
+for fwd in sandbox.list_ports():
+    print(fwd.port, fwd.protocol, fwd.preview_url)
 
-sandbox.port_forwards.delete("web")
+sandbox.remove_port(8000)
 ```
 
-If the Helm chart is configured with `networking.previewDomain`, the SDK also returns `forward.ingress_url` for direct DNS access.
+`forward.preview_url` is only populated when the Helm chart is configured with `networking.previewDomain`; otherwise it's `None` and only `internal_url` (the in-Router proxy path) is set.
 
 ## 8. Find existing sandboxes
 
 ```python
 # list everything you can see
 for s in client.list_sandboxes():
-    print(s.name, s.status, s.template)
+    print(s.name, s.status, s.template_ref)
 
 # get a specific one
 existing = client.get_sandbox("sdk-tutorial")
 existing.exec("ls /workspace")
 ```
 
-`list_sandboxes()` accepts `namespace=`, `status=`, and `template=` filters.
+`list_sandboxes()` accepts `namespace=` and `status=` filters — there is no `template=` filter.
 
 ## 9. Async client
 
@@ -165,19 +161,16 @@ from agenttier import AsyncAgentTierClient
 
 async def main():
     async with AsyncAgentTierClient(api_url="http://localhost:8081") as client:
-        sandbox = await client.create_sandbox(
-            name="async-demo",
-            template="general-coding",
-        )
+        sandbox = await client.create_sandbox(template="general-coding", name="async-demo")
         await sandbox.wait_until_running()
         result = await sandbox.exec("uname -a")
         print(result.stdout)
-        await sandbox.delete()
+        await sandbox.terminate()
 
 asyncio.run(main())
 ```
 
-The async sandbox handle exposes the same namespaces — `sandbox.files`, `sandbox.port_forwards`, `sandbox.agent` — every method is awaitable.
+The async sandbox handle exposes the same namespaces — `sandbox.files`, `sandbox.agent` — every method is awaitable. Port forwarding is the same `forward_port`/`list_ports`/`remove_port` trio, also awaitable.
 
 ## 10. Error handling
 
@@ -189,7 +182,7 @@ from agenttier import (
     AuthenticationError,
     NotFoundError,
     PolicyViolationError,
-    TimeoutError as AgentTierTimeout,
+    APIError,
 )
 
 try:
@@ -198,27 +191,28 @@ except NotFoundError:
     print("not there")
 
 try:
-    s = client.create_sandbox(name="too-much", template="general-coding",
-                              overrides={"resources": {"cpu": "999"}})
+    s = client.create_sandbox(template="general-coding", name="too-much")
 except PolicyViolationError as e:
     # governance rejected the request
     print(e.violations)
+except APIError as e:
+    print(f"HTTP {e.status_code}: {e}")
 ```
 
-Every error includes the underlying HTTP status code and the structured body the Router returned, so you can render useful messages.
+`APIError` carries `.status_code` and `.body` (the structured error the Router returned) for anything not covered by a more specific exception.
 
 ## 11. Clean up
 
 ```python
-sandbox.delete()
+sandbox.terminate()
 client.close()  # if not using `with`
 ```
 
 ## What you just learned
 
 - Sync (`AgentTierClient`) and async (`AsyncAgentTierClient`) clients with the same API.
-- `Sandbox` handles expose `exec`, `files`, `port_forwards`, lifecycle, and `agent` (next tutorial).
-- Auth is auto-detected; explicit args override env override kubeconfig.
+- `Sandbox` handles expose `exec`, `files`, port forwarding (`forward_port`/`list_ports`/`remove_port`), lifecycle, and `agent` (next tutorial).
+- Auth is auto-detected from env vars, or set explicitly via an `AuthProvider`.
 - Errors are typed and structured.
 
 ## What to read next

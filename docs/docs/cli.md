@@ -1,9 +1,9 @@
 # CLI
 
-The `agenttier` CLI manages sandboxes and templates from the terminal. Two distributions, identical command surface:
+The `agenttier` CLI manages sandboxes and templates from the terminal. Two distributions with **different command surfaces**:
 
-- **`pip install agenttier`** — pure-Python CLI installed alongside the SDK. Works on any platform with Python 3.10+. Recommended for Python-first users.
-- **GitHub Releases** — native Go binaries for Linux, macOS, and Windows on amd64 and arm64. No Python runtime required.
+- **`pip install agenttier`** — pure-Python CLI installed alongside the SDK. Works on any platform with Python 3.10+. Full surface: sandbox/template CRUD, files, ports, agent mode. Recommended for Python-first users.
+- **GitHub Releases** — native Go binaries for Linux, macOS, and Windows on amd64 and arm64. No Python runtime required. Minimal surface: `configure`, `invoke`, `version`, `help` only — no sandbox/template CRUD.
 
 Sources: [`cmd/cli/`](https://github.com/agenttier/agenttier/tree/main/cmd/cli) (Go), [`python-sdk/src/agenttier/cli.py`](https://github.com/agenttier/agenttier/tree/main/python-sdk/src/agenttier/cli.py) (Python).
 Full command reference: [CLI command reference](cli-reference.md).
@@ -26,7 +26,7 @@ Pick the binary for your OS/arch and drop it on your `PATH`.
 ### macOS / Linux
 
 ```bash
-VERSION=v0.5.0
+VERSION=v0.8.1  # replace with the latest release tag
 OS=$(uname -s | tr A-Z a-z)
 ARCH=$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/')
 curl -L -o agenttier \
@@ -48,7 +48,7 @@ Download `agenttier-vX.Y.Z-windows-amd64.exe` from the release page and place
 it somewhere on your `PATH`. PowerShell one-liner:
 
 ```powershell
-$version = "v0.5.0"
+$version = "v0.8.1"  # replace with the latest release tag
 Invoke-WebRequest `
   -Uri "https://github.com/agenttier/agenttier/releases/download/$version/agenttier-$version-windows-amd64.exe" `
   -OutFile "$env:USERPROFILE\bin\agenttier.exe"
@@ -63,14 +63,14 @@ A tap is planned; in the meantime use the curl flow above.
 The CLI talks to the Router's REST API. Configure the endpoint and credentials
 with environment variables (same as the SDK):
 
-| Variable | Effect |
-| --- | --- |
-| `AGENTTIER_API_URL` | Router base URL (`https://agenttier.company.com`). |
-| `AGENTTIER_API_KEY` | Preferred auth; sent as `X-API-Key`. |
-| `AGENTTIER_TOKEN` | OIDC bearer token; used if no API key. |
-| `KUBECONFIG` | Falls back to in-cluster ServiceAccount token when on a kubeconfig'd node. |
+| Variable | Effect | CLI |
+| --- | --- | --- |
+| `AGENTTIER_API_URL` | Router base URL (`https://agenttier.company.com`). | both |
+| `AGENTTIER_API_KEY` | Preferred auth; sent as `X-API-Key`. | both |
+| `AGENTTIER_TOKEN` | OIDC bearer token; used if no API key. | Python only |
+| `AGENTTIER_DEPRECATION_WARNINGS` | Set to `off` to silence one-time deprecation notices. | both |
 
-Example:
+Example (Python CLI):
 
 ```bash
 export AGENTTIER_API_URL=https://agenttier.company.com
@@ -85,10 +85,12 @@ agenttier --help
 agenttier --version
 ```
 
-The CLI is still lean in v0.5.0 — the core sandbox and template commands are
-there; port forwarding and governance editing will follow the server-side
-maturity. For features the CLI doesn't cover yet, fall back to `kubectl` on
-CRDs directly (sandboxes, templates) or the Python SDK.
+The Python CLI covers the full sandbox and template command surface (list, get,
+create, stop, resume, delete, clone, exec, wait, files, ports; template list/get).
+The Go binary covers only `configure`, `invoke`, `version`, and `help` — for
+sandbox/template CRUD with the Go binary, fall back to `kubectl` on the CRDs
+directly (`sandboxes`, `templates`, `clustersandboxtemplates`) or use the Python
+SDK/CLI.
 
 ## Agent mode (Phase 10)
 

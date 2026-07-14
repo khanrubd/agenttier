@@ -30,7 +30,12 @@ classifiers = [
 ]
 dependencies = [
     "httpx>=0.27.0,<1.0",
-    "pydantic>=2.0.0,<3.0",
+    # pydantic 2.7+ is required: earlier 2.x releases have pydantic-core
+    # version ranges that can produce resolver failures when pydantic-core
+    # is already pinned by another package in the environment. 2.7.0 was
+    # released 2024-04-23 and all Python 3.10+ platforms ship a compatible
+    # pydantic-core wheel.
+    "pydantic>=2.7.0,<3.0",
 ]
 
 [project.optional-dependencies]

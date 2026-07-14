@@ -36,6 +36,10 @@ coverage.html
 # Local working todo (not shipped)
 /todo.md
 
+# Claude Code repo guide (local working file, not shipped to upstream)
+/CLAUDE.md
+.claude/
+
 # Node.js (web-ui)
 web-ui/node_modules/
 web-ui/dist/
@@ -53,6 +57,9 @@ python-sdk/.pytest_cache/
 python-sdk/.mypy_cache/
 python-sdk/.ruff_cache/
 
+# Python (docs site build — mkdocs/mkdocs-material, isolated per execution-hygiene)
+docs/.venv/
+
 # Environment
 .env
 .env.local
@@ -62,13 +69,20 @@ python-sdk/.ruff_cache/
 kubeconfig
 *.kubeconfig
 
+# Config env (user-local; copy from config/config.env.example)
+config/config.env
+
 # Terraform
+/.terraform-bin/
+/.tflint-bin/
 terraform/**/.terraform/
 terraform/**/*.tfstate
 terraform/**/*.tfstate.backup
 terraform/**/*.tfvars
 !terraform/**/*.tfvars.example
 terraform/**/tfplan
+terraform/**/backend.hcl
+!terraform/**/backend.hcl.example
 
 # Helm
 helm/agenttier/charts/

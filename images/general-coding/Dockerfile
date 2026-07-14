@@ -12,9 +12,20 @@
 # Bakes a small HTTP server into the sandbox so the Router can proxy
 # requests directly instead of going through SPDY exec. See
 # pkg/sandboxruntime for design rationale.
-FROM public.ecr.aws/docker/library/golang:1.25 AS runtime-build
+# Digest-pinned for supply-chain security (M5).
+FROM public.ecr.aws/docker/library/golang:1.25.11-alpine@sha256:523c3effe300580ed375e43f43b1c9b091b68e935a7c3a92bfcc4e7ed55b18c2 AS runtime-build
+
+RUN apk add --no-cache git ca-certificates
 
 ARG TARGETARCH
+# GOPROXY=direct bypasses proxy.golang.org on networks where it's blocked
+# (corporate VPN / captive networks). Override at build time with
+# --build-arg GOPROXY=https://proxy.golang.org,direct on a normal network.
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
+# GOTOOLCHAIN=local: never auto-download a toolchain; build with the image's
+# Go (matches go.mod toolchain go1.25.11) so builds stay hermetic/offline (M5).
+ENV GOTOOLCHAIN=local
 
 WORKDIR /src
 COPY go.mod go.sum ./
@@ -34,8 +45,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags='-s -w' \
     -o /out/agenttier-sandbox-runtime ./cmd/sandbox-runtime
 
-# ---- Stage 2: the actual sandbox image -------------------------------------
-FROM public.ecr.aws/docker/library/ubuntu:22.04
+# ---- Stage 2: the actual sandbox image — digest-pinned for supply-chain security (M5).
+FROM public.ecr.aws/docker/library/ubuntu:22.04@sha256:4f838adc7181d9039ac795a7d0aba05a9bd9ecd480d294483169c5def983b64d
 
 # Declared by buildx when --platform is set. We re-declare as an ARG so the
 # value is visible inside the layer that downloads arch-specific tarballs.
@@ -84,7 +95,7 @@ RUN case "${TARGETARCH}" in \
       arm64) GOARCH=arm64 ;; \
       *) echo "unsupported arch: ${TARGETARCH}" >&2; exit 1 ;; \
     esac \
-    && curl -fsSL "https://go.dev/dl/go1.25.10.linux-${GOARCH}.tar.gz" | tar -C /usr/local -xzf -
+    && curl -fsSL "https://go.dev/dl/go1.25.11.linux-${GOARCH}.tar.gz" | tar -C /usr/local -xzf -
 ENV PATH="/usr/local/go/bin:${PATH}"
 
 # In-pod runtime binary + entrypoint that backgrounds it.

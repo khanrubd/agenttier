@@ -53,10 +53,27 @@ variable "single_nat_gateway" {
   default     = true
 }
 
+variable "endpoint_access_mode" {
+  description = "EKS API endpoint exposure. 'public-restricted' (default): public endpoint on with a narrow CIDR allowlist + private access on — laptop-friendly. 'private': public endpoint OFF, private access ON — requires CodeBuild-in-VPC for CI and SSM port-forward for humans."
+  type        = string
+  default     = "public-restricted"
+
+  validation {
+    condition     = contains(["public-restricted", "private"], var.endpoint_access_mode)
+    error_message = "endpoint_access_mode must be 'public-restricted' or 'private'."
+  }
+}
+
+# Fail closed: public-restricted must NOT allow the whole internet.
 variable "cluster_endpoint_public_access_cidrs" {
-  description = "CIDR blocks allowed to reach the public Kubernetes API endpoint. Restrict this for production clusters."
+  description = "CIDR blocks allowed to reach the public Kubernetes API endpoint in public-restricted mode. Must NOT include 0.0.0.0/0 — supply a narrow allowlist, or use endpoint_access_mode=private."
   type        = list(string)
-  default     = ["0.0.0.0/0"]
+  default     = [] # was ["0.0.0.0/0"] — BREAKING default change; user must supply their CIDR
+
+  validation {
+    condition     = !contains(var.cluster_endpoint_public_access_cidrs, "0.0.0.0/0")
+    error_message = "0.0.0.0/0 is not allowed. Supply a narrow CIDR allowlist, or use endpoint_access_mode=private."
+  }
 }
 
 # =============================================================================
@@ -123,47 +140,19 @@ variable "gvisor_node_taint" {
 
 # =============================================================================
 # Add-ons
+#
+# The AWS Load Balancer Controller is installed by deploy.sh (Shape A /
+# D-U3/D-A1 — terraform apply is pure-AWS; on-cluster helm installs happen
+# outside terraform). Its install-toggle and chart-version live as deploy.sh
+# env vars (AGENTTIER_INSTALL_LBC, AGENTTIER_LBC_CHART_VERSION — see
+# config/config.env.example), not as terraform variables: the two
+# corresponding terraform vars this module used to declare had no remaining
+# reader anywhere in the module (a tflint terraform_unused_declarations
+# finding) and have been removed. The IRSA role the controller's
+# ServiceAccount assumes is still owned by this module (module.lb_controller_
+# irsa in irsa.tf, aws_load_balancer_controller_role_arn output) — only the
+# Helm install itself moved to deploy.sh.
 # =============================================================================
-
-variable "install_aws_load_balancer_controller" {
-  description = "Install the AWS Load Balancer Controller via Helm (required for ALB-backed Ingress)."
-  type        = bool
-  default     = true
-}
-
-variable "aws_load_balancer_controller_chart_version" {
-  description = "Chart version for the aws-load-balancer-controller Helm release."
-  type        = string
-  default     = "1.8.1"
-}
-
-# =============================================================================
-# AgentTier Helm release
-# =============================================================================
-
-variable "install_agenttier" {
-  description = "Install the AgentTier Helm chart from the published chart repo."
-  type        = bool
-  default     = true
-}
-
-variable "agenttier_chart_version" {
-  description = "AgentTier chart version to install. Empty string installs the latest published version."
-  type        = string
-  default     = ""
-}
-
-variable "agenttier_oidc_auth" {
-  description = "Wire the AgentTier release's OIDC auth to the Cognito user pool created by this module. Set false to manage auth yourself (e.g. devAuth) via agenttier_extra_values."
-  type        = bool
-  default     = true
-}
-
-variable "agenttier_extra_values" {
-  description = "Additional Helm values (raw YAML strings) merged into the AgentTier release. Later entries override earlier ones."
-  type        = list(string)
-  default     = []
-}
 
 # =============================================================================
 # Cognito (OIDC identity provider)
@@ -198,4 +187,51 @@ variable "test_user_password" {
   type        = string
   default     = ""
   sensitive   = true
+}
+
+# =============================================================================
+# ECR
+# =============================================================================
+
+variable "ecr_repo_prefix" {
+  description = "Name prefix for ECR repositories. Defaults to cluster_name. Override to share a registry namespace across clusters."
+  type        = string
+  default     = ""
+}
+
+# =============================================================================
+# CodeBuild (opt-in — off by default per decision D6)
+# =============================================================================
+
+variable "enable_codebuild" {
+  description = "Enable the optional CodeBuild path for building and pushing images. Off by default — the primary build path is local Docker buildx pushed to ECR. Enable only when a local Docker daemon is unavailable."
+  type        = bool
+  default     = false
+}
+
+variable "codebuild_timeout_minutes" {
+  description = "Maximum wall-clock minutes for a single CodeBuild run. The deploy.sh CodeBuild polling loop respects this limit and exits non-zero if exceeded (fixes audit M6)."
+  type        = number
+  default     = 30
+
+  validation {
+    condition     = var.codebuild_timeout_minutes >= 5 && var.codebuild_timeout_minutes <= 480
+    error_message = "codebuild_timeout_minutes must be between 5 and 480."
+  }
+}
+
+# =============================================================================
+# EKS hardening (control-plane logging, GuardDuty)
+# =============================================================================
+
+variable "eks_log_retention_days" {
+  description = "CloudWatch Logs retention (days) for the EKS control-plane log group (/aws/eks/<cluster_name>/cluster). Bounds audit-log cost."
+  type        = number
+  default     = 14
+}
+
+variable "enable_guardduty_eks_protection" {
+  description = "Enable GuardDuty EKS Protection (audit-log + runtime monitoring datasources). Off by default — GuardDuty is frequently managed at the AWS Organizations level, and enabling a second detector here can conflict with an org-wide detector."
+  type        = bool
+  default     = false
 }

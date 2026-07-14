@@ -76,6 +76,7 @@ func main() {
 		namespace               string
 		sandboxNamespace        string
 		enableWebhook           bool
+		webhookFailurePolicy    string
 		manageCRDs              bool
 		backupSnapshots         bool
 		backupInterval          time.Duration
@@ -109,6 +110,9 @@ func main() {
 		"Namespace where Sandboxes (and warm pool Pods) live. Defaults to SANDBOX_NAMESPACE env var, then \"default\".")
 	flag.BoolVar(&enableWebhook, "enable-webhook", false,
 		"Serve the Sandbox validating/mutating admission webhook. Requires a serving certificate mounted at the webhook server cert dir (provided by cert-manager via the Helm chart).")
+	flag.StringVar(&webhookFailurePolicy, "webhook-failure-policy", "Fail",
+		"failurePolicy of the MutatingWebhookConfiguration (Fail or Ignore). Must be Fail in production. "+
+			"An Ignore policy allows kubectl to bypass admission governance when the webhook is unavailable (M3 audit finding).")
 	flag.BoolVar(&manageCRDs, "manage-crds", true,
 		"Apply the controller's bundled CRDs on startup (create-or-update). Keeps CRDs in lockstep with the running controller version, since Helm only installs CRDs on first install and never upgrades them. Set false if you manage CRDs out-of-band (e.g. GitOps/ArgoCD).")
 	flag.BoolVar(&backupSnapshots, "backup-snapshots", false,
@@ -250,6 +254,20 @@ func main() {
 	// requires a serving certificate (mounted by cert-manager via the Helm
 	// chart); installs without cert infra leave it off and rely on the
 	// Router-side enforcement.
+	//
+	// Governance-bypass risk check (M3): when the webhook's failurePolicy is
+	// not "Fail", a controller or node restart can leave the cluster in a
+	// window where direct kubectl writes bypass admission governance entirely.
+	// Operators on flaky control planes who set Ignore accept this trade-off
+	// explicitly — log an ERROR so it's always visible in structured logs and
+	// cannot go unnoticed.
+	if enableWebhook && webhookFailurePolicy != "Fail" {
+		bootLogger.Error("admission webhook failurePolicy is not Fail",
+			"failurePolicy", webhookFailurePolicy,
+			"risk", "governance bypass: when the webhook is unreachable, "+
+				"Sandbox writes are admitted without governance validation. "+
+				"Set --webhook-failure-policy=Fail (the default) for production installs.")
+	}
 	if enableWebhook {
 		decoder := admission.NewDecoder(mgr.GetScheme())
 		store := governance.NewConfigMapStore(mgr.GetClient())

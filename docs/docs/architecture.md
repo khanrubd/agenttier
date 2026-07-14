@@ -137,11 +137,15 @@ is the Kubernetes Event TTL (typically ~1 hour).
 ## Security model
 
 - **Identity** — OIDC (multi-user, multi-group) + optional API keys. Dev mode with no OIDC grants anonymous admin for local use.
-- **Authorization** — non-admin users see only sandboxes they own (or are shared with — sharing lands in 0.2.x). Admins see everything. Governance-sensitive endpoints (cluster policy edit, namespace policy edit/delete) are admin-gated.
+- **Authorization** — non-admin users see only sandboxes they own (or are shared with). Admins see everything. Governance-sensitive endpoints (cluster policy edit, namespace policy edit/delete) are admin-gated.
 - **Pod isolation** — per-sandbox ServiceAccount with zero cluster permissions, non-root user, read-only root filesystem, drop all capabilities, `seccomp=RuntimeDefault`, optional gVisor RuntimeClass.
 - **Network isolation** — NetworkPolicy deny-all egress by default; DNS always allowed; opt-in egress rules per template.
 - **Credentials** — not baked into images; injected per session at exec open time.
 - **Supply chain** — every released image is cosign-signed and carries SPDX + CycloneDX SBOMs.
+- **Exec transport trust model** — HTTP-exec mode uses plain HTTP in-cluster, secured by NetworkPolicy. See [Security](security.md#in-cluster-exec-transport) for details and trade-offs.
+- **CRD management** — the controller manages its own CRDs on startup. See [Security](security.md#crd-source-of-truth) for the GitOps opt-out path.
+
+For the full security reference including trust boundaries, accepted risks, and hardening guidance, see [Security](security.md).
 
 ## Why these choices
 
@@ -150,4 +154,4 @@ A few deliberate trade-offs worth knowing:
 - **Single monorepo** for controller, router, web UI, SDK, CLI, and Helm chart. Easier to keep API versions in sync; one release tag ships everything.
 - **Kubernetes-native state** by default. MongoDB was removed; we use etcd + ConfigMaps + Events for everything so the platform has zero hard external deps. The optional SQL backend is purely for long-term retention, never for hot path.
 - **Stable networking.k8s.io/v1 Ingress** for port forwarding rather than Gateway API. Ingress is universal in K8s 1.27+; Gateway API requires separately-installed CRDs. Operators who prefer Gateway API can switch `ingressClassName` via Helm values.
-- **Flat eslint v9 config** and **golangci-lint v1** to keep the dev loop fast; major jumps are held for coordinated upgrades when the ecosystem stabilizes.
+- **Flat eslint v9 config** to keep the dev loop fast; major jumps are held for coordinated upgrades when the ecosystem stabilizes. Linting is **golangci-lint v2** — a hard floor, not a hold: v1's last release (v1.64.8) is built with Go 1.24 and cannot analyze this repo's Go 1.25 `go.mod`.
