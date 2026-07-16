@@ -85,8 +85,8 @@ func reqWithKey(s *Server, method, target, key, body string) *httptest.ResponseR
 
 // TestAdminGatedRoutes_RejectNonAdmin is the regression guard for the
 // privilege-escalation + cross-tenant-leak findings: a valid non-admin
-// identity must get 403 on template mutation, audit, analytics, and
-// warm-pool-config routes.
+// identity must get 403 on template mutation, audit, analytics,
+// warm-pool-config, and admin-listing routes (M1).
 func TestAdminGatedRoutes_RejectNonAdmin(t *testing.T) {
 	s, key := authzFixture(t)
 
@@ -100,6 +100,9 @@ func TestAdminGatedRoutes_RejectNonAdmin(t *testing.T) {
 		{"usage analytics", http.MethodGet, "/api/v1/analytics/usage", ""},
 		{"cost analytics", http.MethodGet, "/api/v1/analytics/costs", ""},
 		{"warmpool config", http.MethodPut, "/api/v1/warmpool/config", `{"template":"x","desiredCount":1}`},
+		// M1: admin aggregation routes must be admin-gated.
+		{"admin list sandboxes", http.MethodGet, "/api/v1/admin/sandboxes", ""},
+		{"admin list sharing", http.MethodGet, "/api/v1/admin/sharing", ""},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

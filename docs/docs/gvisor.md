@@ -64,6 +64,12 @@ The `gvisor` RuntimeClass needs `runsc` present on the node. Three options:
    containerd nodes only** (AL2 / AL2023 / Ubuntu with systemd); not for
    Bottlerocket or read-only-root images. It needs host mounts + privileged —
    review it before enabling.
+
+   > **Supply-chain note:** The installer image defaults to
+   > `gcr.io/gvisor/gvisor-installer:latest`, a floating tag. For production
+   > clusters, pin to a specific digest:
+   > `--set security.gvisor.installer.image=gcr.io/gvisor/gvisor-installer@sha256:<digest>`
+   > See [Security](security.md#gvisor-installer-image-supply-chain) for details.
 3. **Manual.** Follow the upstream gVisor containerd quick-start on each node.
 
 ## Verify

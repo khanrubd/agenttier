@@ -108,14 +108,11 @@ from agenttier import AgentTierClient
 client = AgentTierClient(...)
 
 # Take a clone of an existing sandbox
-clone = client.sandboxes.clone(
-    "my-sandbox",
-    name="my-sandbox-fork",
-)
-print(clone.snapshot)  # the VolumeSnapshot name
+sb = client.get_sandbox("my-sandbox")
+clone = sb.clone(name="my-sandbox-fork")
 
 # Wait for the clone to be Running
-client.sandboxes.wait_until_running(clone.name, timeout=180)
+clone.wait_until_running(timeout=180)
 ```
 
 CLI:

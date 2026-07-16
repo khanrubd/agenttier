@@ -25,10 +25,11 @@ harness:
 
 The runtime listens on port 9000 inside the pod; the Router dials it directly
 TCP-to-TCP, so the apiserver isn't in the request path and there's nothing to
-recycle. All four reference images (`general-coding`, `claude-code`,
-`minimal`, `langgraph`) ship with the runtime baked in. Custom images that
-don't have the runtime fall back to SPDY transparently — same behavior as
-before. To verify which transport a session used, look in Router logs for:
+recycle. All sandbox reference images (`general-coding`, `claude-code`,
+`openclaw`, `strands-bedrock`, `minimal`, `langgraph`, `rl`) ship with the
+runtime baked in. Custom images that don't have the runtime fall back to
+SPDY transparently — same behavior as before. To verify which transport a
+session used, look in Router logs for:
 
 - `terminal session via HTTP-PTY` — success on the new path.
 - `HTTP-PTY fallback to SPDY` with a structured `reason` field — fallback
@@ -86,6 +87,28 @@ endpoints. Check:
 2. Is the target port actually listening inside the sandbox?
    (`sandbox.commands.run("ss -tlnp")` from the SDK or via the terminal)
 3. Is there a NetworkPolicy blocking traffic from the Router namespace?
+
+## `./deploy.sh --target=local` hangs or fails on `go mod download`
+
+If a controller, router, or sandbox image build times out or fails with
+`lookup proxy.golang.org: ... i/o timeout` (or similar DNS/connect failures),
+`proxy.golang.org` is unreachable from your network — common on corporate
+VPNs and some captive networks. Set `GOPROXY=direct` before running
+`deploy.sh` to fetch Go modules straight from their VCS origins instead:
+
+```bash
+GOPROXY=direct ./deploy.sh --target=local
+```
+
+or add `GOPROXY=direct` to `config/config.env`. `deploy.sh` passes this
+through as `--build-arg GOPROXY=...` to every Go-based image build
+(`docker/Dockerfile.controller`, `docker/Dockerfile.router`, and all 6 sandbox
+Dockerfiles) on both the `--target=local` path and the `--target=eks`
+local-buildx path. The `--target=eks` CodeBuild path does not pass this
+build-arg (it runs in AWS where `proxy.golang.org` is reachable) and always
+uses each Dockerfile's default. The default (`https://proxy.golang.org,direct`)
+is unchanged if you don't set it, so this is opt-in and doesn't affect normal
+networks.
 
 ## Docker Hub rate limits on EKS nodes
 

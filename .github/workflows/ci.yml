@@ -23,7 +23,7 @@ jobs:
         with:
           version: v2.12.2
       - name: License header check
-        run: ./hack/check-license-headers.sh
+        run: ./scripts/check-license-headers.sh
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -32,6 +32,9 @@ jobs:
         run: |
           npm ci
           npm run lint
+      - name: Test Web UI
+        working-directory: web-ui
+        run: npm test
       - name: Helm lint
         run: helm lint helm/agenttier/
 
@@ -69,11 +72,11 @@ jobs:
           npm ci
           npm run build
       - name: Web UI bundle-size gate
-        run: ./hack/check-bundle-size.sh web-ui/dist
+        run: ./scripts/check-bundle-size.sh web-ui/dist
       - name: Build Docker images
         run: |
-          docker build -t agenttier-controller:ci -f Dockerfile.controller .
-          docker build -t agenttier-router:ci -f Dockerfile.router .
+          docker build -t agenttier-controller:ci -f docker/Dockerfile.controller .
+          docker build -t agenttier-router:ci -f docker/Dockerfile.router .
           docker build -t agenttier-webui:ci -f web-ui/Dockerfile web-ui/
 
   python-sdk:
@@ -226,7 +229,7 @@ jobs:
       # tracked as "CVE scanning for sandbox base images in CI."
       - name: Build controller image for scanning
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        run: docker build -t agenttier-controller:scan -f Dockerfile.controller .
+        run: docker build -t agenttier-controller:scan -f docker/Dockerfile.controller .
 
       - name: Trivy image scan (controller)
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

@@ -8,8 +8,18 @@
 # ci.yml set context: . and dockerfile: images/langgraph/Dockerfile.
 
 # ---- Stage 1: in-pod runtime binary ----------------------------------------
-FROM public.ecr.aws/docker/library/golang:1.25 AS runtime-build
+# Digest-pinned for supply-chain security (M5).
+FROM public.ecr.aws/docker/library/golang:1.25.11-alpine@sha256:523c3effe300580ed375e43f43b1c9b091b68e935a7c3a92bfcc4e7ed55b18c2 AS runtime-build
+RUN apk add --no-cache git ca-certificates
 ARG TARGETARCH
+# GOPROXY=direct bypasses proxy.golang.org on networks where it's blocked
+# (corporate VPN / captive networks). Override at build time with
+# --build-arg GOPROXY=https://proxy.golang.org,direct on a normal network.
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
+# GOTOOLCHAIN=local: never auto-download a toolchain; build with the image's
+# Go (matches go.mod toolchain go1.25.11) so builds stay hermetic/offline (M5).
+ENV GOTOOLCHAIN=local
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -20,10 +30,10 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags='-s -w' \
     -o /out/agenttier-sandbox-runtime ./cmd/sandbox-runtime
 
-# ---- Stage 2: langgraph sandbox --------------------------------------------
+# ---- Stage 2: langgraph sandbox — digest-pinned for supply-chain security (M5).
 # Multi-arch build (linux/amd64, linux/arm64) — TARGETARCH is a buildx ARG.
 # Base image is ECR Public to avoid Docker Hub rate-limiting from EKS nodes.
-FROM public.ecr.aws/docker/library/python:3.11-slim
+FROM public.ecr.aws/docker/library/python:3.11.13-slim@sha256:9bffe4353b925a1656688797ebc68f9c525e79b1d377a764d232182a519eeec4
 
 ARG TARGETARCH
 

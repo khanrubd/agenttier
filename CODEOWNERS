@@ -1,31 +1,30 @@
-# AgentLoft Code Owners
+# AgentTier Code Owners
 # These owners will be automatically requested for review on PRs
 
 # Default owners for everything
-* @agentloft/maintainers
+* @agenttier/maintainers
 
 # Controller
-/cmd/controller/ @agentloft/controller-team
-/pkg/controller/ @agentloft/controller-team
-/api/ @agentloft/controller-team
+/cmd/controller/ @agenttier/controller-team
+/pkg/controller/ @agenttier/controller-team
+/api/ @agenttier/controller-team
 
 # Router
-/cmd/router/ @agentloft/router-team
-/pkg/router/ @agentloft/router-team
+/cmd/router/ @agenttier/router-team
+/pkg/router/ @agenttier/router-team
 
 # Web UI
-/web-ui/ @agentloft/frontend-team
+/web-ui/ @agenttier/frontend-team
 
 # Helm Chart
-/helm/ @agentloft/platform-team
+/helm/ @agenttier/platform-team
 
 # Documentation
-/docs/ @agentloft/docs-team
+/docs/ @agenttier/docs-team
 
 # CI/CD
-/.github/ @agentloft/platform-team
+/.github/ @agenttier/platform-team
 
 # Security-sensitive
-/pkg/router/auth/ @agentloft/security-team
-/pkg/credentials/ @agentloft/security-team
-/pkg/governance/ @agentloft/security-team
+/pkg/router/auth/ @agenttier/security-team
+/pkg/governance/ @agenttier/security-team

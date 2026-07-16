@@ -83,13 +83,13 @@ func TestHandleInfrastructureFailure_AppErrorSkipsRestarts(t *testing.T) {
 			}},
 		},
 	}
-	// isInfrastructureFailure returns true for pod=nil and for any pod
-	// without explicit infra reasons (OOMKilled, Evicted,
-	// CrashLoopBackOff, NodeLost) — except when a container terminated
-	// with Reason=Completed, which is the user-success path.
-	// "Error" reason is treated as infra by the helper's default
-	// because the helper errs on the side of restart. To verify the
-	// app-error path we set Reason=Completed.
+	// isInfrastructureFailure returns true for pod=nil and for explicit
+	// infra reasons (OOMKilled, Evicted, CrashLoopBackOff, NodeLost), and
+	// defaults to true when no container/pod reason matches. It returns
+	// false only for container Reason=Completed (exit 0) and Reason=Error
+	// (non-zero exit of the user's command — an application failure, not
+	// infra). Here we set Reason=Completed to drive the app-error path
+	// through handleInfrastructureFailure and assert it goes terminal.
 	pod.Status.ContainerStatuses[0].State.Terminated.Reason = "Completed"
 
 	if _, err := r.handleInfrastructureFailure(context.Background(), sandbox, "Completed: exit 1", pod); err != nil {

@@ -34,7 +34,7 @@
 #  * The underlying git commits (only the tag refs beyond the latest N go).
 #
 # Usage:
-#   hack/release-retention.sh <current-tag> [--dry-run]
+#   scripts/release-retention.sh <current-tag> [--dry-run]
 #
 # Requirements: gh (authenticated), jq, yq v4+, git with gh-pages push access.
 # Idempotent — running twice is a no-op (already-deleted resources 404, which

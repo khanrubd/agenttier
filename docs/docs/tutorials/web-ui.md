@@ -59,7 +59,7 @@ Click **Open terminal** on the sandbox card. A new tab opens with a full PTY: ar
 Try a few things:
 
 ```bash
-echo $HOME           # /workspace
+echo $HOME           # /home/sandbox
 whoami               # sandbox
 df -h /workspace     # the PVC
 python3 -c 'print(2+2)'
@@ -103,7 +103,7 @@ You can:
 - Click a file to download it to your laptop.
 - Click **Upload file** and pick something locally — it's pushed via the REST API into the sandbox's PVC.
 
-A 32 MiB ceiling per file applies (configurable in the Router; mostly there to prevent OOM). For big trees, use the SDK's streaming `upload_dir` helper or `kubectl cp`.
+A 32 MiB ceiling per file applies (configurable in the Router; mostly there to prevent OOM). For big trees, `tar` the tree and upload the archive with the SDK's `sandbox.files.upload(...)`, or use `kubectl cp`.
 
 Verify in the terminal:
 

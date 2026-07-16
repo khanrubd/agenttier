@@ -4,7 +4,7 @@
 # rate limiter and surface the single-replica Router as a saturation point
 # (informs the HPA / multi-replica sizing).
 #
-#   BASE=http://localhost:8080 TOKEN=<api-key> N=1000 C=50 hack/load-test.sh
+#   BASE=http://localhost:8080 TOKEN=<api-key> N=1000 C=50 scripts/load-test.sh
 #
 # Reads:
 #   BASE   Router base URL (default http://localhost:8080 — port-forward the Router Service)

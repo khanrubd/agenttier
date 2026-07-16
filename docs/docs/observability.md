@@ -119,7 +119,7 @@ To register these with the Prometheus Operator (when installed), set `observabil
 
 ## Recommended dashboards
 
-A starter Grafana dashboard for the metrics above lives in [`hack/dashboards/agenttier.json`](https://github.com/agenttier/agenttier) (placeholder; not yet checked in). Until that lands, the per-template invoke duration histogram is usually the single most useful panel — it surfaces latency regressions before they hit error rates.
+A starter Grafana dashboard for the metrics above lives in [`scripts/dashboards/agenttier.json`](https://github.com/agenttier/agenttier) (placeholder; not yet checked in). Until that lands, the per-template invoke duration histogram is usually the single most useful panel — it surfaces latency regressions before they hit error rates.
 
 ## Troubleshooting
 

@@ -45,6 +45,7 @@ spec:
             {{- end }}
             {{- if .Values.optional.admissionWebhook.enabled }}
             - --enable-webhook
+            - --webhook-failure-policy={{ .Values.optional.admissionWebhook.failurePolicy | default "Fail" }}
             {{- end }}
           env:
             - name: POD_NAMESPACE

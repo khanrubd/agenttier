@@ -170,6 +170,95 @@ func TestIsExpired(t *testing.T) {
 	}
 }
 
+func TestTimeUntilIdle(t *testing.T) {
+	now := metav1.Now()
+	tenMinAgo := metav1.NewTime(time.Now().Add(-10 * time.Minute))
+
+	tests := []struct {
+		name         string
+		lastActivity *metav1.Time
+		timeout      time.Duration
+		wantZero     bool
+	}{
+		{"infinite timeout returns zero", &now, 0, true},
+		{"nil activity returns zero", nil, time.Hour, true},
+		{"remaining time positive", &now, time.Hour, false},
+		{"already idle returns zero", &tenMinAgo, 5 * time.Minute, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TimeUntilIdle(tt.lastActivity, tt.timeout)
+			if tt.wantZero && got != 0 {
+				t.Errorf("TimeUntilIdle() = %v, want 0", got)
+			}
+			if !tt.wantZero && got <= 0 {
+				t.Errorf("TimeUntilIdle() = %v, want positive remaining duration", got)
+			}
+		})
+	}
+}
+
+func TestTimeUntilExpiry(t *testing.T) {
+	now := metav1.Now()
+	tenHoursAgo := metav1.NewTime(time.Now().Add(-10 * time.Hour))
+
+	tests := []struct {
+		name      string
+		startedAt *metav1.Time
+		timeout   time.Duration
+		wantZero  bool
+	}{
+		{"infinite timeout returns zero", &now, 0, true},
+		{"nil startedAt returns zero", nil, time.Hour, true},
+		{"remaining time positive", &now, 24 * time.Hour, false},
+		{"already expired returns zero", &tenHoursAgo, 8 * time.Hour, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := TimeUntilExpiry(tt.startedAt, tt.timeout)
+			if tt.wantZero && got != 0 {
+				t.Errorf("TimeUntilExpiry() = %v, want 0", got)
+			}
+			if !tt.wantZero && got <= 0 {
+				t.Errorf("TimeUntilExpiry() = %v, want positive remaining duration", got)
+			}
+		})
+	}
+}
+
+func TestNextRequeueDelay_DefaultWhenNoTimeouts(t *testing.T) {
+	config := &TimeoutConfig{IdleTimeout: 0, MaxRuntime: 0}
+	got := NextRequeueDelay(config, nil, nil)
+	want := DefaultRequeueDelay + time.Second
+	if got != want {
+		t.Errorf("NextRequeueDelay() = %v, want %v (default + buffer) when no timeouts configured", got, want)
+	}
+}
+
+func TestNextRequeueDelay_UsesEarliestIdleTimeout(t *testing.T) {
+	now := metav1.Now()
+	config := &TimeoutConfig{IdleTimeout: 5 * time.Second, MaxRuntime: 0}
+
+	got := NextRequeueDelay(config, &now, nil)
+	// idleRemaining ~5s < DefaultRequeueDelay(30s), so minDelay should track
+	// the idle timeout, plus the 1s buffer — always < DefaultRequeueDelay.
+	if got >= DefaultRequeueDelay {
+		t.Errorf("NextRequeueDelay() = %v, want less than DefaultRequeueDelay when idle timeout is imminent", got)
+	}
+}
+
+func TestNextRequeueDelay_UsesEarliestMaxRuntime(t *testing.T) {
+	now := metav1.Now()
+	config := &TimeoutConfig{IdleTimeout: 0, MaxRuntime: 3 * time.Second}
+
+	got := NextRequeueDelay(config, nil, &now)
+	if got >= DefaultRequeueDelay {
+		t.Errorf("NextRequeueDelay() = %v, want less than DefaultRequeueDelay when max runtime is imminent", got)
+	}
+}
+
 func TestCalculateBackoffDelay(t *testing.T) {
 	tests := []struct {
 		restartCount int

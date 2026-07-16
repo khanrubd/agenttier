@@ -1,4 +1,4 @@
-# AgentLoft E2E Test Infrastructure
+# AgentTier E2E Test Infrastructure
 # Minimal EKS cluster + Cognito for end-to-end testing
 # COST: ~$5-8/day. Run `terraform destroy` when done.
 
@@ -21,7 +21,7 @@ data "aws_availability_zones" "available" {
 }
 
 locals {
-  cluster_name = "agentloft-e2e"
+  cluster_name = "agenttier-e2e"
   region       = "us-east-1"
 }
 
@@ -30,7 +30,7 @@ resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_hostnames = true
   enable_dns_support   = true
-  tags = { Name = "${local.cluster_name}-vpc" }
+  tags                 = { Name = "${local.cluster_name}-vpc" }
 }
 
 resource "aws_subnet" "private" {
@@ -39,7 +39,7 @@ resource "aws_subnet" "private" {
   cidr_block        = "10.0.${count.index + 1}.0/24"
   availability_zone = data.aws_availability_zones.available.names[count.index]
   tags = {
-    Name = "${local.cluster_name}-private-${count.index}"
+    Name                              = "${local.cluster_name}-private-${count.index}"
     "kubernetes.io/role/internal-elb" = "1"
   }
 }
@@ -51,7 +51,7 @@ resource "aws_subnet" "public" {
   availability_zone       = data.aws_availability_zones.available.names[count.index]
   map_public_ip_on_launch = true
   tags = {
-    Name = "${local.cluster_name}-public-${count.index}"
+    Name                     = "${local.cluster_name}-public-${count.index}"
     "kubernetes.io/role/elb" = "1"
   }
 }
@@ -109,8 +109,8 @@ resource "aws_iam_role" "eks_cluster" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
       Principal = { Service = "eks.amazonaws.com" }
     }]
   })
@@ -139,8 +139,8 @@ resource "aws_iam_role" "eks_nodes" {
   assume_role_policy = jsonencode({
     Version = "2012-10-17"
     Statement = [{
-      Action = "sts:AssumeRole"
-      Effect = "Allow"
+      Action    = "sts:AssumeRole"
+      Effect    = "Allow"
       Principal = { Service = "ec2.amazonaws.com" }
     }]
   })
@@ -192,7 +192,7 @@ resource "aws_eks_addon" "ebs_csi" {
 # --- IRSA: Sandbox Pod Role ---
 # This IAM role is assumed by sandbox pods via IRSA (IAM Roles for Service Accounts).
 # It gives sandboxes permission to call AWS services like Bedrock (AI models) and S3 (storage).
-# The trust policy restricts it to pods using the "agentloft-sandbox" ServiceAccount.
+# The trust policy restricts it to pods using the "agenttier-sandbox" ServiceAccount.
 
 data "aws_caller_identity" "current" {}
 
@@ -224,7 +224,7 @@ resource "aws_iam_role" "sandbox_pod_role" {
       Action = "sts:AssumeRoleWithWebIdentity"
       Condition = {
         StringLike = {
-          "${local.oidc_issuer_url}:sub" = "system:serviceaccount:*:agentloft-sandbox"
+          "${local.oidc_issuer_url}:sub" = "system:serviceaccount:*:agenttier-sandbox"
         }
         StringEquals = {
           "${local.oidc_issuer_url}:aud" = "sts.amazonaws.com"
@@ -254,7 +254,7 @@ resource "aws_iam_role_policy" "sandbox_bedrock" {
   })
 }
 
-# S3 — allows reading/writing files to S3 buckets (scoped to agentloft prefix)
+# S3 — allows reading/writing files to S3 buckets (scoped to agenttier prefix)
 resource "aws_iam_role_policy" "sandbox_s3" {
   name = "s3-access"
   role = aws_iam_role.sandbox_pod_role.id
@@ -270,8 +270,8 @@ resource "aws_iam_role_policy" "sandbox_s3" {
         "s3:DeleteObject"
       ]
       Resource = [
-        "arn:aws:s3:::agentloft-*",
-        "arn:aws:s3:::agentloft-*/*"
+        "arn:aws:s3:::agenttier-*",
+        "arn:aws:s3:::agenttier-*/*"
       ]
     }]
   })
@@ -298,12 +298,12 @@ resource "aws_iam_role_policy" "sandbox_logs" {
 
 # --- Cognito ---
 resource "aws_cognito_user_pool" "main" {
-  name = "${local.cluster_name}-users"
+  name                     = "${local.cluster_name}-users"
   auto_verified_attributes = ["email"]
 }
 
 resource "aws_cognito_user_pool_client" "main" {
-  name                                 = "agentloft"
+  name                                 = "agenttier"
   user_pool_id                         = aws_cognito_user_pool.main.id
   allowed_oauth_flows                  = ["code"]
   allowed_oauth_flows_user_pool_client = true
@@ -315,7 +315,7 @@ resource "aws_cognito_user_pool_client" "main" {
 }
 
 resource "aws_cognito_user_group" "admins" {
-  name         = "agentloft-admins"
+  name         = "agenttier-admins"
   user_pool_id = aws_cognito_user_pool.main.id
 }
 
@@ -327,5 +327,5 @@ output "cognito_issuer" { value = "https://cognito-idp.${local.region}.amazonaws
 output "cognito_client_id" { value = aws_cognito_user_pool_client.main.id }
 output "sandbox_pod_role_arn" {
   value       = aws_iam_role.sandbox_pod_role.arn
-  description = "IRSA role ARN to annotate the agentloft-sandbox ServiceAccount"
+  description = "IRSA role ARN to annotate the agenttier-sandbox ServiceAccount"
 }

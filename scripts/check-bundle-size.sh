@@ -7,11 +7,11 @@
 # Run after `npm run build`. CI invokes it in the build job; run it locally
 # the same way:
 #
-#   (cd web-ui && npm run build) && hack/check-bundle-size.sh
+#   (cd web-ui && npm run build) && scripts/check-bundle-size.sh
 #
 # Override the directory or limit via args / env:
-#   hack/check-bundle-size.sh web-ui/dist
-#   BUNDLE_LIMIT_KB=800 hack/check-bundle-size.sh
+#   scripts/check-bundle-size.sh web-ui/dist
+#   BUNDLE_LIMIT_KB=800 scripts/check-bundle-size.sh
 
 set -euo pipefail
 

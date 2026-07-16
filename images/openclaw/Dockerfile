@@ -5,10 +5,13 @@
 #
 # Why OpenClaw needs Node 22 (and we ship Node 22 here, vs Node 20 in
 # sandbox-claude-code): OpenClaw's runtime makes heavy use of features
-# introduced in Node 22.16 — older Node versions hit unpredictable
-# `SyntaxError`s in the Gateway boot path. Node 24 is the upstream
-# recommendation; we run on Node 22 to keep the Debian Bookworm package
-# story simple while still meeting the floor.
+# introduced in Node 22 — older Node versions hit unpredictable
+# `SyntaxError`s in the Gateway boot path. openclaw@2026.6.5 hard-requires
+# Node >= 22.19.0 (its `plugins install` engine check exits non-zero below
+# that), so we pin 22.23-bookworm — comfortably above the floor. Node 24 is
+# the upstream recommendation; we stay on Node 22 to keep the Debian Bookworm
+# package story simple. NOTE: keep this >= the openclaw npm engines floor when
+# bumping the pinned openclaw version.
 #
 # Why we bake a baseline OpenClaw config (vs running `openclaw onboard`
 # at runtime): the onboarding wizard is interactive and assumes an
@@ -30,13 +33,23 @@
 # Builds for linux/amd64 and linux/arm64 via buildx TARGETARCH.
 #
 # Build context: repository root (so the Dockerfile can pull in
-# cmd/sandbox-runtime). release.yml + ci.yml + buildspec.yml all set
+# cmd/sandbox-runtime). release.yml + ci.yml + ci/buildspec.yml all set
 # context: . and dockerfile: images/openclaw/Dockerfile for this reason.
 
 # ---- Stage 1: in-pod runtime binary ----------------------------------------
 # See pkg/sandboxruntime for design rationale.
-FROM public.ecr.aws/docker/library/golang:1.25 AS runtime-build
+# Digest-pinned for supply-chain security (M5).
+FROM public.ecr.aws/docker/library/golang:1.25.11-alpine@sha256:523c3effe300580ed375e43f43b1c9b091b68e935a7c3a92bfcc4e7ed55b18c2 AS runtime-build
+RUN apk add --no-cache git ca-certificates
 ARG TARGETARCH
+# GOPROXY=direct bypasses proxy.golang.org on networks where it's blocked
+# (corporate VPN / captive networks). Override at build time with
+# --build-arg GOPROXY=https://proxy.golang.org,direct on a normal network.
+ARG GOPROXY=https://proxy.golang.org,direct
+ENV GOPROXY=${GOPROXY}
+# GOTOOLCHAIN=local: never auto-download a toolchain; build with the image's
+# Go (matches go.mod toolchain go1.25.11) so builds stay hermetic/offline (M5).
+ENV GOTOOLCHAIN=local
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
@@ -47,8 +60,8 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} \
     go build -trimpath -ldflags='-s -w' \
     -o /out/agenttier-sandbox-runtime ./cmd/sandbox-runtime
 
-# ---- Stage 2: openclaw sandbox ---------------------------------------------
-FROM public.ecr.aws/docker/library/node:22-bookworm
+# ---- Stage 2: openclaw sandbox — digest-pinned for supply-chain security (M5).
+FROM public.ecr.aws/docker/library/node:22.23-bookworm@sha256:c601a46abb4d2ab80a9dc3da208d50d1122642d53f17a101926ace71e5a9bf1c
 
 ARG TARGETARCH
 

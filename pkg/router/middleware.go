@@ -71,21 +71,57 @@ func (s *Server) requestIDMiddleware(next http.Handler) http.Handler {
 }
 
 // corsMiddleware handles Cross-Origin Resource Sharing headers.
+//
+// Only origins present in Config.CORSAllowedOrigins receive an
+// Access-Control-Allow-Origin echo. A wildcard ("*") is never emitted because
+// the API accepts Authorization and X-API-Key headers — a wildcard would strip
+// the browser's same-origin guard on response reading. When the allowlist is
+// empty, no CORS headers are set and cross-origin requests are blocked by the
+// browser.
 func (s *Server) corsMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Access-Control-Allow-Origin", "*") // TODO: Configure allowed origins
-		w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
-		w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-API-Key, X-Request-ID")
-		w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID")
-		w.Header().Set("Access-Control-Max-Age", "86400")
+		origin := r.Header.Get("Origin")
+		if origin != "" && s.isAllowedOrigin(origin) {
+			// The allowed-origin echo is per-request, so caches must key on
+			// Origin to avoid serving one origin's CORS response to another.
+			w.Header().Add("Vary", "Origin")
+			w.Header().Set("Access-Control-Allow-Origin", origin)
+			w.Header().Set("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS")
+			w.Header().Set("Access-Control-Allow-Headers", "Authorization, Content-Type, X-API-Key, X-Request-ID")
+			w.Header().Set("Access-Control-Expose-Headers", "X-Request-ID")
+			w.Header().Set("Access-Control-Max-Age", "86400")
+		}
 
 		if r.Method == "OPTIONS" {
-			w.WriteHeader(http.StatusNoContent)
+			switch {
+			case origin == "":
+				// Not a browser CORS preflight (no Origin). Non-CORS tools
+				// like curl/Postman and same-origin OPTIONS get 204 so they
+				// still work.
+				w.WriteHeader(http.StatusNoContent)
+			case s.isAllowedOrigin(origin):
+				w.WriteHeader(http.StatusNoContent)
+			default:
+				// Cross-origin preflight from a disallowed origin — reject so
+				// the browser blocks the actual request.
+				w.WriteHeader(http.StatusForbidden)
+			}
 			return
 		}
 
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isAllowedOrigin reports whether the given origin is in the configured
+// CORSAllowedOrigins list. The comparison is case-sensitive per RFC 6454.
+func (s *Server) isAllowedOrigin(origin string) bool {
+	for _, allowed := range s.config.CORSAllowedOrigins {
+		if allowed == origin {
+			return true
+		}
+	}
+	return false
 }
 
 // loggingMiddleware logs each request with duration and status.

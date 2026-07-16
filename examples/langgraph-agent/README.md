@@ -1,6 +1,6 @@
 # LangGraph agent example
 
-End-to-end runnable example for `mode: agent` sandboxes using the [LangGraph](https://langchain-ai.github.io/langgraph/) framework. Pairs with the bundled `langgraph-agent` template and the `ghcr.io/agenttier/sandbox-langgraph` reference image.
+End-to-end runnable example for `mode: agent` sandboxes using the [LangGraph](https://langchain-ai.github.io/langgraph/) framework. Pairs with the bundled `langgraph-agent` template and the `sandbox-langgraph` reference image (built from `images/langgraph/Dockerfile`; published to the configured registry, default `ghcr.io/agenttier/sandbox-langgraph`).
 
 ## What's in this directory
 

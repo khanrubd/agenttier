@@ -1,0 +1,116 @@
+version: 0.2
+
+# CodeBuild buildspec for the private-mode on-cluster teardown phase
+# (agenttier-hardening T8b — sibling of ci/buildspec-deploy.yml).
+#
+# Used ONLY when endpoint_access_mode = "private": with the EKS API endpoint
+# private-only, `kubectl`/`helm` cannot reach the cluster from a laptop, so
+# deploy.sh --teardown delegates the on-cluster cleanup steps (helm uninstall
+# + sandbox/PVC deletion + LoadBalancer Service deletion, so real AWS
+# ALBs/NLBs deprovision BEFORE `terraform destroy` removes the cluster) to a
+# CodeBuild run inside the VPC instead of running them locally. In
+# public-restricted mode deploy.sh still runs these steps locally — this
+# buildspec is not invoked.
+#
+# Source: the same S3 source.zip used by ci/buildspec.yml / ci/buildspec-deploy.yml
+# — the CodeBuild project's source is shared; only the buildspec +
+# environment-variable overrides differ per run.
+#
+# Variable precedence (highest first):
+#   1. deploy.sh `aws codebuild start-build --environment-variables-override`
+#      (all variables below) — authoritative at teardown time. deploy.sh reads
+#      CLUSTER_NAME from `terraform output` before this build starts.
+#   2. The `env.variables` defaults below — last-resort YAML-validity
+#      fallbacks so a manually-triggered build fails loudly instead of
+#      silently tearing down the wrong cluster.
+#
+# Required overrides (all mandatory — see the empty-guard in pre_build):
+#   CLUSTER_NAME                       EKS cluster name (aws eks update-kubeconfig)
+#   AWS_DEFAULT_REGION                 Region the cluster lives in
+#   AGENTTIER_HELM_RELEASE / AGENTTIER_NAMESPACE
+#                                       Helm release name + target namespace
+#
+# No ECR/Cognito/LBC-role overrides are needed here — teardown only removes
+# Kubernetes objects; it does not build images or (re)install charts.
+env:
+  variables:
+    AWS_DEFAULT_REGION: "us-east-1"
+    # Fallbacks only — deploy.sh sets all of these as start-build overrides.
+    # Literal values here in a build log mean the override was NOT applied
+    # (a bug in deploy.sh, not something to silently work around).
+    CLUSTER_NAME: ""
+    AGENTTIER_HELM_RELEASE: "agenttier"
+    AGENTTIER_NAMESPACE: "agenttier"
+
+phases:
+  install:
+    commands:
+      # helm ships an install script; kubectl + jq + aws-cli-v2 are already
+      # present on the aws/codebuild/standard:7.0 image used by codebuild.tf.
+      - echo "Installing helm..."
+      - curl -fsSL -o /tmp/get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+      - chmod +x /tmp/get_helm.sh
+      - /tmp/get_helm.sh
+      - helm version
+
+  pre_build:
+    commands:
+      # Fail loudly on any missing mandatory override rather than tearing
+      # down against an empty/guessed value (mirrors ci/buildspec-deploy.yml's
+      # guard and deploy.sh's terraform-output empty-guard, C5).
+      - |
+        for var in CLUSTER_NAME AGENTTIER_HELM_RELEASE AGENTTIER_NAMESPACE; do
+          eval "val=\"\${$var}\""
+          if [ -z "$val" ]; then
+            echo "ERROR: ${var} is empty — deploy.sh must pass it via --environment-variables-override. Refusing to tear down against a guessed/empty value." >&2
+            exit 1
+          fi
+        done
+      - echo "Configuring kubectl for cluster ${CLUSTER_NAME} in ${AWS_DEFAULT_REGION}..."
+      - aws eks update-kubeconfig --region "${AWS_DEFAULT_REGION}" --name "${CLUSTER_NAME}" --no-cli-pager
+      - kubectl get nodes --no-headers
+
+  build:
+    commands:
+      # Step 1: Uninstall the AgentTier Helm release (fail loudly — orphaned
+      # pods/PVCs cause `terraform destroy` issues). Mirrors deploy.sh's local
+      # EKS-teardown Step 2 exactly.
+      - echo "=== Uninstalling Helm release ${AGENTTIER_HELM_RELEASE} ==="
+      - |
+        if helm status "${AGENTTIER_HELM_RELEASE}" -n "${AGENTTIER_NAMESPACE}" >/dev/null 2>&1; then
+          helm uninstall "${AGENTTIER_HELM_RELEASE}" -n "${AGENTTIER_NAMESPACE}" --wait --timeout 120s
+        else
+          echo "Helm release not found (already uninstalled)."
+        fi
+
+      # Step 2: Delete Sandboxes/PVCs and LoadBalancer Services, wait for AWS
+      # LB deprovisioning — this MUST happen before `terraform destroy` (run
+      # locally by deploy.sh right after this build finishes) or the ALBs/NLBs
+      # backing those Services are orphaned and keep billing. Mirrors
+      # deploy.sh's local EKS-teardown Step 3 exactly.
+      - echo "=== Deleting PVCs and LoadBalancer services ==="
+      - |
+        if kubectl get namespace "${AGENTTIER_NAMESPACE}" >/dev/null 2>&1; then
+          echo "Deleting all Sandboxes..."
+          kubectl delete sandboxes --all --all-namespaces --timeout=60s 2>/dev/null || true
+
+          echo "Deleting PVCs in namespace ${AGENTTIER_NAMESPACE}..."
+          kubectl delete pvc --all -n "${AGENTTIER_NAMESPACE}" --timeout=60s 2>/dev/null || true
+
+          echo "Deleting LoadBalancer services..."
+          kubectl get svc --all-namespaces -o json \
+            | jq -r '.items[] | select(.spec.type=="LoadBalancer") | "\(.metadata.namespace) \(.metadata.name)"' \
+            | while read -r ns svc; do
+                echo "  Deleting LB service ${ns}/${svc}..."
+                kubectl delete svc "${svc}" -n "${ns}" --timeout=60s || true
+              done
+
+          echo "Waiting 30s for AWS load balancers to deprovision..."
+          sleep 30
+        else
+          echo "Namespace ${AGENTTIER_NAMESPACE} not found — nothing to clean up."
+        fi
+
+  post_build:
+    commands:
+      - echo "Private-mode on-cluster teardown finished for cluster ${CLUSTER_NAME} (release ${AGENTTIER_HELM_RELEASE}/${AGENTTIER_NAMESPACE})."

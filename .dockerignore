@@ -9,7 +9,7 @@ web-ui/node_modules/
 web-ui/dist/
 terraform/
 docs/
-hack/
+scripts/
 test/
 *.md
 !README.md

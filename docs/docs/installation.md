@@ -4,10 +4,19 @@ AgentTier installs as a single Helm chart. CRDs, RBAC, and reference templates a
 
 ## Requirements
 
+**Build tools (build-from-source path):**
+
+- **Go 1.25+**
+- **Docker with buildx** — required for the local (kind) path and the default EKS build path. **Not required for the EKS CodeBuild path**, which builds images in AWS instead (auto-selected by `deploy.sh` when Docker is unavailable, or forced with `AGENTTIER_USE_CODEBUILD=true`).
+- **Helm 3.x**
+- **kubectl**
+- **kind** (local) or **Terraform >= 1.10** + **AWS CLI v2** + **jq** + **zip** (EKS). The >= 1.10 floor is required by the module's S3 state backend, which uses the native S3 lockfile (`use_lockfile = true`) instead of a DynamoDB lock table — see [State backend](#eks-state-backend) below. `deploy.sh` checks this and fails loudly with an install hint if your `terraform` is older.
+
+**Cluster requirements:**
+
 - Kubernetes **1.27+**
 - CNI that supports NetworkPolicy (Calico, Cilium, AWS VPC CNI with NetworkPolicy enabled)
-- A CSI storage driver (EBS CSI, PD CSI, Azure Disk CSI, or any RWO-capable CSI)
-- Helm **3.x**
+- A CSI storage driver with a default StorageClass (EBS CSI, PD CSI, Azure Disk CSI, or any RWO-capable CSI)
 
 Optional but recommended:
 
@@ -15,7 +24,78 @@ Optional but recommended:
 - An OIDC identity provider (Cognito, Okta, Azure AD, Auth0) for multi-user auth
 - gVisor `RuntimeClass` (for running untrusted agent workloads with kernel-level isolation)
 
-## Quick install
+## Deploy from source (recommended)
+
+The recommended install path builds from source:
+
+```bash
+# Local — kind/minikube, dev-auth on, no AWS required:
+./deploy.sh --target=local
+
+# Local — force minikube instead of autodetecting (kind is preferred when both are installed):
+./deploy.sh --target=local --cluster-tool=minikube
+
+# EKS — Terraform + ECR + Cognito OIDC:
+./deploy.sh --target=eks
+```
+
+`--cluster-tool=<kind|minikube>` (or the `AGENTTIER_CLUSTER_TOOL` env var) forces the local cluster tool for both the deploy and `--teardown` paths; leave it unset to autodetect.
+
+See the [Quickstart](quickstart.md) for a full walkthrough.
+
+## EKS: endpoint modes and private-mode prerequisites
+
+The `terraform/aws-eks` module supports two API endpoint exposure modes via
+`endpoint_access_mode` (see [Security: EKS API endpoint
+modes](security.md#eks-api-endpoint-modes) for the full rationale):
+
+- **`public-restricted` (default)** — no extra prerequisites beyond the
+  standard ones above. You must supply a CIDR allowlist in
+  `cluster_endpoint_public_access_cidrs`; `0.0.0.0/0` is rejected.
+- **`private`** — the cluster's API server has no public endpoint. Additional
+  requirements:
+  - `enable_codebuild = true` (enforced by a Terraform precondition) — the
+    on-cluster deploy steps (AWS Load Balancer Controller + AgentTier Helm
+    chart install, smoke test) run inside a VPC-configured CodeBuild project
+    instead of locally, since there is no other path to the API server during
+    a `deploy.sh` run.
+  - A human operator reaching the cluster (`kubectl`, the SSM tunnel) needs
+    `ssm:StartSession` on a managed node instance — see [Port
+    forwarding](port-forwarding.md) for the full access runbook.
+  - `terraform apply` itself has **no extra prerequisite** for private mode —
+    it only calls AWS APIs, so it works the same from a laptop in either mode.
+
+```bash
+# Private mode: deploy.sh owns the terraform apply, so set the mode via the
+# AGENTTIER_ENDPOINT_MODE env var (mirrors terraform's endpoint_access_mode
+# var) rather than calling terraform directly — deploy.sh passes it through
+# as -var="endpoint_access_mode=..." and forces the CodeBuild path
+# automatically (design.md#4).
+export AGENTTIER_ENDPOINT_MODE=private
+./deploy.sh --target=eks
+```
+
+### EKS state backend
+
+The module's `backend.tf` configures an S3 backend with the native S3
+lockfile (`use_lockfile = true`, no DynamoDB table) — required so a human's
+laptop and the CodeBuild deploy actor can share the same state. Bootstrap the
+bucket once:
+
+```bash
+./scripts/bootstrap-tfstate.sh                       # versioned, SSE-KMS, Block Public Access, TLS-only policy
+cp terraform/aws-eks/backend.hcl.example terraform/aws-eks/backend.hcl
+# edit backend.hcl with your bucket name, then:
+cd terraform/aws-eks && terraform init -backend-config=backend.hcl
+```
+
+For a quick local-only eval, `terraform init -backend=false` works without
+ever creating the bucket (state stays local, same as before this backend was
+added).
+
+## Install from a published release
+
+If you prefer to install a released version without building from source:
 
 ```bash
 helm repo add agenttier https://agenttier.github.io/agenttier/charts
@@ -28,7 +108,7 @@ Images are pulled anonymously from `ghcr.io/agenttier/*`. Every released image i
 
 ## Production install
 
-A realistic values file for an EKS cluster with Cognito OIDC, warm pool, and ALB ingress:
+A realistic values file for an EKS cluster with Cognito OIDC and ALB ingress:
 
 ```yaml
 # values.prod.yaml
@@ -50,7 +130,7 @@ security:
 
 defaults:
   sandbox:
-    image: "ghcr.io/agenttier/sandbox-general:v0.5.0"
+    image: "ghcr.io/agenttier/sandbox-general:v0.8.1"  # pin to the release you deployed
     resources:
       requests:
         cpu: "500m"
@@ -58,11 +138,6 @@ defaults:
       limits:
         cpu: "2"
         memory: "4Gi"
-
-warmPool:
-  enabled: true
-  desiredCount: 2
-  template: "general-coding"
 
 controller:
   replicas: 2
@@ -97,15 +172,19 @@ optional:
             pathType: Prefix
     tls:
       - hosts: [agenttier.example.com]
-  serviceMonitor:
-    enabled: true   # requires Prometheus Operator
-  podDisruptionBudget:
+  pdb:
     enabled: true
 
 observability:
   otlp:
     endpoint: "otel-collector.observability.svc.cluster.local:4317"
+  prometheus:
+    serviceMonitor: true   # requires Prometheus Operator
 ```
+
+To pre-warm a pool after install, edit the `agenttier-warmpool-config` ConfigMap
+(or use the Web UI Settings page) — see [Warm pool](#warm-pool) above; there is
+no Helm-values switch for it.
 
 Install with this values file:
 
@@ -153,27 +232,39 @@ All values are documented inline in [`helm/agenttier/values.yaml`](https://githu
 | Value | Purpose |
 | --- | --- |
 | `security.gvisor.enabled` | Create a `gvisor` RuntimeClass and mark it available to templates. |
-| `security.podSecurityContext` | Overrides the restrictive default (non-root, RO rootfs, drop ALL caps). |
+| `security.podSecurityStandard` | Pod Security Standard level applied to the sandbox namespace (`restricted`, `baseline`, or `privileged`). Default `restricted`. This is a PSS label, not a raw securityContext override — the actual non-root/RO-rootfs/drop-ALL-caps pod defaults are hardcoded by the controller and cannot be loosened via Helm values. |
 
 ### Warm pool
 
-| Value | Purpose |
-| --- | --- |
-| `warmPool.enabled` | Leader-elected reconciler that pre-creates idle Pods. |
-| `warmPool.desiredCount` | Number of hot spares to keep. |
-| `warmPool.template` | Template the warm Pods use. |
-| `defaults.sandboxNamespace` | Namespace where Sandboxes (and therefore warm pool Pods + PVCs) are created. Defaults to `default`. Must match where the Router creates Sandboxes — a claimed pool Pod is reused in place and can't move namespaces. |
+The warm pool has **no Helm-values on/off switch** — it's configured entirely
+through the `agenttier-warmpool-config` ConfigMap in the install namespace,
+which a leader-elected controller reconciler watches for live changes (no
+redeploy needed). The Settings page in the Web UI edits this ConfigMap
+directly; you can also `kubectl edit cm agenttier-warmpool-config` by hand.
+The config shape is a list of per-template entries:
 
-The Settings page in the Web UI mutates the same values via the `agenttier-warmpool-config` ConfigMap, so admins can retune without redeploying the chart. The pool's configuration lives in the install namespace, but the idle Pods themselves are provisioned in `defaults.sandboxNamespace` so a claimed Pod can be handed directly to a new Sandbox.
+```json
+{"pools": [{"template": "general-coding", "desiredCount": 3}]}
+```
+
+| Field | Purpose |
+| --- | --- |
+| `pools[].template` | `ClusterSandboxTemplate` this entry keeps warm. |
+| `pools[].desiredCount` | Number of idle Pods to keep ready for that template. Zero (or omitting the entry) disables warming for it. |
+| `defaults.sandboxNamespace` (Helm value) | Namespace where Sandboxes (and therefore warm pool Pods + PVCs) are created. Defaults to `default`. Must match where the Router creates Sandboxes — a claimed pool Pod is reused in place and can't move namespaces. |
+
+The pool's ConfigMap lives in the install namespace, but the idle Pods
+themselves are provisioned in `defaults.sandboxNamespace` so a claimed Pod
+can be handed directly to a new Sandbox.
 
 ### Optional add-ons
 
 | Value | Purpose |
 | --- | --- |
 | `optional.imagePrepull.enabled` | DaemonSet that pre-caches sandbox images on every node. |
-| `optional.serviceMonitor.enabled` | Prometheus Operator ServiceMonitor (requires the Operator). |
-| `optional.podDisruptionBudget.enabled` | PDB for controller + router. |
-| `optional.otelCollector.enabled` | Sidecar OTel Collector. |
+| `observability.prometheus.serviceMonitor` | Prometheus Operator ServiceMonitor (requires the Operator). |
+| `optional.pdb.enabled` | PDB for controller + router. |
+| `observability.otelCollector.enabled` | In-cluster OTel Collector. |
 
 ### Observability
 

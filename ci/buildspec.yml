@@ -1,0 +1,112 @@
+version: 0.2
+
+# CodeBuild buildspec for the opt-in CI build path.
+# This file is only used when `enable_codebuild = true` in Terraform.
+# The default build path is local Docker buildx -> ECR push (no CodeBuild needed).
+#
+# Variable precedence (highest first):
+#   1. deploy.sh `aws codebuild start-build --environment-variables-override`
+#      (IMAGE_TAG, ECR_REPO_PREFIX, BUILD_PLATFORM) — authoritative at deploy time.
+#   2. codebuild.tf project `environment_variable` blocks (same three names) —
+#      make a manually-triggered build deterministic and push to the right repos.
+#   3. The `env.variables` defaults below — last-resort YAML-validity fallbacks.
+#
+# IMAGE_TAG: supplied by deploy.sh --target=eks from scripts/lib/version.sh
+#   (v<VERSION> for releases, sha-<hash> for dev). Never use "sha-unknown" for a
+#   real deploy — deploy.sh always overrides it so both CodeBuild and Helm agree.
+# ECR_REPO_PREFIX: registry host + repo namespace, without a trailing slash, e.g.
+#   123456789012.dkr.ecr.us-east-1.amazonaws.com/agenttier. This is NOT the bare
+#   `ecr_registry` output (host only) — it is `ecr_registry`/`ecr_prefix`, i.e. the
+#   `ecr_controller_url` output with the trailing `/controller` stripped. Set by
+#   codebuild.tf (project env) and by deploy.sh at start-build.
+# BUILD_PLATFORM: --platform flag for buildx. linux/amd64 matches the standard
+#   x86-64 EKS node group; override to linux/arm64 for Graviton node groups.
+env:
+  variables:
+    AWS_DEFAULT_REGION: "us-east-1"
+    # Fallbacks only — codebuild.tf sets all three as project env vars and
+    # deploy.sh overrides them at start-build. If you see these literal values in
+    # a build log, neither the project env nor the override was applied (a bug).
+    IMAGE_TAG: "sha-unknown"
+    ECR_REPO_PREFIX: ""
+    BUILD_PLATFORM: "linux/amd64"
+
+phases:
+  install:
+    commands:
+      - docker buildx create --use --name agenttier-builder || docker buildx use agenttier-builder
+      - docker buildx inspect --bootstrap
+
+  pre_build:
+    commands:
+      - echo "Logging in to ECR..."
+      - AWS_ACCOUNT_ID=$(aws sts get-caller-identity --query Account --output text --no-cli-pager)
+      - REGISTRY_HOST="${AWS_ACCOUNT_ID}.dkr.ecr.${AWS_DEFAULT_REGION}.amazonaws.com"
+      - aws ecr get-login-password --region "${AWS_DEFAULT_REGION}" | docker login --username AWS --password-stdin "${REGISTRY_HOST}"
+      # Fail loudly if ECR_REPO_PREFIX is unset rather than guessing a repo path:
+      # a guessed prefix silently pushes to the wrong (or non-existent) repos.
+      # Both codebuild.tf (project env) and deploy.sh (start-build override) set
+      # it, so an empty value here means a real misconfiguration.
+      - |
+        if [ -z "${ECR_REPO_PREFIX}" ]; then
+          echo "ERROR: ECR_REPO_PREFIX is empty — neither the codebuild.tf project env nor the deploy.sh start-build override was applied. Refusing to guess a repo path." >&2
+          exit 1
+        fi
+      - echo "Building with tag=${IMAGE_TAG} platform=${BUILD_PLATFORM} registry=${ECR_REPO_PREFIX}"
+
+  build:
+    commands:
+      # Core images: controller, router, web-ui, sandbox-general, and
+      # sandbox-claude-code (the first default ClusterSandboxTemplate). A failure
+      # in ANY of these aborts the build — a deploy is not viable without them.
+      # Each `- ` command is a separate CodeBuild command that fails the phase on
+      # non-zero exit, which is exactly the hard-required behaviour we want here.
+      - echo "=== Building CORE images (hard-required) ==="
+      - echo "Building controller..."
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/controller:${IMAGE_TAG}" -f docker/Dockerfile.controller --build-arg VERSION="${IMAGE_TAG}" --push .
+      - echo "Building router..."
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/router:${IMAGE_TAG}" -f docker/Dockerfile.router --build-arg VERSION="${IMAGE_TAG}" --push .
+      - echo "Building web-ui..."
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/web-ui:${IMAGE_TAG}" -f web-ui/Dockerfile --push web-ui/
+      - echo "Building sandbox-general (with in-pod runtime)..."
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-general:${IMAGE_TAG}" -f images/general-coding/Dockerfile --push .
+      - echo "Building sandbox-claude-code..."
+      - docker buildx build --platform "${BUILD_PLATFORM}" -t "${ECR_REPO_PREFIX}/sandbox-claude-code:${IMAGE_TAG}" -f images/claude-code/Dockerfile --push .
+      # Optional agent-sandbox images: openclaw, strands-bedrock, langgraph, rl.
+      # These back additional (non-default-first) ClusterSandboxTemplates and each
+      # pulls heavy third-party toolchains, so an upstream hiccup (package version
+      # floor, registry blip) should NOT block a deploy of the core stack. Build
+      # them best-effort in one scripted step: record failures, keep going, and
+      # fail the build ONLY if EVERY optional image failed (a signal something
+      # systemic is wrong rather than one flaky package).
+      - |
+        echo "=== Building OPTIONAL agent-sandbox images (best-effort) ==="
+        # image-name : source-dir pairs, coupled into one token each so the
+        # name and dir can never desync (a desync + `shift` on an exhausted
+        # positional list would abort the whole phase under `set -e`).
+        OPTIONAL_IMAGES="sandbox-openclaw:openclaw sandbox-strands-bedrock:strands-bedrock sandbox-langgraph:langgraph sandbox-rl:rl"
+        FAILED=""; OK=""
+        for pair in $OPTIONAL_IMAGES; do
+          name="${pair%%:*}"; dir="${pair#*:}"
+          echo "Building ${name} (from images/${dir}) ..."
+          if docker buildx build --platform "${BUILD_PLATFORM}" \
+               -t "${ECR_REPO_PREFIX}/${name}:${IMAGE_TAG}" \
+               -f "images/${dir}/Dockerfile" --push . ; then
+            echo "  ${name}: OK"
+            OK="${OK} ${name}"
+          else
+            echo "  ${name}: FAILED (continuing — optional image)"
+            FAILED="${FAILED} ${name}"
+          fi
+        done
+        echo "Optional images OK:    ${OK:-<none>}"
+        echo "Optional images FAILED:${FAILED:-<none>}"
+        if [ -n "${FAILED}" ] && [ -z "${OK}" ]; then
+          echo "ERROR: every optional sandbox image failed — treating as build failure."
+          exit 1
+        fi
+
+  post_build:
+    commands:
+      - echo "Core images pushed with tag=${IMAGE_TAG} to ${ECR_REPO_PREFIX}/{controller,router,web-ui,sandbox-general,sandbox-claude-code}"
+      - echo "Optional agent-sandbox images built best-effort (see build log for any FAILED)."
