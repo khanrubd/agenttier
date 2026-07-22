@@ -138,7 +138,7 @@ func runFilesUpload(args []string) int {
 		return errExit("files upload", err)
 	}
 	id, local, remote := fs.Arg(0), fs.Arg(1), fs.Arg(2)
-	data, err := os.ReadFile(local)
+	data, err := os.ReadFile(local) // #nosec G304 -- local is a CLI-argument path the caller explicitly asked to upload
 	if err != nil {
 		return errExit("files upload", err)
 	}
@@ -203,7 +203,7 @@ func runFilesWrite(args []string) int {
 		}
 		payload = read
 	case file != "":
-		read, err := os.ReadFile(file)
+		read, err := os.ReadFile(file) // #nosec G304 -- file is the --file flag the caller explicitly asked to read
 		if err != nil {
 			return errExit("files write", err)
 		}

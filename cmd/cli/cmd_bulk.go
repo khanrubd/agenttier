@@ -96,7 +96,7 @@ func readBulkCreateInput(file string) ([]byte, error) {
 	if file == "-" {
 		return io.ReadAll(os.Stdin)
 	}
-	return os.ReadFile(file)
+	return os.ReadFile(file) // #nosec G304 -- file is the --file flag the caller explicitly asked to read
 }
 
 // bulkActionValidChoices mirrors handleBulkAction's own validation

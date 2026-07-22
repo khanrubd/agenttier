@@ -269,7 +269,7 @@ func buildConfigurePayload(install, entrypoint string, files []string) ([]byte, 
 			if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
 				return nil, fmt.Errorf("--file %q must be path=local-path", raw)
 			}
-			contents, err := os.ReadFile(parts[1])
+			contents, err := os.ReadFile(parts[1]) // #nosec G304 -- parts[1] is the local-path half of a --file path=local-path flag the caller explicitly asked to read
 			if err != nil {
 				return nil, fmt.Errorf("read %s: %w", parts[1], err)
 			}
@@ -497,7 +497,7 @@ func readInvokeBody(in string) ([]byte, error) {
 	case in == "-":
 		return io.ReadAll(os.Stdin)
 	case strings.HasPrefix(in, "@"):
-		return os.ReadFile(in[1:])
+		return os.ReadFile(in[1:]) // #nosec G304 -- in[1:] is the path from --input @<path>, a flag the caller explicitly asked to read
 	default:
 		return []byte(in), nil
 	}

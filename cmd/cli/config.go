@@ -68,7 +68,7 @@ func loadSavedConfig() savedConfig {
 	if path == "" {
 		return savedConfig{}
 	}
-	data, err := os.ReadFile(path)
+	data, err := os.ReadFile(path) // #nosec G304 -- path is this CLI's own fixed config location (configPath()), not attacker-controlled
 	if err != nil {
 		return savedConfig{}
 	}
@@ -89,6 +89,7 @@ func saveConfig(cfg savedConfig) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		return err
 	}
+	// #nosec G117 -- intentionally persisting the credential the user asked `login` to save (APIKey/Token fields); the write below is 0600
 	data, err := json.MarshalIndent(cfg, "", "  ") //nolint:gosec // G117: intentionally persisting the credential the user asked `login` to save; the write below is 0600
 	if err != nil {
 		return err
